@@ -691,6 +691,18 @@ build.sh            publishes both executables into out/
 <td><code>mon</code> to <code>sun</code>. An absent or empty list means every day.</td>
 </tr>
 <tr>
+<td><code>schedule_intervals</code></td>
+<td>map of mode to <code>{ "days": N, "start_date": "yyyy-MM-dd" }</code></td>
+<td><code>{}</code></td>
+<td>Optional calendar-day cadence in the instance timezone. N must be at least 1; start_date is required. Slots are eligible on the start date and every N days thereafter. If schedule_days also applies, both conditions must pass.</td>
+</tr>
+<tr>
+<td><code>home_timeline_authors</code></td>
+<td>list of names or exact refs</td>
+<td><code>[]</code></td>
+<td>Visit these imported friends/followed profiles after home capture, in both home and close_friends runs. Deduplicate with the close-friends list. Does not grant close-friend classification or any filter bypass. Explicit --person and all_followed runs are unaffected.</td>
+</tr>
+<tr>
 <td><code>likeback</code></td>
 <td>bool</td>
 <td>false</td>
@@ -2562,11 +2574,11 @@ Some prose the human wrote.
 <tbody>
 <tr>
 <td><code>home</code></td>
-<td>the home feed, scrolled to the cap or the no-new stop</td>
+<td>the home feed, scrolled to the cap or the no-new stop, followed by any configured <code>home_timeline_authors</code> at timeline depth</td>
 </tr>
 <tr>
 <td><code>close_friends</code></td>
-<td>the home feed first, then the timeline of each resolved close friend, at timeline depth. Both parts are one run. Only the home part decides <code>ok</code> or <code>capped</code>.</td>
+<td>the home feed first, then the timelines of configured <code>home_timeline_authors</code> and resolved close friends, at timeline depth. Deduplicate authors across both lists. Both parts are one run. Only the home part decides <code>ok</code> or <code>capped</code>.</td>
 </tr>
 <tr>
 <td><code>all_followed</code></td>
@@ -2576,6 +2588,7 @@ Some prose the human wrote.
 </table>
 <ul>
 <li>Close-friend entries come from <code>--friends</code> for this run, else from <code>platforms.&lt;p&gt;.close_friends</code>. They resolve through the people matcher against the friend list. An unmatched entry logs a warning and is skipped.</li>
+<li>Optional <code>platforms.&lt;p&gt;.home_timeline_authors</code> uses the same platform's imported friend/following list and identity matching. <code>rules</code> reports resolution; unmatched entries are skipped. Prefer exact refs to ambiguous names. These additional visits use normal timeline coverage and checkpoint handling. They do not change close-friend membership or bypass filters. <code>--friends</code> only overrides the close-friends portion; <code>--person</code> replaces the entire home-plus-timelines sequence.</li>
 <li>Timeline depth is 2 scrolls. <code>--scrolls</code> overrides it, clamped to 2 to 5. The same <code>--scrolls</code> value also replaces the feed scroll cap of the home or <code>--person</code> surface, without a clamp.</li>
 <li><code>--person &lt;handle&gt;</code> replaces the home surface with one person's timeline, at the feed scroll cap. It is the per-person tuning tool. It skips the close-friend visits, records a timeline-visit row for coverage, and is ignored in <code>all_followed</code>.</li>
 <li>No platform's own close-friends feature is used. Facebook's list is stale and Instagram's tray is ephemeral. The mode means the instance's own list.</li>
@@ -3189,7 +3202,7 @@ Some prose the human wrote.
 <tr>
 <td>the control, any state</td>
 <td><code>like</code>, <code>like post</code>, <code>remove like</code>, <code>remove love</code>, <code>remove care</code>, <code>remove haha</code>, <code>remove wow</code>, <code>remove sad</code>, <code>remove angry</code></td>
-<td><code>like</code>, <code>like post</code></td>
+<td><code>like</code>, <code>like post</code>, <code>unlike</code>, <code>remove like</code>, <code>unlike post</code></td>
 </tr>
 <tr>
 <td>done</td>
@@ -3198,8 +3211,8 @@ Some prose the human wrote.
 </tr>
 <tr>
 <td>which button</td>
-<td>the unique matching control</td>
-<td>the unique match containing a 24 px icon (<code>svg[width='24']</code>)</td>
+<td>the unique post control in a permalink-matched post dialog, excluding comment controls and the background feed</td>
+<td>the unique viewport-contained, center-hit-testable match containing a 24 px icon (<code>svg[width='24']</code>) on the requested permalink</td>
 </tr>
 <tr>
 <td>the press</td>
@@ -3209,6 +3222,10 @@ Some prose the human wrote.
 </tbody>
 </table>
 <p>On Facebook the heart is the Love reaction, one level down in the picker that opens on hover. A thumbs-up or any other reaction already on the post counts as likeable and is switched: the owner's heart is the newest word. On Instagram the like is the heart. On a photo post every comment has a 16 px heart with the same name, and they come before the post's own 24 px control in the page, so the size filter is what keeps a stranger's comment safe. Any remaining ambiguity fails without clicking; DOM order alone is not proof of the requested post's control.</p>
+<p>Facebook permalink navigation may retain an unrelated feed behind nested post dialogs. The sender verifies that the current URL identifies the requested post and requires a matching post link in the candidate control's nearest dialog. Tracking query parameters and fragments are ignored for <code>/posts/&lt;id&gt;</code> links; <code>story_fbid</code> identifies posts in <code>permalink.php</code> and <code>story.php</code> links. Links inside named article containers (comments/replies) or nested dialogs cannot establish ownership of the surrounding dialog. Controls inside named articles and controls containing a 16 px SVG are excluded. More than one remaining control fails even if their reaction states differ; the same scope is used to confirm Love. There is no fallback to a unique background control while the dialog is loading.</p>
+<p>Instagram navigation must retain the requested shortcode on an Instagram host; <code>/p/</code>, <code>/reel/</code> and <code>/reels/</code> paths are recognized. Reel pages can pre-render many offscreen reels whose controls Playwright still considers visible. A candidate's entire bounding box must fit inside the viewport and a hit test at its center must reach that control or a descendant. The sender never scrolls to resolve those prefetched hearts. Uniqueness includes both actionable and done states, so a second eligible Unlike control cannot silently confirm a different reel. The same scope confirms the reaction after clicking.</p>
+<p><strong>Observed navigation limitation:</strong> the Instagram reel viewer can redirect a stored reel permalink to a different shortcode. Redirects are followed normally, but the sender rejects that target for both clicking and confirmation. Manual read-only verification can try <code>/p/&lt;original-shortcode&gt;/</code>; confirm the final shortcode and the original post's own Unlike control without another click. This alternate URL format has worked in live inspection, but is not a guaranteed platform contract or an automatic sender fallback. The sender still navigates to the stored permalink. See the <a href="RUNBOOK.md#editing-and-repairing">runbook</a> for the verification procedure. A redirect alone does not establish that liking caused it.</p>
+<p><strong>Current compatibility limit:</strong> Facebook layouts without a provable matching post dialog, other permalink forms, and controls inside named article containers fail without a mutation. Instagram controls outside the viewport, covered at their center, or on unrecognized permalink forms also fail without a mutation. Extending those layouts requires scoped evidence and regression coverage; a page-wide singleton is insufficient proof of the requested post.</p>
 <p>The sets are conservative compatibility facts and must be live-verified. A replacement selector retains regression coverage for the 16 px comment heart and the 24 px post control; correctness depends on the target, not permanently on that one DOM attribute. Bringing a platform's like-back live requires one deliberate real heart with <code>like --post-id N</code> as part of the checklist, with the platform's like-back already on; with it off the sender fails the heart without a browser.</p></div></details>
 <details class="section" id="11-likeback-11-5-commands" open><summary>11.5 Commands</summary><div class="body"><p><code>like [--platform X] [--post-id N]</code>. Without a platform it drains every platform. <code>--post-id</code> queues the post when no pending row exists, then drains only that post, so it can re-send over a sent row on purpose.</p></div></details>
 </div></details>
@@ -3250,6 +3267,7 @@ Some prose the human wrote.
 <li>normalize the mode key; the URL aliases are accepted;</li>
 <li>skip an unknown mode;</li>
 <li>when <code>schedule_days</code> lists days for the mode, today's three-letter weekday prefix must match one of them;</li>
+<li>when <code>schedule_intervals</code> supplies <code>{ "days": N, "start_date": "yyyy-MM-dd" }</code> for the mode, today must be the start date or a non-negative multiple of N calendar days later. This uses local calendar dates, including across month/year boundaries and daylight-saving changes, not elapsed 24-hour periods. Weekday restrictions and interval restrictions intersect;</li>
 <li>parse each <code>HH:mm</code> and skip one that does not parse.</li>
 <li>The fire time is today at the slot plus the jitter. <code>jitter_minutes</code> (10) shifts the slot by 0 to N minutes. The shift is deterministic per platform, mode, slot and day and survives a process restart; 0 disables it. The reference hash starts at 17, folds the characters of <code>platform|mode|slot|yyyy-MM-dd</code> with <code>h = h * 31 + char</code>, then normalizes modulo N + 1. Define overflow/negative handling if using that recipe. Another stable algorithm is allowed; process-randomized runtime string hashing is not. Keep the chosen algorithm stable or version its transition so an upgrade cannot refire a recorded slot. Every tick agrees on the same day's fire time.</li>
 <li>A slot fires when all of these hold:</li>
@@ -3261,8 +3279,9 @@ Some prose the human wrote.
 <li>Collection eligibility and re-login are checked before the marker is set, so the slot retries on later ticks inside its window.</li>
 <li>A slot whose window passed while the app was down is skipped. There are no catch-up bursts.</li>
 <li>Firing sets the marker and starts the collect child with <code>--trigger schedule</code>. Slots ignore the manual cooldown.</li>
-<li>The debug page lists every slot with its jittered fire time and whether it fired today.</li>
-</ul></div></details>
+<li>The debug page lists every slot with its jittered fire time, whether its calendar restrictions allow it today, and whether it fired today.</li>
+</ul>
+<p>For an every-other-day sweep, configure <code>schedule_intervals.all_followed</code> with <code>days: 2</code> and an explicit first local date. The fixed anchor survives host restart and downtime; missed dates do not move the cadence or create catch-up runs. Each eligible slot still performs one bounded sweep invocation. Set <code>sweep_limit</code> large enough to cover the desired list, or provide enough slots to finish its batches. An interval does not automatically drain the whole cycle, and due retries from an existing cycle can still run between scheduled dates (12.10).</p></div></details>
 <details class="section" id="12-scheduler-12-4-resource-locks-and-run-identity" open><summary>12.4 Resource locks and run identity</summary><div class="body"><p>Locks use exclusive files with pid, OS process start time and acquisition time. A dead identity is stale immediately; a reused pid is not the old owner. An unreadable identity has a one hour grace. Stale deletion and acquisition retry once. Disposal removes only the owner's lock.</p>
 <ul>
 <li><code>locks/&lt;platform&gt;.lock</code>: profile staging, browser use, browser close, sync-back and cookie export. Release before ingest, model calls or video downloads. Collect, like, friends and login use it; profile import also requires it.</li>

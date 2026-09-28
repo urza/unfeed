@@ -37,7 +37,7 @@ app.MapGet("/healthz",async(CancellationToken ct)=>{await using var db=factory.O
 app.MapGet("/debug",async(HttpContext ctx,Scheduler scheduler,Backgrounds backgrounds)=>{
  await using var db=factory.Open(); var config=Snapshot(ctx).Config;
  var local=TimeZoneInfo.ConvertTimeFromUtc(Clock.Now,config.Zone);var day=local.ToString("yyyy-MM-dd");var slotLines=new List<string>();
- foreach(var (platform,settings) in config.Platforms) foreach(var (mode,times) in settings.Schedule) foreach(var slot in times){var fire=local.Date+TimeSpan.Parse(slot)+TimeSpan.FromMinutes(Scheduler.Jitter(platform,mode,slot,day,config.Scheduler.JitterMinutes));slotLines.Add($"{platform}/{mode} slot={slot}, fire={fire:yyyy-MM-dd HH:mm}, fired today={await db.Get($"slot:{platform}:{mode}:{slot}")==day}");}
+ foreach(var (platform,settings) in config.Platforms) foreach(var (mode,times) in settings.Schedule) foreach(var slot in times){var fire=local.Date+TimeSpan.Parse(slot)+TimeSpan.FromMinutes(Scheduler.Jitter(platform,mode,slot,day,config.Scheduler.JitterMinutes));slotLines.Add($"{platform}/{mode} slot={slot}, fire={fire:yyyy-MM-dd HH:mm}, eligible today={settings.ScheduledOn(mode,DateOnly.FromDateTime(local))}, fired today={await db.Get($"slot:{platform}:{mode}:{slot}")==day}");}
  var slots=string.Join("\n",slotLines);
  var safeConfig=config with {Llm=config.Llm with {ApiKey="[redacted]",FallbackApiKey="[redacted]",BaseUrl=Prompts.Endpoint(config.Llm.BaseUrl),FallbackBaseUrl=Prompts.Endpoint(config.Llm.FallbackBaseUrl)}};
  var configNode=System.Text.Json.JsonSerializer.SerializeToNode(safeConfig,InstanceValidation.Json)!.AsObject();configNode.Remove("zone");var configLines=configNode.ToJsonString(new(){WriteIndented=true});

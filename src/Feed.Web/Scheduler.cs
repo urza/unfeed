@@ -39,10 +39,10 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
             await Dispatch(request, request.RetryIncomplete ? "recovery" : "manual", ct);
         }
         await db.SaveChangesAsync(ct);
-        var local = TimeZoneInfo.ConvertTimeFromUtc(Clock.Now, c.Zone); var day = local.ToString("yyyy-MM-dd"); var weekday = local.ToString("ddd", System.Globalization.CultureInfo.InvariantCulture).ToLowerInvariant();
+        var local = TimeZoneInfo.ConvertTimeFromUtc(Clock.Now, c.Zone); var day = local.ToString("yyyy-MM-dd");
         foreach (var p in Platforms.All.Where(c.Enabled)) foreach (var (modeKey, times) in c.Platform(p).Schedule)
         {
-            var mode = Platforms.Mode(modeKey); var days = c.Platform(p).ScheduleDays.GetValueOrDefault(modeKey); if (!days.IsDefaultOrEmpty && !days.Contains(weekday)) continue;
+            var mode = Platforms.Mode(modeKey); if (!c.Platform(p).ScheduledOn(mode, DateOnly.FromDateTime(local))) continue;
             foreach (var slot in times)
             {
                 var fire = local.Date + TimeSpan.Parse(slot) + TimeSpan.FromMinutes(Jitter(p, mode, slot, day, c.Scheduler.JitterMinutes)); var key = $"slot:{p}:{mode}:{slot}";

@@ -82,6 +82,8 @@ The complete key list. Every key is optional. Defaults are in the table and are 
 | `sweep_limit` | int | 25 | maximum profiles visited by one all-followed run; at least 1. Each run resumes the saved cycle. `--friends-limit` overrides this run's budget. |
 | `schedule` | map of mode to list of `HH:mm` | `{}` | local-time slots per collect mode |
 | `schedule_days` | map of mode to list of weekday prefixes | `{}` | `mon` to `sun`. An absent or empty list means every day. |
+| `schedule_intervals` | map of mode to `{ "days": N, "start_date": "yyyy-MM-dd" }` | `{}` | Optional calendar-day cadence in the instance timezone. N must be at least 1; start_date is required. Slots are eligible on the start date and every N days thereafter. If schedule_days also applies, both conditions must pass. |
+| `home_timeline_authors` | list of names or exact refs | `[]` | Visit these imported friends/followed profiles after home capture, in both home and close_friends runs. Deduplicate with the close-friends list. Does not grant close-friend classification or any filter bypass. Explicit --person and all_followed runs are unaffected. |
 | `likeback` | bool | false | sending hearts is opt-in per platform. Where it is off the page offers no heart. |
 | `self_username` | string | unset | Instagram only: the owner's handle, used when the following import cannot read it from the page |
 

@@ -31,14 +31,14 @@ public sealed class LikeSender(InstancePaths paths, DbFactory factory, Capture c
                     await page.GotoAsync(post.Permalink, new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 30000 });
                     if (await Site.Checkpoint(page, platform)) { await capture.Relogin(platform, true, ct); return 75; }
                     ILocator? button = null; bool done = false;
-                    for (int n = 0; n < 10; n++) { if (await Site.Checkpoint(page, platform)) { await capture.Relogin(platform, true, ct); return 75; } await Site.DismissNotificationPrompt(page); if (await Site.Heart(page, platform, true) is not null) { done = true; break; } button = await Site.Heart(page, platform, false); if (button is not null) break; await Task.Delay(1000, ct); }
+                    for (int n = 0; n < 10; n++) { if (await Site.Checkpoint(page, platform)) { await capture.Relogin(platform, true, ct); return 75; } await Site.DismissNotificationPrompt(page); if (await Site.Heart(page, platform, true, post.Permalink) is not null) { done = true; break; } button = await Site.Heart(page, platform, false, post.Permalink); if (button is not null) break; await Task.Delay(1000, ct); }
                     if (!done)
                     {
                         if (button is null) throw new IOException("like button not found");
                         if (platform == "facebook") { await button.HoverAsync(); button = page.GetByRole(AriaRole.Button, new() { Name = "Love", Exact = true }); await button.WaitForAsync(new() { Timeout = 4000 }); if (await button.CountAsync() != 1) throw new IOException("ambiguous Love control"); }
                         if (await Site.Checkpoint(page, platform)) { await capture.Relogin(platform, true, ct); return 75; }
                         like.AttemptedAt = Clock.Now; await db.SaveChangesAsync(ct); await button.ClickAsync();
-                        for (int n = 0; n < 6; n++) { if (await Site.Checkpoint(page, platform)) { await capture.Relogin(platform, true, ct); like.State = "failed"; like.Error = "outcome unknown; inspect the original before retrying"; await db.SaveChangesAsync(ct); return 75; } await Site.DismissNotificationPrompt(page); if (await Site.Heart(page, platform, true) is not null) { done = true; break; } await Task.Delay(1000, ct); }
+                        for (int n = 0; n < 6; n++) { if (await Site.Checkpoint(page, platform)) { await capture.Relogin(platform, true, ct); like.State = "failed"; like.Error = "outcome unknown; inspect the original before retrying"; await db.SaveChangesAsync(ct); return 75; } await Site.DismissNotificationPrompt(page); if (await Site.Heart(page, platform, true, post.Permalink) is not null) { done = true; break; } await Task.Delay(1000, ct); }
                         if (!done) throw new IOException("intended heart not confirmed for control '" + (await button.GetAttributeAsync("aria-label") ?? await button.InnerTextAsync()) + "'");
                     }
                     like.State = "sent"; like.SentAt = Clock.Now; like.Error = null;

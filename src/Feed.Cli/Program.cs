@@ -82,7 +82,7 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
             var limit = a.Number("limit"); var postId = a.Number("post-id"); var scrolls = a.Number("scrolls"); var friendsLimit = a.Number("friends-limit"); var since = a.Date("since");
             if (a.Command == "like" && postId is { } likePost)
             {
-                await using var lookup = factory.Open(); var post = await lookup.Posts.FindAsync([likePost], ct) ?? throw new ArgumentException("unknown post");
+                await using var lookup = factory.Open(); var post = await lookup.Posts.FindAsync([(long)likePost], ct) ?? throw new ArgumentException("unknown post");
                 if (platform != "all" && platform != post.Platform) throw new ArgumentException("post belongs to a different platform");
                 platforms = [post.Platform];
             }

@@ -75,13 +75,75 @@ public static class Site
         if (author?.PlatformAuthorId is { } owner && observation.TimelineOwnerIds.Contains(owner)) return true;
         return author is not null ? keys.Intersect(Identity.Keys(author)).Any() : Identity.UrlRef(platform, url) is { } reference && keys.Contains(reference);
     }
-    public static async Task<ILocator?> Heart(IPage page, string platform, bool done)
+    static string? FacebookPostKey(string? value)
     {
-        var names = platform == "facebook" ? done ? "^(remove love)$" : "^(like|like post|remove like|remove love|remove care|remove haha|remove wow|remove sad|remove angry)$" : done ? "^(unlike|remove like|unlike post)$" : "^(like|like post)$";
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http") || !(uri.Host == "facebook.com" || uri.Host.EndsWith(".facebook.com", StringComparison.OrdinalIgnoreCase))) return null;
+        var match = Regex.Match(uri.AbsolutePath, @"(?:^|/)posts/([^/]+)/?$");
+        if (match.Success) return "post:" + match.Groups[1].Value;
+        if (uri.AbsolutePath is "/permalink.php" or "/story.php")
+        {
+            var id = Regex.Match(uri.Query, @"(?:^\?|&)story_fbid=([^&]+)");
+            if (id.Success) return "post:" + Uri.UnescapeDataString(id.Groups[1].Value);
+        }
+        return null;
+    }
+    static string? InstagramPostKey(string? value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http") || !(uri.Host == "instagram.com" || uri.Host.EndsWith(".instagram.com", StringComparison.OrdinalIgnoreCase))) return null;
+        var match = Regex.Match(uri.AbsolutePath, @"^/(?:p|reels?)/([A-Za-z0-9_-]+)/?$");
+        return match.Success ? match.Groups[1].Value : null;
+    }
+    public static async Task<ILocator?> Heart(IPage page, string platform, bool done, string? permalink = null)
+    {
+        var expected = platform == "facebook" ? FacebookPostKey(permalink) : InstagramPostKey(permalink);
+        if (expected is null || (platform == "facebook" ? FacebookPostKey(page.Url) : InstagramPostKey(page.Url)) != expected) return null;
+        var names = platform == "facebook" ? "^(like|like post|remove like|remove love|remove care|remove haha|remove wow|remove sad|remove angry)$" : "^(like|like post|unlike|remove like|unlike post)$";
         var matches = page.GetByRole(AriaRole.Button, new() { NameRegex = new Regex(names, RegexOptions.IgnoreCase) });
         var candidates = new List<ILocator>();
-        for (int i = 0; i < await matches.CountAsync(); i++) { var button = matches.Nth(i); if (await button.IsVisibleAsync() && (platform == "facebook" || await button.Locator("svg[width='24']").CountAsync() > 0)) candidates.Add(button); }
+        for (int i = 0; i < await matches.CountAsync(); i++)
+        {
+            var button = matches.Nth(i); if (!await button.IsVisibleAsync()) continue;
+            if (platform == "facebook")
+            {
+                // A permalink can leave the home feed rendered behind nested post dialogs.
+                // Prove the nearest dialog owns this post; never fall back to a background
+                // control or use a comment link as evidence for the requested post.
+                var links = await button.EvaluateAsync<string[]>("""
+                    e => {
+                        const comment = n => !!n.closest('[role="article"][aria-label]');
+                        const dialog = e.closest('[role="dialog"]');
+                        if (!dialog || comment(e) || e.querySelector('svg[width="16"]')) return [];
+                        return [...dialog.querySelectorAll('a[href]')]
+                            .filter(a => a.closest('[role="dialog"]') === dialog && !comment(a))
+                            .map(a => a.href);
+                    }
+                    """);
+                if (!links.Any(link => FacebookPostKey(link) == expected)) continue;
+            }
+            else
+            {
+                if (await button.Locator("svg[width='24']").CountAsync() == 0) continue;
+                // Instagram pre-renders more reels below the current viewport. Playwright's
+                // IsVisible includes those controls, and Click would scroll to one. Only
+                // accept the fully visible, unobscured control on the requested permalink.
+                if (!await button.EvaluateAsync<bool>("""
+                    e => {
+                        const r = e.getBoundingClientRect();
+                        if (r.width <= 0 || r.height <= 0 || r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight) return false;
+                        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                        return hit !== null && e.contains(hit);
+                    }
+                    """)) continue;
+            }
+            candidates.Add(button);
+        }
         if (candidates.Count > 1) throw new IOException("ambiguous post reaction controls; no click authorized");
-        return candidates.SingleOrDefault();
+        var selected = candidates.SingleOrDefault();
+        if (selected is not null && (done || platform == "instagram"))
+        {
+            var desired = platform == "facebook" ? "^remove love$" : done ? "^(unlike|remove like|unlike post)$" : "^(like|like post)$";
+            if (await selected.And(page.GetByRole(AriaRole.Button, new() { NameRegex = new Regex(desired, RegexOptions.IgnoreCase) })).CountAsync() == 0) return null;
+        }
+        return selected;
     }
 }

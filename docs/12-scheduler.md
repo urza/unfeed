@@ -51,6 +51,7 @@ Collection times are local-time slots in the instance config, per platform and m
   - normalize the mode key; the URL aliases are accepted;
   - skip an unknown mode;
   - when `schedule_days` lists days for the mode, today's three-letter weekday prefix must match one of them;
+  - when `schedule_intervals` supplies `{ "days": N, "start_date": "yyyy-MM-dd" }` for the mode, today must be the start date or a non-negative multiple of N calendar days later. This uses local calendar dates, including across month/year boundaries and daylight-saving changes, not elapsed 24-hour periods. Weekday restrictions and interval restrictions intersect;
   - parse each `HH:mm` and skip one that does not parse.
 - The fire time is today at the slot plus the jitter. `jitter_minutes` (10) shifts the slot by 0 to N minutes. The shift is deterministic per platform, mode, slot and day and survives a process restart; 0 disables it. The reference hash starts at 17, folds the characters of `platform|mode|slot|yyyy-MM-dd` with `h = h * 31 + char`, then normalizes modulo N + 1. Define overflow/negative handling if using that recipe. Another stable algorithm is allowed; process-randomized runtime string hashing is not. Keep the chosen algorithm stable or version its transition so an upgrade cannot refire a recorded slot. Every tick agrees on the same day's fire time.
 - A slot fires when all of these hold:
@@ -62,7 +63,9 @@ Collection times are local-time slots in the instance config, per platform and m
 - Collection eligibility and re-login are checked before the marker is set, so the slot retries on later ticks inside its window.
 - A slot whose window passed while the app was down is skipped. There are no catch-up bursts.
 - Firing sets the marker and starts the collect child with `--trigger schedule`. Slots ignore the manual cooldown.
-- The debug page lists every slot with its jittered fire time and whether it fired today.
+- The debug page lists every slot with its jittered fire time, whether its calendar restrictions allow it today, and whether it fired today.
+
+For an every-other-day sweep, configure `schedule_intervals.all_followed` with `days: 2` and an explicit first local date. The fixed anchor survives host restart and downtime; missed dates do not move the cadence or create catch-up runs. Each eligible slot still performs one bounded sweep invocation. Set `sweep_limit` large enough to cover the desired list, or provide enough slots to finish its batches. An interval does not automatically drain the whole cycle, and due retries from an existing cycle can still run between scheduled dates (12.10).
 
 ## 12.4 Resource locks and run identity
 

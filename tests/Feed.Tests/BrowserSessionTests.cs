@@ -61,8 +61,10 @@ public sealed class BrowserSessionTests
     }
     [Fact,Trait("Category","Browser")]public async Task InstagramHeartExcludesCommentAndRecognizesDoneState()
     {
-        using var pw=await Playwright.CreateAsync();await using var browser=await pw.Chromium.LaunchAsync(new(){Headless=true});var page=await browser.NewPageAsync();await page.SetContentAsync("<button aria-label='Like' id='comment'><svg width='16'></svg></button><button aria-label='Unlike' id='post'><svg width='24'></svg></button>");Assert.Null(await Site.Heart(page,"instagram",false));Assert.Equal("post",await (await Site.Heart(page,"instagram",true))!.GetAttributeAsync("id"));
-        await page.SetContentAsync("<button aria-label='Like'><svg width='24'></svg></button><button aria-label='Like'><svg width='24'></svg></button>");await Assert.ThrowsAsync<IOException>(()=>Site.Heart(page,"instagram",false));
+        using var pw=await Playwright.CreateAsync();await using var browser=await pw.Chromium.LaunchAsync(new(){Headless=true});var page=await browser.NewPageAsync();
+        const string url="https://www.instagram.com/p/synthetic/";await page.RouteAsync("https://www.instagram.com/**",r=>r.FulfillAsync(new(){ContentType="text/html",Body="<main></main>"}));await page.GotoAsync(url);
+        await page.SetContentAsync("<button aria-label='Like' id='comment'><svg width='16'></svg></button><button aria-label='Unlike' id='post'><svg width='24'></svg></button>");Assert.Null(await Site.Heart(page,"instagram",false,url));Assert.Equal("post",await (await Site.Heart(page,"instagram",true,url))!.GetAttributeAsync("id"));
+        await page.SetContentAsync("<button aria-label='Like'><svg width='24'></svg></button><button aria-label='Like'><svg width='24'></svg></button>");await Assert.ThrowsAsync<IOException>(()=>Site.Heart(page,"instagram",false,url));
     }
     [Fact, Trait("Category", "Browser")] public async Task FacebookOldPhotoPostLayoutRendersWithoutArticleOrH4()
     {

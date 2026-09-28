@@ -39,12 +39,24 @@ public sealed record PlatformConfig
 {
     public bool Enabled { get; init; } = true;
     public ImmutableArray<string> CloseFriends { get; init; } = [];
+    public ImmutableArray<string> HomeTimelineAuthors { get; init; } = [];
     public int SweepLimit { get; init; } = 25;
     public ImmutableDictionary<string, ImmutableArray<string>> Schedule { get; init; } = ImmutableDictionary<string, ImmutableArray<string>>.Empty;
     public ImmutableDictionary<string, ImmutableArray<string>> ScheduleDays { get; init; } = ImmutableDictionary<string, ImmutableArray<string>>.Empty;
+    public ImmutableDictionary<string, ScheduleInterval> ScheduleIntervals { get; init; } = ImmutableDictionary<string, ScheduleInterval>.Empty;
     public bool Likeback { get; init; }
     public string? SelfUsername { get; init; }
+    public bool ScheduledOn(string mode, DateOnly date)
+    {
+        mode = Platforms.Mode(mode);
+        var days = ScheduleDays.GetValueOrDefault(mode);
+        if (!days.IsDefaultOrEmpty && !days.Contains(date.ToString("ddd", System.Globalization.CultureInfo.InvariantCulture).ToLowerInvariant())) return false;
+        if (!ScheduleIntervals.TryGetValue(mode, out var interval)) return true;
+        var elapsed = date.DayNumber - interval.StartDate.DayNumber;
+        return elapsed >= 0 && elapsed % interval.Days == 0;
+    }
 }
+public sealed record ScheduleInterval { public int Days { get; init; } = 1; public DateOnly StartDate { get; init; } }
 public sealed record LlmConfig
 {
     public bool Enabled { get; init; }
@@ -118,7 +130,7 @@ public static class InstanceValidation
         {
             try
             {
-                var normalized = config with { Platforms = config.Platforms.ToImmutableDictionary(p => p.Key.ToLowerInvariant(), p => p.Value with { Schedule = p.Value.Schedule.ToImmutableDictionary(x => Platforms.Mode(x.Key), x => x.Value), ScheduleDays = p.Value.ScheduleDays.ToImmutableDictionary(x => Platforms.Mode(x.Key), x => x.Value) }) };
+                var normalized = config with { Platforms = config.Platforms.ToImmutableDictionary(p => p.Key.ToLowerInvariant(), p => p.Value with { Schedule = p.Value.Schedule.ToImmutableDictionary(x => Platforms.Mode(x.Key), x => x.Value), ScheduleDays = p.Value.ScheduleDays.ToImmutableDictionary(x => Platforms.Mode(x.Key), x => x.Value), ScheduleIntervals = p.Value.ScheduleIntervals.ToImmutableDictionary(x => Platforms.Mode(x.Key), x => x.Value) }) };
                 return (T)(object)normalized;
             }
             catch (ArgumentException e) { throw new FormatException("Duplicate case-insensitive platform or mode key", e); }
@@ -144,6 +156,7 @@ public static class InstanceValidation
             Choice(key, Platforms.All); Require(p.SweepLimit >= 1, "sweep_limit must be at least 1");
             foreach (var (mode, times) in p.Schedule) { Choice(Platforms.Mode(mode), Platforms.Modes); foreach (var time in times) Require(Regex.IsMatch(time, "^([01][0-9]|2[0-3]):[0-5][0-9]$"), $"Invalid schedule slot: {time}"); }
             foreach (var (mode, days) in p.ScheduleDays) { Choice(Platforms.Mode(mode), Platforms.Modes); foreach (var day in days) Choice(day, "mon", "tue", "wed", "thu", "fri", "sat", "sun"); }
+            foreach (var (mode, interval) in p.ScheduleIntervals) { Choice(Platforms.Mode(mode), Platforms.Modes); Require(interval.Days >= 1 && interval.StartDate != default, "schedule_intervals requires days >= 1 and start_date (yyyy-MM-dd)"); }
         }
         var cats = t.Categories.Select(x => x.Key).ToArray(); var views = t.Views.Select(x => x.Key).ToArray();
         Require(cats.Distinct().Count() == cats.Length && views.Distinct().Count() == views.Length, "Duplicate taxonomy key");

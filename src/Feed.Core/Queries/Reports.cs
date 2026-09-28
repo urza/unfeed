@@ -12,6 +12,11 @@ public static class Reports
         b.AppendLine("Rules: type → audience → keyword → mute → model. Historical changes require refilter/rescore."); b.AppendLine("Blocked types: " + string.Join(", ", s.Config.Filters.BlockedTypes)); b.AppendLine($"Audience: {s.Config.Filters.Audience}; tag exception: {s.Config.Filters.FriendTagException}"); b.AppendLine("Always-show bypasses: " + string.Join(", ", s.Config.Filters.AlwaysShowBypasses) + "; mutes still win.");
         b.AppendLine($"Timezone: {s.Config.Zone.Id}" + (s.Config.Timezone is not null && s.Config.Timezone != s.Config.Zone.Id ? " (unknown configured zone; process fallback)" : ""));
         foreach (var (kind, entries) in new[] { ("show", s.Preferences.Shows), ("mute", s.Preferences.Mutes) }.Concat(s.Config.Platforms.Select(p => ("close friends " + p.Key, p.Value.CloseFriends)))) foreach (var entry in entries) { var matches = Identity.Resolve(entry, authors).ToArray(); b.AppendLine($"{kind}: {entry} → {(matches.Length == 0 ? "unmatched" : string.Join(", ", matches.Select(a => $"#{a.Id} {a.DisplayName}")))}{(matches.Length > 1 ? " (ambiguous; pin refs)" : "")}"); }
+        foreach (var (platform, settings) in s.Config.Platforms) foreach (var entry in settings.HomeTimelineAuthors)
+        {
+            var matches = Identity.Resolve(entry, authors.Where(a => a.Platform == platform && a.IsFriend)).ToArray();
+            b.AppendLine($"home timeline {platform}: {entry} → {(matches.Length == 0 ? "unmatched" : string.Join(", ", matches.Select(a => $"#{a.Id} {a.DisplayName}")))}{(matches.Length > 1 ? " (ambiguous; pin refs)" : "")}");
+        }
         foreach (var keyword in s.Preferences.Keywords) b.AppendLine("Keyword: " + keyword);
         foreach (var line in s.Preferences.Policy) b.AppendLine("Model policy: " + line);
         foreach (var c in s.Taxonomy.Categories) b.AppendLine($"Category {c.Key}: {c.Definition}; close friends only: {string.Join(", ", c.CloseFriendsOnly)}");

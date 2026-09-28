@@ -80,11 +80,12 @@ A mode names a surface to capture, not a filter to apply later.
 
 | Mode | What it captures |
 |---|---|
-| `home` | the home feed, scrolled to the cap or the no-new stop |
-| `close_friends` | the home feed first, then the timeline of each resolved close friend, at timeline depth. Both parts are one run. Only the home part decides `ok` or `capped`. |
+| `home` | the home feed, scrolled to the cap or the no-new stop, followed by any configured `home_timeline_authors` at timeline depth |
+| `close_friends` | the home feed first, then the timelines of configured `home_timeline_authors` and resolved close friends, at timeline depth. Deduplicate authors across both lists. Both parts are one run. Only the home part decides `ok` or `capped`. |
 | `all_followed` | no home feed. Resume the saved sweep cycle at its next pending target; visit at most `--friends-limit` profiles (default `platforms.<p>.sweep_limit`), at timeline depth. Report cycle progress separately from run success. |
 
 - Close-friend entries come from `--friends` for this run, else from `platforms.<p>.close_friends`. They resolve through the people matcher against the friend list. An unmatched entry logs a warning and is skipped.
+- Optional `platforms.<p>.home_timeline_authors` uses the same platform's imported friend/following list and identity matching. `rules` reports resolution; unmatched entries are skipped. Prefer exact refs to ambiguous names. These additional visits use normal timeline coverage and checkpoint handling. They do not change close-friend membership or bypass filters. `--friends` only overrides the close-friends portion; `--person` replaces the entire home-plus-timelines sequence.
 - Timeline depth is 2 scrolls. `--scrolls` overrides it, clamped to 2 to 5. The same `--scrolls` value also replaces the feed scroll cap of the home or `--person` surface, without a clamp.
 - `--person <handle>` replaces the home surface with one person's timeline, at the feed scroll cap. It is the per-person tuning tool. It skips the close-friend visits, records a timeline-visit row for coverage, and is ignored in `all_followed`.
 - No platform's own close-friends feature is used. Facebook's list is stale and Instagram's tray is ephemeral. The mode means the instance's own list.

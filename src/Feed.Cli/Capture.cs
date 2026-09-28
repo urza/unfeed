@@ -12,6 +12,14 @@ namespace Feed.Cli;
 public sealed record CaptureOptions(string Mode = "home", int Scrolls = 12, int? TimelineScrolls = null, string? Person = null, string[]? Friends = null, int? FriendsLimit = null, bool RetryIncomplete = false);
 public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest ingest, RunLedger ledger)
 {
+    public static Author[] HomeTimelines(string platform, PlatformConfig config, CaptureOptions options, IEnumerable<Author> authors)
+    {
+        if (options.Person is not null || options.Mode is not ("home" or "close_friends")) return [];
+        var eligible = authors.Where(a => a.Platform == platform && a.IsFriend).ToArray();
+        var entries = config.HomeTimelineAuthors.AsEnumerable();
+        if (options.Mode == "close_friends") entries = entries.Concat(options.Friends ?? config.CloseFriends.ToArray());
+        return entries.SelectMany(e => Identity.Resolve(e, eligible)).DistinctBy(a => a.Id).Where(a => a.Url is not null).ToArray();
+    }
     public async Task Login(string platform, InstanceSnapshot s, CancellationToken ct)
     {
         await using var session = await BrowserSession.Open(paths, platform, s.Config, ct); var page = session.Page;
@@ -145,7 +153,11 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
             else
             {
                 var home = await Surface(Platforms.Home(platform), false, options.Scrolls); status = home.Stop == "depth" ? "capped" : "ok";
-                if (options.Mode == "close_friends") { await using var db = factory.Open(); var authors = await db.Authors.Where(a => a.Platform == platform && a.IsFriend).ToListAsync(ct); foreach (var author in (options.Friends ?? s.Config.Platform(platform).CloseFriends.ToArray()).SelectMany(e => Identity.Resolve(e, authors)).DistinctBy(a => a.Id)) if (author.Url is not null) await Visit(author, author.Url, Math.Clamp(options.TimelineScrolls ?? 2, 2, 5)); }
+                if (options.Mode == "close_friends" || !s.Config.Platform(platform).HomeTimelineAuthors.IsEmpty)
+                {
+                    await using var db = factory.Open(); var authors = await db.Authors.Where(a => a.Platform == platform && a.IsFriend).ToListAsync(ct);
+                    foreach (var author in HomeTimelines(platform, s.Config.Platform(platform), options, authors)) await Visit(author, author.Url!, Math.Clamp(options.TimelineScrolls ?? 2, 2, 5));
+                }
             }
             await Drain(); session.ExportCookiesOnClose(); await Relogin(platform, false, ct);
         }
