@@ -1,0 +1,14 @@
+services:
+  feed:
+    build: .
+    init: true
+    user: "${FEED_UID:-1000}:${FEED_GID:-1000}"
+    environment:
+      FEED_STAGE_DIR: /tmp/feed-profiles
+    restart: unless-stopped
+    shm_size: 1gb
+    volumes:
+      - ./data:/data
+    ports:
+      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:6901:6901"

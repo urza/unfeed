@@ -1,0 +1,7 @@
+{
+ // Synthetic test instance. Never copy real account data here.
+ "platforms": {"facebook":{"enabled":true,"schedule":{"home":["07:30"]}},"instagram":{"enabled":true,"schedule":{"home":["08:00"]}}},
+ "llm":{"enabled":false,"base_url":"http://127.0.0.1:1/v1"},
+ "scheduler":{"enabled":false,"jitter_minutes":0},
+ "ui":{"default_view":"sample"},"backgrounds":{"source":"off"},"web":{"port":0}
+}

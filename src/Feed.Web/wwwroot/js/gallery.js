@@ -1,0 +1,14 @@
+export function gallery() {
+ const dialog=document.createElement('dialog');dialog.className='lightbox';dialog.setAttribute('aria-label','Post media gallery');
+ dialog.innerHTML='<button class="close" aria-label="Close gallery">×</button><button class="previous" aria-label="Previous media">‹</button><div class="slide"></div><button class="next" aria-label="Next media">›</button><div class="counter" aria-live="polite"></div>';
+ document.body.append(dialog);let items=[],index=0,opener,touch;
+ const slide=dialog.querySelector('.slide'),counter=dialog.querySelector('.counter');
+ function unload(){const video=slide.querySelector('video');if(video){video.pause();video.removeAttribute('src');video.load();}slide.replaceChildren();}
+ function show(next){unload();index=(next+items.length)%items.length;const item=items[index];const el=document.createElement(item.kind==='video'?'video':'img');el.src=item.url;if(item.kind==='video'){el.controls=true;el.autoplay=true;el.playsInline=true;}else{el.alt='Post image';el.addEventListener('click',e=>{if(items.length===1)close();else show(index+(e.offsetX<el.clientWidth/2?-1:1));});}slide.append(el);counter.textContent=`${index+1} / ${items.length}`;for(const control of dialog.querySelectorAll('.previous,.next,.counter'))control.hidden=items.length===1;}
+ function close(){unload();dialog.close();opener?.focus();}
+ document.addEventListener('click',e=>{const tile=e.target.closest('[data-gallery] a[data-index]');if(!tile||e.target.tagName==='VIDEO'&&tile.querySelector('video[controls]'))return;e.preventDefault();const gallery=tile.closest('[data-gallery]');items=[...gallery.querySelectorAll('a[data-index]')].sort((a,b)=>Number(a.dataset.index)-Number(b.dataset.index)).map(a=>({url:a.href,kind:a.dataset.kind}));opener=tile;dialog.showModal();show(Number(e.target.closest('[data-index]')?.dataset.index||tile.dataset.index));});
+ dialog.querySelector('.close').onclick=close;dialog.querySelector('.previous').onclick=()=>show(index-1);dialog.querySelector('.next').onclick=()=>show(index+1);
+ dialog.addEventListener('cancel',e=>{e.preventDefault();close();});dialog.addEventListener('click',e=>{if(e.target===dialog||e.target===slide)close();});
+ dialog.addEventListener('keydown',e=>{if(e.key==='ArrowLeft'){e.preventDefault();show(index-1);}if(e.key==='ArrowRight'){e.preventDefault();show(index+1);}if(e.code==='Space'){e.preventDefault();const v=slide.querySelector('video');if(v){if(v.paused)v.play();else v.pause();}else show(index+1);}});
+ dialog.addEventListener('touchstart',e=>{touch=e.target.closest('video')?null:e.changedTouches[0].clientX;},{passive:true});dialog.addEventListener('touchend',e=>{if(touch!==null&&Math.abs(e.changedTouches[0].clientX-touch)>40)show(index+(e.changedTouches[0].clientX<touch?1:-1));touch=null;},{passive:true});
+}

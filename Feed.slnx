@@ -1,0 +1,1 @@
+<Solution><Project Path="src/Feed.Core/Feed.Core.csproj" /><Project Path="src/Feed.Cli/Feed.Cli.csproj" /><Project Path="src/Feed.Web/Feed.Web.csproj" /><Project Path="tests/Feed.Tests/Feed.Tests.csproj" /></Solution>

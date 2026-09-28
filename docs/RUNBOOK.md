@@ -1,0 +1,63 @@
+# Operator runbook
+
+Run commands from the repository root. Use this procedure for a new instance or for maintenance. The [README](../README.md) introduces the human/AI setup conversation; [chapter 4](04-instance.md) defines accepted configuration and [chapter 17](17-testing.md) defines verification. Live state comes from the instance, never from public documentation.
+
+## First-run conversation and instance setup
+
+1. Discuss which platforms the owner wants, whom they follow, exclusions, category meanings, desired views, schedules, model endpoint/capacity, retention, and heart permission. Resolve material ambiguity with the owner. A category is a classification; an author view selects people but grants no filter bypass. Always-show bypasses only the gates named in config, and never overrides a mute.
+2. Write `data/config.json`, `data/taxonomy.json`, and `data/preferences.md` using chapter 4's schema. Keep every personal name, handle, policy, endpoint and category in this instance. Begin with platforms paused, scheduler disabled and like-back off. Missing files are supported. The test example is synthetic, not the owner's policy.
+3. Build with `./build.sh`; run `dotnet out/Feed.Cli.dll init` then `rules`. Review precedence and translated behavior with the owner. Unknown keys fail validation. Prefer exact `fb:` / `ig:` refs after the people import; unresolved names are not guessed.
+4. Install Playwright with `dotnet out/Feed.Cli.dll browser install` and `browser install-deps`. Install Xvfb, x11vnc, noVNC/websockify, ffmpeg, yt-dlp, sqlite3 and Noto fonts using the host's package manager. Application collectors always use a headed Chromium; only local UI tests are headless.
+5. Start `tools/novnc.sh`, publish port 6901 if needed, and open `http://127.0.0.1:6901/vnc.html?autoconnect=1&resize=scale`. Run `dotnet out/Feed.Cli.dll login --platform facebook` (then Instagram). The human supplies credentials and two-factor inside that browser. Do not automate credentials or retry a checkpoint in a loop.
+   During login and the first collection, check noVNC for notification prompts. Choose **Not Now** / **Later** (or the localized equivalent), then verify the page scrolls and new items load. Chromium permissions are blocked when undecided, including for fresh profiles; existing decisions are preserved. The collector also dismisses recognized notification dialogs and logs `browser: dismissed notification prompt`. A recognized prompt without one clear dismissal fails for inspection. For an unfamiliar popup, stop the affected run, inspect it in noVNC and dismiss it deliberately; never repeatedly retry a CAPTCHA/checkpoint or interpret a blocked zero-post run as a successful empty capture.
+6. Import friends using `friends --platform X`. An incomplete list adds friends and removes nobody. Inspect the reported evidence; a quiet scroll is never completeness. Then resolve close friends and author views, run `rules` again, and enable only the chosen platforms. Keep scheduling disabled for the pilot.
+7. Run a small `collect --platform X --scrolls 3`, inspect `status`, the raw diagnostics and the feed. Check ordinary, shared, suggested, sponsored and video posts as available. Run `process --platform X --limit 5` with the chosen model and verify a real image verdict, categories, summaries and media. A model outage must leave eligible content unscored, not hidden.
+8. Repeat collection/process a few times. Exercise `close_friends`, a resumable `all_followed` sweep beyond the pilot, replay idempotence and host restart recovery. Track the precise build and observed outcomes in private instance notes. Do not call a platform working until chapter 17's live checklist passes.
+9. Only if the owner opts into like-back: enable it for the chosen platform, select one owner-approved post, run `like --post-id N --platform X`, and inspect the original. Facebook must receive Love. An Instagram photo's comment heart must remain untouched. An uncertain attempted heart is failed for inspection, never automatically retried.
+10. Once verified and requested by the owner, enable scheduler slots for the chosen direct-host or container deployment. Run only one scheduler per instance. Close noVNC with `tools/novnc.sh stop` after login work, while no browser worker is active.
+
+## Running directly
+
+`dotnet out/Feed.Web.dll` serves the feed and schedules child CLI processes. Override the bind only deliberately with `--urls http://0.0.0.0:8000` for sandbox forwarding/private proxy access. The app has no authentication. `FEED_CLI` overrides CLI discovery. Publish both apps into the same `out/` directory.
+
+The headed browser starts a shared detached Xvfb when DISPLAY is absent and the configured display is not running. It leaves that display alive for concurrent platform workers; `tools/novnc.sh stop` stops an instance-started display explicitly. Set FEED_DISPLAY for the helper to match browser.display, or set DISPLAY to use an existing server.
+
+For multiple instances on one host, choose distinct `web.port`, `NOVNC_PORT` (browser-facing noVNC port), `VNC_RFB_PORT` (loopback-only VNC backend, default 5900), and `FEED_DISPLAY`/`browser.display`. Keep those instance-specific choices under data/. Stop that instance's helper before changing ports; repeated starts reuse its existing processes. Only the feed and noVNC ports need forwarding.
+
+Use `status` and `/debug` for live state; documentation contains defaults, never the owner's live status. CLI help describes arguments, ordering and limits. `process --limit N` bounds selected units per stage; automatic processing is not capped at one model batch.
+
+## Editing and repairing
+
+- Deterministic rules: edit instance files, `rules`, then `refilter --all` when historical posts should change.
+- Model policy/category definitions: `rescore --all`, optionally sliced by `--since` and `--limit`. A policy-only edit does not silently rejudge history.
+- Parser repair: rebuild, `reparse --platform X --all`; this never calls the model or deletes historical rows. Use `--no-network` for offline replay; disable scheduling for a fully offline session.
+- Checkpoint: stop browser work, run login through noVNC. Independent processing can continue over captured posts.
+- Long backlog: disable scheduling, identify the processing PID and OS start time from status, send normal termination, wait for ownership release, run the desired explicit command with fresh settings, then re-enable scheduling. Disabling schedules alone does not cancel a worker.
+- Failed or uncertain hearts: inspect the original before another deliberate press. Pending unattempted hearts survive re-login.
+- Thumbs: use `curate` to inspect and write an interpreted rule with citations. A mute-like line requires `--approved`. A thumb never directly hides or mutes.
+- Retention: use `raw prune --dry-run` and `media prune --dry-run`; never delete the raw or media tree by hand.
+- Backgrounds: put photos in `data/backgrounds/local/`; `/debug/backgrounds` pins, rotates or removes pool copies. Downloads run independently of page requests.
+
+## Backup and restore
+
+Use SQLite's online backup API or `sqlite3 data/feed.db '.backup ...'`; copying only feed.db while WAL writers run loses committed data. Back up configuration, profiles as credentials, and desired raw/media history. Restore to a separate paused instance and verify health, rules, counts and files before relying on it. Never point two scheduler hosts at one database. The live database needs local WAL/shared-memory and locking semantics; arbitrary network filesystems are unsupported.
+
+## Optional Docker
+
+The supplied container recipe packages the same application and CLI. It does not require a host .NET installation. Create the instance directory first (`mkdir -p data`). Build with `docker build -t feed-v3 .`, then use `FEED_UID=$(id -u) FEED_GID=$(id -g) docker compose up -d`. Compose runs with that host identity (defaults 1000:1000) so the bind-mounted data remains writable, and stages browser profiles in the container’s /tmp. The one mounted instance remains authoritative. For a new Docker-only installation, create the three private files before starting Compose, with scheduling and like-back disabled. Skip the host .NET/Playwright installation in steps 3–4: the image includes them. Run `docker compose exec feed dotnet Feed.Cli.dll init`, then `rules`. Run all later CLI commands with `docker compose exec feed dotnet Feed.Cli.dll ...`. See [16.10](16-deployment.md#1610-docker-deployment) for the complete command sequence and port overrides. Start noVNC with `docker compose exec feed tools/novnc.sh`; use the matching browser.display/FEED_DISPLAY (default :99) so login reuses it. Chromium sandboxing remains on by default; if the deployment host blocks user namespaces, first configure its container security profile. The documented browser.no_sandbox/FEED_NO_SANDBOX escape hatch is an explicit host decision. The compose ports bind host loopback on 8000 and 6901; for a remote server use SSH tunneling or an authenticated private proxy. Keep deployment overrides in data/. Do not expose the unauthenticated web/noVNC ports publicly. Container build/runtime must be verified on the deployment host; local direct-host tests do not validate Docker.
+
+## Chromium host support
+
+The application and image keep Chromium sandboxing on by default. Validate a real headed launch on the deployment host. If user-namespace or host security restrictions cause `No usable sandbox`, configure supported sandboxing or deliberately choose `browser.no_sandbox: true` in the private instance. Docker/host isolation and the Chromium sandbox are separate protections. Web/noVNC health alone does not validate browser launch.
+
+## Unattended recovery and duplicate-looking cards
+
+The normal feed reserves banners for re-login; a small dot on Debug indicates routine diagnostics. Use `/debug#recovery` for affected post/raw ids, actual failure causes, retry eligibility and required action; `/debug#coverage` shows partial captures, missing matching payloads and bounded sweep retries. Scheduling disabled pauses all automatic dispatch, including processing and capture recovery. A finite `process --platform all` drains work due now; it does not stay alive waiting for future retry times.
+
+Timeouts indicate endpoint availability/load or a request exceeding `llm.timeout_seconds`; inspect that evidence before tuning. Token exhaustion (`finish_reason=length`) requires an appropriate task budget or endpoint reasoning configuration. For compatible vLLM/Qwen endpoints, `llm.summary_enable_thinking: false` disables thinking on summaries while leaving judgments unchanged; omitted/null sends no extension. Verify support before using it with either endpoint. Empty final content is never accepted as a verdict. Failed attempts preserve old valid results and fail open for unjudged content.
+
+A parser failure on saved immutable bytes waits for a parser upgrade or explicit `reparse`. Fix compatibility using sanitized fixtures; increment `PayloadParser.Version`. Use `reparse --platform X --failed` for a targeted repair that leaves successfully parsed history alone. Do not delete failed raws or declare a timeline empty to clear a warning. Decorative profile-tile GraphQL errors remain recorded nonfatal warnings. Link-only shares retain their source/title separately from the owner's friend's caption. Replaying data does not rewrite historical coverage outcomes.
+
+All-followed transient gaps retry at most twice after their first visit, within the usual visit budget and human pacing. Checkpoints stop browsing. Due retries do not start a new sweep, and exhausted gaps stay visible. `collect --platform X --mode all_followed --retry-incomplete` is the bounded retry-only operation; it does not reset attempt limits. Close-friend gaps get another opportunity at their configured slots.
+
+For duplicate-looking cards inspect original post ids and downloaded image hashes. Separate posts with identical complete image sets and matching content, by one author within ten minutes, fold into an expandable repeated-post group. Original rows, feedback and hearts are preserved. Do not merge distinct platform identities just because their photos look similar.

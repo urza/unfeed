@@ -1,0 +1,16 @@
+<span class="rich-text">@((MarkupString)Html)</span>
+@code {
+ [Parameter] public string? Text { get; set; }
+ [Parameter] public Tag[] Tags {get;set;}=[];
+ string Html { get {
+   var text=Text??"";var b=new System.Text.StringBuilder();int offset=0;var names=Tags.Where(t=>t.Name.Length>0).OrderByDescending(t=>t.Name.Length).Select(t=>System.Text.RegularExpressions.Regex.Escape(t.Name)).ToArray();
+   var pattern=@"https?://[^\s<>""']+"+(names.Length>0?"|(?<!\\w)(?:"+string.Join("|",names)+")(?!\\w)":"");
+   foreach(System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text,pattern)) {
+     b.Append(System.Net.WebUtility.HtmlEncode(text[offset..m.Index]));var encoded=System.Net.WebUtility.HtmlEncode(m.Value);
+     if(m.Value.StartsWith("http://")||m.Value.StartsWith("https://"))b.Append($"<a href=\"{encoded}\" target=\"_blank\" rel=\"noopener noreferrer\">{encoded}</a>");
+     else {var tag=Tags.First(t=>t.Name==m.Value);if(Uri.TryCreate(tag.Url,UriKind.Absolute,out var u)&&u.Scheme=="https")b.Append($"<a class=\"tag\" href=\"{System.Net.WebUtility.HtmlEncode(tag.Url)}\" target=\"_blank\" rel=\"noopener noreferrer\"><strong>{encoded}</strong></a>");else b.Append($"<strong>{encoded}</strong>");}
+     offset=m.Index+m.Length;
+   }
+   return b.Append(System.Net.WebUtility.HtmlEncode(text[offset..])).ToString();
+ } }
+}

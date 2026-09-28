@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><title>@Title · Feed</title><link rel="icon" href="@($"/assets/{Stamp}/favicon.svg")"/><link rel="stylesheet" href="@($"/assets/{Stamp}/css/feed.css")"/>
+@if (Refresh) { <meta http-equiv="refresh" content="10"/> }
+</head><body><div class="background" style="@BackgroundStyle"></div><main class="page">@ChildContent<footer class="page-footer">chronological · your rules · personal use · <a href="/healthz">health</a></footer></main><script type="module" src="@($"/assets/{Stamp}/js/main.js")"></script></body></html>
+@code {
+ [Parameter] public string Title { get; set; } = "Feed";
+ [Parameter] public string Stamp { get; set; } = "dev";
+ [Parameter] public string? Background { get; set; }
+ [Parameter] public double Blur { get; set; } = 4;
+ [Parameter] public bool Refresh { get; set; }
+ [Parameter] public RenderFragment? ChildContent { get; set; }
+ string BackgroundStyle => $"--background-blur:{Blur.ToString(System.Globalization.CultureInfo.InvariantCulture)}px;" + (Background is null ? "" : $"background-image:url('/backgrounds/{Uri.EscapeDataString(Background)}')");
+}

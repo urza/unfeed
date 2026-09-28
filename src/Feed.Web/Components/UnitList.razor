@@ -1,0 +1,4 @@
+<div class="feed-grid" data-masonry>
+@foreach(var unit in Items){<section class="feed-unit" data-unit="@unit.Lead.Post.Id"><PostCard Card="unit.Lead" Model="Model" Badge="@unit.Badge"/>@if(unit.Folded.Length>0){<details class="stack"><summary title="Expand the original posts; each keeps its own link, feedback and heart">@unit.Folded.Length more posts</summary>@foreach(var folded in unit.Folded){<PostCard Card="folded" Model="Model"/>}</details>}</section>}
+</div>
+@code{[Parameter]public FeedUnit[] Items{get;set;}=[];[Parameter,EditorRequired]public FeedPage Model{get;set;}=null!;}

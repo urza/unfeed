@@ -1,0 +1,45 @@
+<article class="card glass @(Model.Scope == "hidden" ? "hidden-card" : "")" id="@($"post-{P.Id}")" data-post="@P.Id">
+@if(P.Hidden){<div class="hidden-tag">hidden · @P.HiddenBy: @P.HiddenReason</div>}
+<header class="card-head">@if(Card.Author?.AvatarPath is {} avatar){<img class="avatar" src="@("/"+avatar)" alt="" loading="lazy" width="40" height="40"/>}else{<span class="avatar fallback">@(Name.Length > 0 ? Name[..1] : "?")</span>}<div><a class="author" href="@SafeUrl(Card.Author?.Url ?? P.ObservedAuthorUrl)" target="_blank" rel="noopener noreferrer">@Name</a><div class="meta"><span>@P.Platform</span> · <time title="@P.PostedAt?.ToString("O")">@FeedQuery.Relative(P.PostedAt)</time></div></div></header>
+<div class="badges">@if(P.IsSponsored){<span class="badge sponsored">sponsored</span>}@if(P.IsSuggested){<span class="badge suggested">suggested</span>}@if(P.IsReel){<span class="badge">reel</span>}@if(P.IsEvent){<span class="badge event">event</span>}@if(Card.Why is not null){<span class="badge why-badge" title="Why this post is in this view">@Card.Why</span>}@if(Badge is not null){<span class="badge stack-badge">@Badge</span>}</div>
+@if(CurrentSummary is not null){<div class="summary"><small>summary</small><em><RichText Text="@CurrentSummary"/></em></div>}
+@if(CurrentSummary is not null){<input class="text-toggle" type="checkbox" id="@($"expand-{P.Id}")" aria-controls="@($"text-{P.Id}")" aria-label="Show full text"/>}
+<div class="text-body" id="@($"text-{P.Id}")">
+@if(With.Length > 0){<p>with @foreach(var tag in With){<a href="@SafeUrl(tag.Url)">@tag.Name</a><span> </span>}</p>}
+@if(!string.IsNullOrEmpty(P.Text)){<div class="caption"><RichText Text="@P.Text" Tags="Feed.Core.Domain.Filters.Tags(P)"/></div>}
+@if(P.SharedAuthor is not null || P.SharedText is not null){<div class="shared"><small>shared · </small><a href="@SafeUrl(P.SharedUrl)" target="_blank" rel="noopener noreferrer">@P.SharedAuthor</a><div><RichText Text="@P.SharedText"/></div></div>}
+@if(P.MemoryLabel is not null || P.MemoryText is not null){<div class="memory"><small>memory · @P.MemoryLabel</small><div><RichText Text="@P.MemoryText"/></div></div>}
+</div>
+@if(PosterPair){var image=Files.Single(m=>m.Kind=="image");var video=Files.Single(m=>m.Kind=="video");<div class="media mosaic-1"><video src="@("/"+video.Path)" poster="@("/"+image.Path)" controls preload="none" playsinline width="@image.Width" height="@image.Height"></video><a class="extra-media" href="@("/"+image.Path)">Open poster image</a></div>}
+else if(Files.Length > 0){<div class="media mosaic-@(Math.Min(Files.Length,3))" data-gallery>
+@foreach(var index in TileIndexes){var file=Files[index];<a href="@("/"+file.Path)" class="media-tile" data-index="@index" data-kind="@file.Kind" aria-label="@(file.Kind == "video" ? "Play video" : "Open image")">
+@if(file.Kind == "video") { <video src="@("/"+file.Path)" controls="@(Files.Length == 1)" preload="metadata" playsinline width="@file.Width" height="@file.Height" muted="@(Files.Length > 1)"></video>@if(Files.Length>1){<span class="play">▶</span>} }
+else {<img src="@("/"+file.Path)" loading="lazy" alt="Post image" width="@file.Width" height="@file.Height"/>}
+@if(Files.Length>3 && index==TileIndexes.Last()){<span class="more" data-index="@FirstSkipped">+@(Files.Length-3)</span>}
+</a>}
+@foreach(var index in Enumerable.Range(0,Files.Length).Except(TileIndexes)){<a href="@("/"+Files[index].Path)" class="extra-media" data-index="@index" data-kind="@Files[index].Kind">Open media @(index+1)</a>}
+</div>}
+@if(Card.Media.Count(m=>m.PrunedAt!=null)>0){<p class="retention" title="@string.Join("; ",Card.Media.Where(m=>m.PrunedAt!=null).Select(m=>m.Error).Distinct())">@(Card.Media.Count(m=>m.PrunedAt!=null)==1 ? "one media file not stored" : $"{Card.Media.Count(m=>m.PrunedAt!=null)} media files not stored")@if(P.Permalink is not null){<span>, the original is linked below</span>}</p>}
+@if(CurrentSummary is not null){<label class="expand-chip chip" for="@($"expand-{P.Id}")"><span class="show-full">show full text</span><span class="show-less">show less</span></label>}
+<footer class="card-footer">
+@foreach(var signal in new[]{("up","👍",Card.Up,"More like this (the agent learns from it)"),("down","👎",Card.Down,"Less like this (the agent learns from it)")}){<form method="post" action="@($"/posts/{P.Id}/thumbs/{signal.Item1}?view={Uri.EscapeDataString(Model.View)}&scope={Model.Scope}")" data-action="thumb"><button class="chip @(signal.Item3>0?"voted":"")" title="@signal.Item4">@signal.Item2 <span data-count>@(signal.Item3>0?signal.Item3.ToString():"")</span></button></form>}
+@if(OfferHeart){<form method="post" action="@($"/posts/{P.Id}/like")" data-action="heart"><button class="chip" disabled="@(Card.Like?.State is "pending" or "sent")" title="@(Card.Like?.State == "pending" ? $"Sending the heart to {P.Platform}" : Card.Like?.State == "sent" ? $"Heart sent to {P.Platform} (the agent's only write)" : Card.Like?.Error ?? $"Like-back: heart the original post on {P.Platform} (the agent's only write)")" data-state="@(Card.Like?.State??"none")">@(Card.Like?.State=="sent"?"❤️":"♥")</button></form>}
+@if(P.Permalink is not null){<a class="chip" href="@SafeUrl(P.Permalink)" target="_blank" rel="noopener noreferrer" title="@($"Open the original post on {P.Platform}")" aria-label="Open original">↗</a>}
+@if(Model.Scope=="hidden"){<form method="post" action="@($"/posts/{P.Id}/unhide")" data-action="unhide"><button class="chip" title="Release this post back to the feed">unhide</button></form>}
+<span class="categories" title="@($"LLM categories, score {P.LlmScore}")">@(P.Judged?string.Join(" · ",System.Text.Json.JsonSerializer.Deserialize<string[]>(P.CategoriesJson!)??[]):"")</span><small title="Internal post id; quote it when giving feedback">#@P.Id</small>
+</footer><details class="why"><summary class="chip" title="The decisions behind this post: your rules, verdict, view">why</summary><ul>@foreach(var line in Card.Trail){<li>@line</li>}</ul></details>
+</article>
+@code {
+ [Parameter,EditorRequired] public Card Card {get;set;}=null!;
+ [Parameter,EditorRequired] public FeedPage Model {get;set;}=null!;
+ [Parameter] public string? Badge {get;set;}
+ Post P=>Card.Post; string Name=>Card.Author?.DisplayName??P.ObservedAuthorName??"Unknown author";
+ string? CurrentSummary=>P.SummaryContentRevision==P.ContentRevision&&!string.IsNullOrWhiteSpace(P.Summary)?P.Summary:null;
+ Tag[] With=>Feed.Core.Domain.Filters.Tags(P).Where(t=>t.Kind=="with").ToArray();
+ Media[] Files=>Card.Media.Where(m=>m.Path!=null).ToArray();
+ bool PosterPair=>Files.Length==2&&Files.Count(m=>m.Kind=="image")==1&&Files.Count(m=>m.Kind=="video")==1;
+ int[] TileIndexes {get{var n=Files.Length;if(n<=3)return Enumerable.Range(0,n).ToArray();var video=Array.FindIndex(Files,m=>m.Kind=="video");return video>=3?[0,video,1]:[0,1,2];}}
+ int FirstSkipped=>Enumerable.Range(0,Files.Length).FirstOrDefault(i=>!TileIndexes.Contains(i));
+ bool OfferHeart=>Model.Instance.Config.Platform(P.Platform).Likeback&&P.LikeRef is not null&&P.Permalink is not null;
+ static string? SafeUrl(string? value)=>Uri.TryCreate(value,UriKind.Absolute,out var u)&&u.Scheme is "https" or "http"?value:null;
+}
