@@ -65,6 +65,7 @@ Index: (AuthorId). Only the identity resolver writes this table.
 | ContentRevision, ContentHash | integer, text | monotonic stored-content revision, starting at 1, and its SHA-256 hash (5.12) |
 | IngestReadyAt | datetime? | set after this revision's image attempts and content hash are finalized. Null means ingest recovery is still needed; model work must wait. |
 | Text | text? | the poster's own caption only |
+| StoryTitle | text? | platform-generated context such as a cover/profile-photo update; separate from the caption |
 | Permalink | text? | |
 | LikeRef | text? | the platform handle like-back needs (Facebook feedback id, Instagram media pk) |
 | IsSponsored, IsSuggested, IsReel, IsEvent | bool | story-type flags from the parser |
@@ -441,7 +442,7 @@ That benchmark covers the default render budget, not a promise for a 100000-post
 
 ## 5.12 Content and decision provenance
 
-Captured facts and derived results have separate lifetimes. ContentHash is SHA-256 over a canonical serialization of the stored author identity and observed author fields, caption, shared and memory fields, tags, post time, type flags, and ordered current media identities and known image-byte hashes. Signed-URL tokens, capture time, raw path, download attempt times and view definitions do not change content. Retention keeps byte hashes, so deleting a cached file does not by itself create a new content revision. The serializer and its version are fixed and tested. Identical replay does not advance ContentRevision.
+Captured facts and derived results have separate lifetimes. ContentHash is SHA-256 over a canonical serialization of the stored author identity and observed author fields, caption, platform story title when present, shared and memory fields, tags, post time, type flags, and ordered current media identities and known image-byte hashes. Signed-URL tokens, capture time, raw path, download attempt times and view definitions do not change content. Retention keeps byte hashes, so deleting a cached file does not by itself create a new content revision. The serializer and its version are fixed and tested. Identical replay does not advance ContentRevision. Adding or changing a stored story title advances the revision. A null story title preserves the prior hash serialization for posts without this context. UTC post timestamps use the same kind-independent serialization before and after SQLite round-trip, so a lost DateTimeKind cannot invalidate an unchanged post.
 
 When those facts change, advance ContentRevision, clear IngestReadyAt and the model attempt times, and recompute deterministic visibility in the same transaction. A new deterministic exclusion can take ownership over an old `llm` hide; otherwise an old `llm` hide remains until a fresh verdict. This is the documented content-refresh path. Finish images and the content hash before setting IngestReadyAt. A newly recovered or replaced image changes the content revision when its known bytes change; eviction of an already known file does not. Ingest recovery completes an unfinished revision before model work can select it.
 

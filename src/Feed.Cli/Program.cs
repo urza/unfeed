@@ -23,7 +23,7 @@ Usage: dotnet out/Feed.Cli.dll COMMAND [--data DIR] [options]
   reparse --platform X [--run DIR | --path DIR | --all | --failed] [--no-network]
   process --platform X|all [--limit N]
   refilter [--post-id N | --since DATE | --all]
-  rescore [--all] [--platform X] [--limit N] [--since DATE] [--post-id N] [--author REF] [--text-only]
+  rescore [--all] [--platform X] [--limit N] [--since DATE] [--post-id N | --post-ids N,N,...] [--author REF] [--text-only]
   summarize [--limit N]
   like [--platform X] [--post-id N]
   avatars --platform X
@@ -80,6 +80,12 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
             var mode = Platforms.Mode(a.Get("mode") ?? "home"); if (!Platforms.Modes.Contains(mode)) throw new ArgumentException("unsupported collect mode: " + mode);
             if (a.Flag("retry-incomplete") && (a.Command != "collect" || mode != "all_followed" || a.Get("person") is not null || a.Get("friends") is not null)) throw new ArgumentException("--retry-incomplete requires collect --mode all_followed without --person/--friends");
             var limit = a.Number("limit"); var postId = a.Number("post-id"); var scrolls = a.Number("scrolls"); var friendsLimit = a.Number("friends-limit"); var since = a.Date("since");
+            long[]? postIds = null;
+            if (a.Get("post-ids") is { } idList)
+            {
+                if (a.Command != "rescore" || postId is not null) throw new ArgumentException("--post-ids requires rescore and cannot combine with --post-id");
+                postIds = idList.Split(',').Select(value => long.TryParse(value.Trim(), out var id) && id > 0 ? id : throw new ArgumentException("--post-ids requires comma-separated positive ids")).Distinct().ToArray();
+            }
             if (a.Command == "like" && postId is { } likePost)
             {
                 await using var lookup = factory.Open(); var post = await lookup.Posts.FindAsync([(long)likePost], ct) ?? throw new ArgumentException("unknown post");
@@ -106,7 +112,7 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
             if (a.Command is "process" or "rescore" or "summarize")
             {
                 Console.WriteLine($"scope: {a.Command} platform={platform}, order={(a.Command == "process" ? "oldest due per stage with rotating turns" : "newest post first")}, selected limit={limit?.ToString() ?? "all eligible"}, batch={s.Config.Llm.Batch}, parallel={s.Config.Llm.Parallel}");
-                var counts = await new Processing(paths, factory, new(http), media, ingest).Run(s, new(a.Command, platform, limit, a.Flag("all"), postId, since, a.Get("author"), a.Flag("text-only")), line => { Console.WriteLine(line); }, ct, async counts => { if (run is null) return; var json = JsonSerializer.Serialize(counts, new JsonSerializerOptions { IncludeFields = true }); run.StatsJson = json; await using var progressDb = factory.Open(); await progressDb.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(u => u.SetProperty(r => r.StatsJson, json)); });
+                var counts = await new Processing(paths, factory, new(http), media, ingest).Run(s, new(a.Command, platform, limit, a.Flag("all"), postId, since, a.Get("author"), a.Flag("text-only"), postIds), line => { Console.WriteLine(line); }, ct, async counts => { if (run is null) return; var json = JsonSerializer.Serialize(counts, new JsonSerializerOptions { IncludeFields = true }); run.StatsJson = json; await using var progressDb = factory.Open(); await progressDb.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(u => u.SetProperty(r => r.StatsJson, json)); });
                 run.StatsJson = JsonSerializer.Serialize(counts, new JsonSerializerOptions { IncludeFields = true });
                 foreach (var stage in counts.Stages.OrderBy(x => x.Key)) Console.WriteLine($"process {stage.Key}: selected={stage.Value.Selected}, completed={stage.Value.Completed}, failed={stage.Value.Failed}, superseded={stage.Value.Superseded}, selected-but-not-dispatched={stage.Value.Undispatched}, remaining={stage.Value.Remaining}");
                 Console.WriteLine($"{a.Command} {platform}: {counts}"); resultCode = counts.Failed > 0 ? 1 : 0;

@@ -13,6 +13,22 @@ public sealed class ModelSafetyTests
     sealed class Handler(Func<HttpRequestMessage,CancellationToken,Task<HttpResponseMessage>> fn):HttpMessageHandler{protected override Task<HttpResponseMessage>SendAsync(HttpRequestMessage r,CancellationToken c)=>fn(r,c);}
     static HttpResponseMessage Reply(string content)=>new(HttpStatusCode.OK){Content=new StringContent(JsonSerializer.Serialize(new{choices=new[]{new{message=new{content}}}}),Encoding.UTF8,"application/json")};
     static InstanceSnapshot Instance=>new(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("facebook",new()).Add("instagram",new()),Llm=new(){Enabled=true,BaseUrl="http://primary.test/v1",FallbackBaseUrl="",Vision=false,Batch=2,Parallel=2}},new(),Preferences.Parse(""));
+    [Fact] public async Task SelectedRescoreDoesNotTouchOtherPostsAndAcceptsEmptyCategories()
+    {
+        await using var i = new TestInstance(); await i.Init(); long id;
+        var snapshot = Instance with { Taxonomy = new() { Categories = [new() { Key = "topic", Label = "Topic" }] } };
+        await using (var db = i.Factory.Open()) {
+            var selected = new Post { Platform = "instagram", PlatformPostId = "selected", IngestReadyAt = Clock.Now, Hidden = true, HiddenBy = "llm", CategoriesJson = "[\"topic\"]", VerdictContentRevision = 1, PrefsVersion = Prompts.Version(snapshot) };
+            db.AddRange(selected, new Post { Platform = "instagram", PlatformPostId = "untouched", IngestReadyAt = Clock.Now }); await db.SaveChangesAsync(); id = selected.Id;
+        }
+        using var handler = new Handler((_, _) => Task.FromResult(Reply("{\"score\":7,\"reason\":\"No matching category\",\"categories\":[]}")));
+        using var http = new HttpClient(handler); var media = new MediaFiles(i.Paths, http);
+        var counts = await new Processing(i.Paths, i.Factory, new(http), media, new(i.Paths, i.Factory, media)).Run(snapshot, new("rescore", PostIds: [id]), null, default);
+        Assert.Equal(1, counts.Completed);
+        await using var check = i.Factory.Open(); var post = await check.Posts.SingleAsync(p => p.Id == id);
+        Assert.False(post.Hidden); Assert.True(post.Judged); Assert.Equal("[]", post.CategoriesJson);
+        Assert.Null((await check.Posts.SingleAsync(p => p.Id != id)).CategoriesJson);
+    }
     [Fact] public async Task OptionalSummaryThinkingSettingChangesOnlySummaryRequestsAndProvenance()
     {
         await using var i = new TestInstance(); await i.Init();

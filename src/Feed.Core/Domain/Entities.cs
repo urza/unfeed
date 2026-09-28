@@ -17,6 +17,7 @@ public sealed class Post
     public string? Text { get; set; } public string? Permalink { get; set; } public string? LikeRef { get; set; }
     public bool IsSponsored { get; set; } public bool IsSuggested { get; set; } public bool IsReel { get; set; } public bool IsEvent { get; set; }
     public string? MemoryLabel { get; set; } public string? MemoryText { get; set; } public string? TagsJson { get; set; }
+    public string? StoryTitle { get; set; }
     public string? SharedAuthor { get; set; } public string? SharedText { get; set; } public string? SharedUrl { get; set; }
     public string? CategoriesJson { get; set; } public int? LlmScore { get; set; } public string? LlmReason { get; set; } public string? PrefsVersion { get; set; }
     public int? VerdictContentRevision { get; set; } public string? VerdictInputHash { get; set; } public string? VerdictModel { get; set; } public string? VerdictEndpoint { get; set; } public DateTime? JudgedAt { get; set; }

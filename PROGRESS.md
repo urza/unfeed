@@ -49,3 +49,11 @@ Expose the gallery directly in the feed toolbar. Normalize Bing regional image i
 ## Custom background uploads
 
 Add gallery instructions and a native multipart multi-file upload form. Validate format and bounded sizes, assign collision-free local filenames, publish complete files and refresh the gallery immediately. Seven focused tests pass, including a script-disabled browser upload of multiple synthetic files, asset retrieval, pinning, invalid format rejection, size/count limits, and a narrow-screen layout check. Reviewed the synthetic phone screenshot. Contracts and combined specification updated; Release Web publish passed.
+
+## Judged posts without categories
+
+Allow empty category arrays in model replies, separate category eligibility from visibility, and preserve explicit optional default-category behavior. Verify parser validation, restriction behavior and All/category/Unsorted/rare membership with synthetic data; update contracts and regenerate specification. Complete: 143 non-browser tests pass, including empty-array parsing, current-version selected rescore/unhiding, and All/category/Unsorted/rare membership. Added `rescore --post-ids` for bounded reviewed repairs with the existing worker and locks. Release CLI/Web builds and specification regeneration pass. Live validation and repair evidence remain in ignored instance notes.
+
+## Platform story context for classification
+
+Preserve the platform-generated story title separately from the author caption through parsing, storage, content revision, model input and card rendering. Pin replay invalidation and caption separation using synthetic fixtures; migrate the nullable field and update contracts. Implemented and validated with 146 non-browser tests, including story-title isolation and replay invalidation. The replay regression also pins kind-independent UTC timestamp hashing across SQLite round-trips. Release CLI/Web builds and specification regeneration pass; live evidence is kept privately.

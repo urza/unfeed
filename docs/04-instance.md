@@ -219,7 +219,7 @@ The taxonomy holds the categories the model assigns and the views the page offer
 | `key` | the protocol value. It appears in the model's reply, in the stored label array and in view definitions. A stable slug: `[a-z0-9_-]+`. |
 | `label` | display text |
 | `definition` | the sentence the prompt carries verbatim as `key = definition`. The model's idea of "personal" is the instance's idea. |
-| `default` | at most one category. Unclassified posts fall into it. |
+| `default` | at most one category; optional. Unclassified posts fall into it when permitted. Omit or set false on every category to keep judged posts with no matching category uncategorized. |
 | `close_friends_only` | platforms on which the label is allowed only when the author is a close friend. Enforced after every verdict and by `refilter`. |
 
 The label answers "what is this post under the owner's definitions". The model may use author identity, close-friend status and author-specific written policy. Posting frequency belongs to views, not category definitions. Personal category names and policies are instance data, never built into the implementation.

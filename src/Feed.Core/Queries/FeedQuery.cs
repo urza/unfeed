@@ -91,7 +91,7 @@ public sealed class FeedQuery(DbFactory factory)
         MediaSource[] sources;
         try { sources = JsonSerializer.Deserialize<MediaSource[]>(p.MediaManifestJson) ?? []; } catch (JsonException) { return null; }
         if (sources.Length == 0 || sources.Any(m => m.Kind != "image") || images.Length != sources.Length || images.Any(m => string.IsNullOrEmpty(m.ContentHash)) || sources.Any(s => !images.Any(m => m.SourceKey == s.SourceKey))) return null;
-        return JsonSerializer.Serialize(new { p.Platform, p.Text, p.SharedAuthor, p.SharedText, p.SharedUrl, p.MemoryLabel, p.MemoryText, p.IsSponsored, p.IsSuggested, p.IsReel, p.IsEvent, tags = Filters.Tags(p).Where(t => t.Kind == "with" || t.Url?.TrimEnd('/') != (card.Author?.Url ?? p.ObservedAuthorUrl)?.TrimEnd('/')).Select(t => new { t.Name, t.Url, t.Kind }).OrderBy(t => t.Name).ThenBy(t => t.Url), images = images.Select(m => m.ContentHash) });
+        return JsonSerializer.Serialize(new { p.Platform, p.Text, p.StoryTitle, p.SharedAuthor, p.SharedText, p.SharedUrl, p.MemoryLabel, p.MemoryText, p.IsSponsored, p.IsSuggested, p.IsReel, p.IsEvent, tags = Filters.Tags(p).Where(t => t.Kind == "with" || t.Url?.TrimEnd('/') != (card.Author?.Url ?? p.ObservedAuthorUrl)?.TrimEnd('/')).Select(t => new { t.Name, t.Url, t.Kind }).OrderBy(t => t.Name).ThenBy(t => t.Url), images = images.Select(m => m.ContentHash) });
     }
     static int Bound(DateTime[] dates, DateTime value, bool upper)
     {

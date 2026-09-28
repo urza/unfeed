@@ -51,6 +51,7 @@ The post JSON, serialized without ASCII escaping so non-Latin text stays readabl
 ```
 
 - `platform`, `author`, `text`, `author_close_friend`, `has_image`, `has_video` and `link_domains` are always present. `text` is `""` when the post has no caption. `link_domains` may be `[]`. For an unresolved author, `author` uses ObservedAuthorName or `""`; author_close_friend is false and no author feedback is attached.
+- `platform_context` is present when StoryTitle is available, cut at 2000 characters. It is the platform-generated story context (for example a cover-photo update), not the author caption.
 - `shared` is present when the post has a shared author, shared text or a shared URL. Its text is the shared body, never mixed with the caption.
 - `tagged_people` is present when the post has tags; a tag with an empty name is dropped. `kind` is present when the parser set it (`with` for an "is with" line). `friend` is true when the tag's URL resolves to a friend, for any kind. The owner's category definitions decide what these facts mean.
 - `author_close_friend` is true when the author resolves to the platform's close-friends list.
@@ -61,16 +62,17 @@ The reply shape, generated from the taxonomy:
 
 With an empty taxonomy, the reply shape below requires `"categories": []` and omits the category-definition and category-choice instructions. Scoring and policy evaluation still apply.
 
-1. `Reply with a single JSON object, nothing else: {"score": <integer 0-10>, "reason": "<at most 20 words>", "categories": [<one to three of: "k1", "k2", ...>]}`
+1. `Reply with a single JSON object, nothing else: {"score": <integer 0-10>, "reason": "<at most 20 words>", "categories": [<zero to three of: "k1", "k2", ...>]}`
 2. `Score 10 = the user definitely wants to see this post; score 0 = it definitely violates the policy.`
 3. `categories (assign the ones that genuinely describe the post; judge the image(s) together with the text when one is attached):` then `key = definition;` for every category, the definition trimmed with its trailing period removed.
 4. A fixed explanation of relationship facts: `with` is a photo-context tag, `friend` means membership in the platform whitelist, and `author_close_friend` means the instance's close-friend list. `owner_feedback` is contextual preference evidence, not an automatic ban. The owner's definitions decide how these facts affect categories; the generic prompt does not assign a special meaning to any private category name.
-5. For each category with `close_friends_only`: `On <platforms>, <key> is allowed only when author_close_friend is true; otherwise choose another category.`
-6. With a default category: `If nothing else fits, use <default key>.`
+5. For each category with `close_friends_only`: `On <platforms>, <key> is allowed only when author_close_friend is true; otherwise omit this category.`
+6. Category eligibility and visibility are separate. No permitted category fitting is not a reason to lower the score. Without a configured default, use `[]` when none fits.
+7. With a default category: `If nothing else fits, use <default key>.`
 
 **The reply** is one JSON object: `{"score": 7, "reason": "at most 20 words", "categories": ["personal"]}`.
 
-**Validation.** The parser takes the text from the first `{` and reads exactly one JSON value, so prose around it is ignored. It rejects: no `{`, invalid JSON, not an object; a `score` that is missing, not a number, not an integer, or outside 0 to 10 (booleans and 7.5 fail); a `reason` that is missing or blank. The reason is whitespace-collapsed and cut to 20 words. When the taxonomy has categories, it also rejects a `categories` that is missing, not an array, empty, or holds a non-string or an unknown key; it deduplicates in the model's order and cuts at 3. With an empty taxonomy, `categories` is ignored and stored as `[]`. A rejected reply is a parse error, never a guess.
+**Validation.** The parser takes the text from the first `{` and reads exactly one JSON value, so prose around it is ignored. It rejects: no `{`, invalid JSON, not an object; a `score` that is missing, not a number, not an integer, or outside 0 to 10 (booleans and 7.5 fail); a `reason` that is missing or blank. The reason is whitespace-collapsed and cut to 20 words. When the taxonomy has categories, it also rejects a `categories` that is missing, not an array, or holds a non-string or an unknown key; it deduplicates in the model's order and cuts at 3. With an empty taxonomy, `categories` is ignored and stored as `[]`. A rejected reply is a parse error, never a guess.
 
 **Storage.** Every accepted verdict writes score, reason, categories after deterministic restrictions, PrefsVersion, VerdictContentRevision, exact input hash, serving model/endpoint and JudgedAt. Apply conditionally against the prepared ContentRevision and VisibilityRevision (5.12); a superseded result is discarded. Persist each verdict atomically with its visibility and provenance. Several completed posts may share a short database write batch when each retains its conditional check and results are published promptly; one SaveChanges call or round trip per post is not required.
 
@@ -84,6 +86,8 @@ Every scored row stamps `PrefsVersion` as `<policy hash>.<taxonomy hash>.g<gener
 
 - The policy hash: 12 hex characters of SHA-1 over newline-joined lines. The lines are the raw bullet lines of the policy, always-show and learned sections, in file order, each trimmed and with its leading `- ` kept. A policy line goes in as it is. An always-show line gets the prefix `show:`. A learned line gets the prefix `learned:`. Keywords, mutes and prose do not count, so a keyword edit does not invalidate verdicts. These inputs are deterministic and covered by fixtures.
 - The taxonomy hash: 8 hex characters of SHA-1 over the full reply-shape text. It covers the keys and their order, the definitions, the close-friends-only rules, the default, and the fixed explanation text. Labels and views do not count. Any edit that reaches the model reaches the version.
+- Generation 5 adds optional platform story context to model input separately from the caption.
+- Generation 4 permits uncategorized verdicts and separates category eligibility from visibility. Earlier verdicts remain valid for their content until explicitly rescored.
 - The generation: a constant in the code, bumped when the fixed prompt's judging instructions or post JSON shape changes. The ordering-only transition to policy, reply shape, post JSON, images preserves generation 3 and does not invalidate existing verdicts solely for that reorder. Document this exception beside PromptGeneration. Other instruction or data-shape changes still advance the generation. The exact input hash changes with message order; keeping a generation does not promise identical model answers.
 - The configuration hash: SHA-256 over canonical model id, configured primary/fallback endpoint identities without secrets, generation parameters, effective vision/preprocessing settings and processor-policy version, threshold, effective model-bypass settings and close-friend lists. These can affect a decision even when policy prose is unchanged. The actual serving endpoint and exact prepared input hash are stored separately.
 
@@ -91,7 +95,7 @@ A policy, category, versioned prompt or model-configuration edit makes stored ve
 
 ## 9.4 Category rules
 
-After every verdict, a deterministic pass enforces `close_friends_only`: for an author who is not a close friend on this platform, every category restricted on this platform is removed. When that empties a non-empty list, the result is the default category. `refilter` applies the same pass to stored verdicts, so a taxonomy rule edit needs no model call.
+After every verdict, a deterministic pass enforces `close_friends_only`: for an author who is not a close friend on this platform, every category restricted on this platform is removed. An empty result uses the configured default category only when that default is permitted for the author/platform. Without a permitted default, it remains `[]`: a valid judged result, not pending work. `refilter` applies the same pass to stored verdicts, so a taxonomy rule edit needs no model call.
 
 Close friends resolve from `platforms.<p>.close_friends` through the people matcher against the friend list, so a renamed handle keeps matching.
 
@@ -109,6 +113,7 @@ The independent `process` operation owns automatic judgment. It never needs a br
 | `--since <date>` | posts dated at or after the date |
 | `--limit N` | cap total selected posts |
 | `--platform X` | narrows scope; explicit commands may process a paused platform |
+| `--post-ids N,N,...` | rescore only: selected positive post ids, deduplicated; current-version rows included, other scope filters and limits still apply. Mutually exclusive with `--post-id`. |
 | `--post-id N` | that ready visible or `llm`-hidden row, regardless of version |
 | `--author <ref>` | that author's ready visible or `llm`-hidden rows with missing or stale results |
 | `--text-only` | no image inputs; record that setting in input provenance |

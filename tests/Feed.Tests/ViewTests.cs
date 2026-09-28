@@ -6,6 +6,24 @@ using Xunit;
 namespace Feed.Tests;
 public sealed class ViewTests
 {
+    [Fact] public async Task UncategorizedVerdictIsSortedAndCanQualifyForRareButNotCategory()
+    {
+        await using var i = new TestInstance(); await i.Init();
+        var taxonomy = new Taxonomy { Categories = [new() { Key = "topic", Label = "Topic", CloseFriendsOnly = ["facebook"] }],
+            Views = [new() { Key = "topic", Label = "Topic", Category = "topic" }, new() { Key = "rare", Label = "Rare", Rare = new() { MaxPosts = 3, WindowDays = 90 } }] };
+        var snapshot = new InstanceSnapshot(new() { Platforms = ImmutableDictionary<string, PlatformConfig>.Empty.Add("facebook", new()), Llm = new() { Enabled = true } }, taxonomy, Preferences.Parse(""));
+        await using (var db = i.Factory.Open())
+        {
+            var author = new Author { Platform = "facebook", IsFriend = true, DisplayName = "Synthetic Friend" }; db.Add(author); await db.SaveChangesAsync();
+            var restricted = Filters.Restrict(["topic"], new(author, [author], snapshot), "facebook"); Assert.Empty(restricted);
+            db.Posts.AddRange(new() { Platform = "facebook", PlatformPostId = "uncategorized", AuthorId = author.Id, PostedAt = Clock.Now, CategoriesJson = System.Text.Json.JsonSerializer.Serialize(restricted), VerdictContentRevision = 1 },
+                new() { Platform = "facebook", PlatformPostId = "pending", AuthorId = author.Id, PostedAt = Clock.Now }); await db.SaveChangesAsync();
+        }
+        var query = new FeedQuery(i.Factory); var all = await query.Read(snapshot, "all", null, "live", default);
+        Assert.Equal("uncategorized", Assert.Single(all.Items).Lead.Post.PlatformPostId); Assert.Equal(1, all.UnsortedCount);
+        Assert.Equal(0, (await query.Read(snapshot, "topic", null, "live", default)).VisibleCount);
+        Assert.Equal(1, (await query.Read(snapshot, "rare", null, "live", default)).VisibleCount);
+    }
     [Theory] [InlineData(true)] [InlineData(false)]
     public async Task AuthorCategoryIntersectionRequiresBothAndCurrentVisibleVerdict(bool modelEnabled)
     {

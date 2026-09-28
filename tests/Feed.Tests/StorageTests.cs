@@ -35,6 +35,21 @@ public sealed class StorageTests
         await File.WriteAllTextAsync(file, (await File.ReadAllTextAsync(file)).Replace("Synthetic caption", "Changed caption")); Assert.Equal(1, (await ingest.File("instagram", file, s, true, default)).Revised);
         await db.Entry(post).ReloadAsync(); Assert.Equal(2, post.ContentRevision); Assert.Equal("old", post.Summary); Assert.NotEqual(post.ContentRevision, post.SummaryContentRevision);
     }
+    [Fact] public async Task StoryContextRoundTripsAndInvalidatesVerdictOnlyWhenChanged()
+    {
+        await using var i = new TestInstance(); await i.Init();
+        var dir = i.Paths.Get("raw", "facebook", "synthetic"); Directory.CreateDirectory(dir); var file = Path.Combine(dir, "001.json");
+        const string raw = """{"__typename":"Story","post_id":"synthetic","creation_time":1700000000,"actors":[{"id":"501","name":"Synthetic"}],"message":{"text":"Caption"},"comet_sections":{"context_layout":{"story":{"comet_sections":{"title":{"story":{"title":{"text":"Synthetic updated their cover photo."}}}}}}}}""";
+        await File.WriteAllTextAsync(file, raw); var snapshot = new InstanceFiles(i.Paths).Current;
+        var ingest = new Ingest(i.Paths, i.Factory, new(i.Paths, new HttpClient())); await ingest.File("facebook", file, snapshot, true, default);
+        await using var db = i.Factory.Open(); var post = await db.Posts.SingleAsync();
+        Assert.Equal("Synthetic updated their cover photo.", post.StoryTitle); Assert.Equal("Caption", post.Text);
+        post.CategoriesJson = "[]"; post.VerdictContentRevision = post.ContentRevision; await db.SaveChangesAsync();
+        Assert.Equal(0, (await ingest.File("facebook", file, snapshot, true, default)).Revised);
+        await File.WriteAllTextAsync(file, raw.Replace("cover photo", "profile picture"));
+        Assert.Equal(1, (await ingest.File("facebook", file, snapshot, true, default)).Revised);
+        await db.Entry(post).ReloadAsync(); Assert.False(post.Judged); Assert.Equal("Synthetic updated their profile picture.", post.StoryTitle);
+    }
     [Fact] public void CarouselChildrenAreExcludedEverywhere()
     {
         const string slide = "{\"pk\":\"2\",\"code\":\"child\",\"media_type\":1,\"display_url\":\"https://example.test/slide.jpg\"}";
@@ -47,6 +62,16 @@ public sealed class StorageTests
         Assert.True(FriendsCompleteness.Proven(pages, 80, false, out _)); Assert.False(FriendsCompleteness.Proven(pages[..1], 80, false, out _)); Assert.False(FriendsCompleteness.Proven(pages, 79, false, out _)); Assert.False(FriendsCompleteness.Proven(pages, 80, true, out _));
     }
     [Theory] [InlineData("{\"score\":true,\"reason\":\"x\"}")] [InlineData("{\"score\":7.5,\"reason\":\"x\"}")] [InlineData("{\"score\":11,\"reason\":\"x\"}")] public void VerdictRejectsInvalidScores(string reply) => Assert.ThrowsAny<Exception>(() => Prompts.ParseVerdict(reply, new()));
+    [Fact] public void VerdictAllowsNoCategoryButStillRejectsMissingOrInvalidLabels()
+    {
+        var taxonomy = new Taxonomy { Categories = [new() { Key = "topic", Label = "Topic" }] };
+        var verdict = Prompts.ParseVerdict("{\"score\":7,\"reason\":\"No matching category\",\"categories\":[]}", taxonomy);
+        Assert.Empty(verdict.Categories); Assert.Equal(7, verdict.Score);
+        foreach (var suffix in new[] { "", ",\"categories\":null", ",\"categories\":\"topic\"", ",\"categories\":[\"unknown\"]", ",\"categories\":[3]" })
+            Assert.ThrowsAny<Exception>(() => Prompts.ParseVerdict("{\"score\":7,\"reason\":\"fixture\"" + suffix + "}", taxonomy));
+        Assert.Contains("Do not lower the score", Prompts.ReplyShape(taxonomy));
+        Assert.DoesNotContain("If nothing else fits", Prompts.ReplyShape(taxonomy));
+    }
     [Fact] public void VerdictAcceptsFirstObjectAndEmptyTaxonomy() { var v = Prompts.ParseVerdict("prefix {\"score\":9,\"reason\":\"fine\"} trailing {bad}", new()); Assert.Equal(9, v.Score); Assert.Empty(v.Categories); }
 
     [Fact] public async Task MergeInvalidatesMovedPostContentAndPreservesFeedbackAndCoverage()

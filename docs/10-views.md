@@ -41,6 +41,7 @@ The page query then applies, in order: the feed mode (chapter 5: live, hidden or
 
 The owner would rather see less than see posts sorted wrong.
 
+- An empty label array `[]` is a successful judgment with no category. Visible posts with it appear in All and may qualify for author or rare views, but not category views. A category restriction alone does not imply hiding.
 - "Judged" means a non-null label array with VerdictContentRevision equal to ContentRevision. Policy/configuration-stale verdicts still count; content-stale ones do not.
 - With the model on: `all`, category views and rare clauses show judged posts only. Unjudged posts wait in the built-in Unsorted mode, which lists visible unjudged posts of the platform scope with a count in the toolbar. An authors-only view shows them regardless; a category-and-authors view still requires the category verdict.
 - With the model off: all admits all visible posts; authors-only and rare clauses keep their deterministic predicates without a judgment requirement. Category clauses, including category-and-authors intersections, use any stored current-content labels and may be empty; they never silently become all. Unions preserve their member predicates.
@@ -74,6 +75,6 @@ The "why here" badge on the card shows the view clause alone:
 
 ## 10.8 Exact repeated-content folding
 
-Separate platform posts sometimes contain identical photos, for example repeated profile-picture updates. In live views, fold these behind their newest card when they have the same resolved author and platform, identical caption/shared/memory fields, meaningful tags and structural flags (ignore redundant self-tags), and the same complete ordered set of known image byte hashes within ten minutes of that newest post. Require at least one image, all manifest image slots present with known hashes, and no videos. Similar images, missing bytes, text-only posts, different captions, different authors and later reposts do not qualify.
+Separate platform posts sometimes contain identical photos, for example repeated profile-picture updates. In live views, fold these behind their newest card when they have the same resolved author and platform, identical caption/platform-context/shared/memory fields, meaningful tags and structural flags (ignore redundant self-tags), and the same complete ordered set of known image byte hashes within ten minutes of that newest post. Require at least one image, all manifest image slots present with known hashes, and no videos. Similar images, missing bytes, text-only posts, different captions, different authors and later reposts do not qualify.
 
 Label the group `N repeated posts`. Keep every original row, permalink, media, provenance, visibility, model result, feedback and heart target. The group is expandable without JavaScript; counts still describe original posts. Apply after view membership and the render cap, before ordinary burst folding. Exact repeats may fold for explicitly selected authors; their ordinary unrelated posts retain the existing stack protection. Inspection modes do not apply this repeated-content fold.

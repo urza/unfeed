@@ -149,6 +149,7 @@ The summary line: `collect <platform> <mode>: <status> run=#<id> (found=, new=, 
 
 **Fields.**
 
+- Platform context: retain the story's own `comet_sections.context_layout.story.comet_sections.title.story.title.text` in `StoryTitle`, including photo-update context. Never borrow a shared/attached story's title or insert this platform-generated text into the author caption.
 - Text: `message`, else the message under the comet content sections, else a flat `text`. An object yields its `.text`.
 - Author: the first of `actors[]`. Name from `name`. URL from `wwwURL` or `url`, made absolute. Id from `id`, `idString` or `__dr`, else the numeric id from the URL, else the URL slug.
 - Like ref: `feedback.id` or `feedback.targetID`.

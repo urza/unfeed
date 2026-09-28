@@ -56,8 +56,9 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
     public static string ContentHash(Post p, IEnumerable<MediaSource> sources, IEnumerable<Media> rows)
     {
         // Canonical content serializer v1: explicit stable field order. Fetch URLs and retention paths never enter it.
-        var obj = new { v = 1, p.AuthorId, p.ObservedAuthorName, p.ObservedAuthorUrl, p.PostedAt, p.Text, p.SharedAuthor, p.SharedText, p.SharedUrl, p.MemoryLabel, p.MemoryText, p.TagsJson, p.IsSponsored, p.IsSuggested, p.IsReel, p.IsEvent, media = sources.Select(s => new { s.Kind, s.SourceKey, bytes = s.Kind == "image" ? rows.FirstOrDefault(r => r.SourceKey == s.SourceKey)?.ContentHash : null }) };
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(obj))));
+        // SQLite round-trips UTC wall-clock values without DateTimeKind; hash both forms identically.
+        var obj = new { v = 1, p.AuthorId, p.ObservedAuthorName, p.ObservedAuthorUrl, PostedAt = p.PostedAt is { } date ? DateTime.SpecifyKind(date, DateTimeKind.Unspecified) : (DateTime?)null, p.Text, p.SharedAuthor, p.SharedText, p.SharedUrl, p.MemoryLabel, p.MemoryText, p.TagsJson, p.IsSponsored, p.IsSuggested, p.IsReel, p.IsEvent, media = sources.Select(s => new { s.Kind, s.SourceKey, bytes = s.Kind == "image" ? rows.FirstOrDefault(r => r.SourceKey == s.SourceKey)?.ContentHash : null }) };
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes((p.StoryTitle is null ? JsonSerializer.Serialize(obj) : JsonSerializer.Serialize(new { content = obj, p.StoryTitle })))));
     }
     async Task<IngestResult> Store(Observation o, string raw, InstanceSnapshot instance, bool offline, CancellationToken ct)
     {
@@ -69,7 +70,7 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
             var p = await db.Posts.SingleOrDefaultAsync(p => p.Platform == o.Post.Platform && p.PlatformPostId == o.Post.PlatformPostId, ct); isNew = p is null;
             p ??= new() { Platform = o.Post.Platform, PlatformPostId = o.Post.PlatformPostId, RawRef = raw }; if (isNew) db.Add(p);
             originalHash = p.ContentHash; p.AuthorId = author?.Id;
-            p.ObservedAuthorName = o.AuthorName; p.ObservedAuthorUrl = o.AuthorUrl; p.PostedAt = o.Post.PostedAt; p.Text = o.Post.Text; p.Permalink = o.Post.Permalink; p.LikeRef = o.Post.LikeRef; p.IsSponsored = o.Post.IsSponsored; p.IsSuggested = o.Post.IsSuggested; p.IsReel = o.Post.IsReel; p.IsEvent = o.Post.IsEvent; p.SharedAuthor = o.Post.SharedAuthor; p.SharedText = o.Post.SharedText; p.SharedUrl = o.Post.SharedUrl; p.MemoryLabel = o.Post.MemoryLabel; p.MemoryText = o.Post.MemoryText; p.TagsJson = o.Post.TagsJson; p.LatestRawRef = raw; p.MediaManifestJson = JsonSerializer.Serialize(o.Media);
+            p.ObservedAuthorName = o.AuthorName; p.ObservedAuthorUrl = o.AuthorUrl; p.PostedAt = o.Post.PostedAt; p.Text = o.Post.Text; p.StoryTitle = o.Post.StoryTitle; p.Permalink = o.Post.Permalink; p.LikeRef = o.Post.LikeRef; p.IsSponsored = o.Post.IsSponsored; p.IsSuggested = o.Post.IsSuggested; p.IsReel = o.Post.IsReel; p.IsEvent = o.Post.IsEvent; p.SharedAuthor = o.Post.SharedAuthor; p.SharedText = o.Post.SharedText; p.SharedUrl = o.Post.SharedUrl; p.MemoryLabel = o.Post.MemoryLabel; p.MemoryText = o.Post.MemoryText; p.TagsJson = o.Post.TagsJson; p.LatestRawRef = raw; p.MediaManifestJson = JsonSerializer.Serialize(o.Media);
             var rows = isNew ? [] : await db.Media.Where(m => m.PostId == p.Id).ToListAsync(ct); var hash = ContentHash(p, o.Media, rows); changed = hash != originalHash;
             if (changed) { if (!isNew) p.ContentRevision++; p.IngestReadyAt = null; p.LlmAttemptedAt = p.SummaryAttemptedAt = null; p.LlmError = p.SummaryError = null; p.LlmFailures = p.SummaryFailures = 0; p.ContentHash = hash; var authors = await db.Authors.ToListAsync(ct); Filters.Apply(p, new(author, authors, instance)); }
             foreach (var row in rows) row.IsCurrent = o.Media.Any(s => s.SourceKey == row.SourceKey);

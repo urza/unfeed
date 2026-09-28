@@ -6,7 +6,7 @@ using Feed.Core.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 namespace Feed.Core.Application;
 
-public sealed record WorkScope(string Kind = "process", string Platform = "all", int? Limit = null, bool All = false, long? PostId = null, DateTime? Since = null, string? Author = null, bool TextOnly = false);
+public sealed record WorkScope(string Kind = "process", string Platform = "all", int? Limit = null, bool All = false, long? PostId = null, DateTime? Since = null, string? Author = null, bool TextOnly = false, long[]? PostIds = null);
 public sealed class StageCounts { public int Selected; public int Completed; public int Failed; public int Superseded; public int Undispatched; public int Remaining; }
 public sealed class WorkCounts
 {
@@ -108,6 +108,7 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                     var query = db.Posts.AsNoTracking().Where(p => p.Platform == turn.Platform && p.IngestReadyAt != null);
                     if (turn.Task == "judge") query = query.Where(p => !p.Hidden || p.HiddenBy == "llm"); else query = query.Where(p => !p.Hidden);
                     if (scope.PostId is { } id) query = query.Where(p => p.Id == id);
+                    else if (scope.PostIds is { } selectedIds) query = query.Where(p => selectedIds.Contains(p.Id));
                     else if (turn.Task == "judge") query = query.Where(p => p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision || (scope.All || scope.Author != null) && p.PrefsVersion != version);
                     else query = query.Where(p => p.SummaryContentRevision != p.ContentRevision || p.Summary == null);
                     if (scope.Since is { } since) query = query.Where(p => p.PostedAt >= since);

@@ -1,10 +1,26 @@
 using Feed.Cli;
+using Feed.Core.Application;
+using System.Text.Json;
 using Feed.Core.Domain;
 using Feed.Core.Infrastructure;
 using Xunit;
 namespace Feed.Tests;
 public sealed class ParserTests
 {
+    [Theory] [InlineData("cover photo")] [InlineData("profile picture")]
+    public void FacebookStoryContextIsSeparateFromCaptionAndSharedContext(string update)
+    {
+        var title = "Synthetic Person updated their " + update + ".";
+        var raw = """{"__typename":"Story","post_id":"synthetic","creation_time":1700000000,"actors":[{"id":"501","name":"Synthetic Person"}],"message":{"text":"Own caption"},"comet_sections":{"context_layout":{"story":{"comet_sections":{"title":{"story":{"title":{"text":"TITLE"}}}}}}},"attached_story":{"actors":[{"id":"601","name":"Other Person"}],"message":{"text":"Shared words"},"comet_sections":{"context_layout":{"story":{"comet_sections":{"title":{"story":{"title":{"text":"Other story context"}}}}}}}}}""".Replace("TITLE", title);
+        var post = Assert.Single(PayloadParser.Parse("facebook", raw).Posts).Post;
+        Assert.Equal(title, post.StoryTitle); Assert.Equal("Own caption", post.Text); Assert.Equal("Shared words", post.SharedText);
+        var snapshot = new InstanceSnapshot(new(), new(), Preferences.Parse(""));
+        using var body = JsonDocument.Parse(Prompts.PostJson(post, new(null, [], snapshot), [], []));
+        Assert.Equal(title, body.RootElement.GetProperty("platform_context").GetString());
+        Assert.Equal("Own caption", body.RootElement.GetProperty("text").GetString());
+        var withoutOwnTitle = raw.Replace("\"text\":\"" + title + "\"", "\"text\":null");
+        Assert.Null(Assert.Single(PayloadParser.Parse("facebook", withoutOwnTitle).Posts).Post.StoryTitle);
+    }
     [Fact]
     public void FacebookTextOnlySharedStoryKeepsCaptionAndOriginalAuthorSeparate()
     {
