@@ -3819,7 +3819,6 @@ login facebook: ok
 <li>collect gates and processing;</li>
 <li>recovery and upstream warnings;</li>
 <li>recent runs;</li>
-<li>coverage and timelines: current sweep progress and unvisited/stale/incomplete targets; name linked to the profile, last visit, status, failures in a row, what the page said, a screenshot link;</li>
 <li>the log tail, newest first, in a dark scroll box with links to the full CLI and web logs;</li>
 <li>run requests;</li>
 <li>posts by platform, with the thumbs counts;</li>
@@ -3827,9 +3826,10 @@ login facebook: ok
 <li>platform state;</li>
 <li>the live config;</li>
 <li>locks;</li>
-<li>kv.</li>
+<li>kv;</li>
+<li>coverage and timelines: current sweep progress and unvisited/stale/incomplete targets; name linked to the profile, last visit, status, failures in a row, what the page said, a screenshot link. Keep this potentially long table last so other diagnostics remain easy to reach.</li>
 </ol>
-<p>Status cells are colored pills: running amber, ok and done green, error and refused red, pending blue, checkpoint dark amber, capped and imported teal. Every link on the page takes the soft accent, never the browser's default blue.</p>
+<p>Status cells are colored pills: running amber, ok and done green, error and refused red, pending blue, checkpoint dark amber, capped and imported teal. Descriptive status labels use a neutral badge; only known status values select a semantic CSS class, so label words cannot apply unrelated page styles. Every link on the page takes the soft accent, never the browser's default blue.</p>
 <p>The debug page links to <code>/debug/backgrounds</code>. That gallery uses the same glass styling, with lazy thumbnails from one combined pool. Each tile names the image and source and offers Pin and Remove; current and pinned states are visible. Page-level Unpin and Next image actions use ordinary forms. Show the blur setting and latest download result. Next changes the selected image on the next page load; a pin remains across restarts. Do not auto-refresh this gallery while the owner is choosing an image. Downloads never run as a side effect of opening it.</p></div></details>
 <details class="section" id="15-ui-15-11-the-page-footer" open><summary>15.11 The page footer</summary><div class="body"><p>A quiet centered line closes the page: <code>chronological · your rules · personal use · health</code>. The word <code>health</code> links to the health route.</p></div></details>
 <details class="section" id="15-ui-15-12-qualities-that-must-hold" open><summary>15.12 Qualities that must hold</summary><div class="body"><ul>

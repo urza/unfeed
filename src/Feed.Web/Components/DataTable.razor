@@ -1,2 +1,8 @@
-@if(Rows.Length==0){<p class="muted">None</p>}else{<div class="table-scroll"><table><thead><tr>@foreach(var prop in Properties){<th>@prop.Name</th>}</tr></thead><tbody>@foreach(var row in Rows){<tr>@foreach(var prop in Properties){var value=prop.GetValue(row);var text=value is DateTime date?date.ToString("u"):value?.ToString()??"—";<td>@if(prop.Name=="Screenshot" && value is string path){<a href="@("/"+path)" target="_blank">screenshot</a>}else if(prop.Name=="Url" && value is string url && Uri.TryCreate(url,UriKind.Absolute,out var uri) && uri.Scheme is "https" or "http"){<a href="@url" target="_blank" rel="noopener noreferrer">profile</a>}else if(prop.Name is "Status" or "State"){<span class="@("badge status-"+text)">@text</span>}else{@text}</td>}</tr>}</tbody></table></div>}
-@code{[Parameter]public object[] Rows{get;set;}=[];System.Reflection.PropertyInfo[] Properties=>Rows.Length==0?[]:Rows[0].GetType().GetProperties();}
+@if(Rows.Length==0){<p class="muted">None</p>}else{<div class="table-scroll"><table><thead><tr>@foreach(var prop in Properties){<th>@prop.Name</th>}</tr></thead><tbody>@foreach(var row in Rows){<tr>@foreach(var prop in Properties){var value=prop.GetValue(row);var text=value is DateTime date?date.ToString("u"):value?.ToString()??"—";<td>@if(prop.Name=="Screenshot" && value is string path){<a href="@("/"+path)" target="_blank">screenshot</a>}else if(prop.Name=="Url" && value is string url && Uri.TryCreate(url,UriKind.Absolute,out var uri) && uri.Scheme is "https" or "http"){<a href="@url" target="_blank" rel="noopener noreferrer">profile</a>}else if(prop.Name is "Status" or "State"){<span class="@("badge "+StatusClass(text))">@text</span>}else{@text}</td>}</tr>}</tbody></table></div>}
+@code{
+static string StatusClass(string status) => status switch
+{
+    "ok" or "done" or "running" or "error" or "refused" or "failed" or "pending" or "checkpoint" or "capped" or "imported" => "status-" + status,
+    _ => "status-unknown"
+};
+[Parameter]public object[] Rows{get;set;}=[];System.Reflection.PropertyInfo[] Properties=>Rows.Length==0?[]:Rows[0].GetType().GetProperties();}

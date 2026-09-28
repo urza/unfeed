@@ -5,7 +5,6 @@
 <section class="glass debug"><h2>collect gates · processing</h2><pre>@Status</pre></section>
 <section class="glass debug" id="recovery"><h2>recovery and upstream warnings</h2><DataTable Rows="Issues"/></section>
 <section class="glass debug"><h2>recent runs</h2><DataTable Rows="Runs"/></section>
-<section class="glass debug" id="coverage"><h2>coverage and timelines</h2><DataTable Rows="Coverage"/></section>
 <section class="glass debug"><h2>log tail</h2><a href="/debug/log?file=cli">CLI log</a> · <a href="/debug/log?file=web">Web log</a><pre>@Log</pre></section>
 <section class="glass debug"><h2>run requests</h2><DataTable Rows="Requests"/></section>
 <section class="glass debug"><h2>posts by platform</h2><DataTable Rows="Posts"/></section>
@@ -14,6 +13,7 @@
 <section class="glass debug"><h2>live config · effective rules</h2><pre>@Rules</pre></section>
 <section class="glass debug"><h2>locks</h2><DataTable Rows="Locks"/></section>
 <section class="glass debug"><h2>kv</h2><DataTable Rows="Metadata"/></section>
+<section class="glass debug" id="coverage"><h2>coverage and timelines</h2><DataTable Rows="Coverage"/></section>
 </Shell>
 @code{
 [Parameter]public string[] Warnings{get;set;}=[];
