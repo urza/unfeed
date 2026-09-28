@@ -14,7 +14,6 @@
    </a>
   </nav>
  </div>
- <a class="background-picker mobile" href="/debug/backgrounds" title="Choose a background picture">Backgrounds</a>
  <nav class="toolbar-row" aria-label="Feed controls">
   <span class="pills views desktop">@foreach(var view in Views){<a class="@(view.Key == Model.View ? "active" : "")" aria-current="@(view.Key == Model.View ? "page" : null)" href="@Link(view.Key,Model.Platform)">@view.Label</a>}</span>
   <details class="dropdown mobile view-picker">
@@ -42,6 +41,7 @@
    </div>
   </details>
   <form action="/read" method="post" class="read"><button class="ghost" title="Mark all read" aria-label="Mark all read"><span class="desktop">Mark all read</span><svg class="mobile read-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></form>
+  <a class="background-picker mobile" href="/debug/backgrounds" title="Choose a background picture" aria-label="Backgrounds"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></svg></a>
   <details class="dropdown collect">
    <summary title="Collect from every enabled platform"><span class="desktop">@CollectLabel</span><span class="mobile">@CollectLabel.Replace("Collect requested","Requested")</span><ToolbarCaret/></summary>
    <div class="menu">

@@ -74,6 +74,10 @@ public sealed class ToolbarTests
                     await Expect(page.Locator(".toolbar-head")).ToBeHiddenAsync();
                     await Expect(page.Locator(".views")).ToBeHiddenAsync();
                     await Expect(page.Locator(".view-picker")).ToBeVisibleAsync();
+                    var toolbar = (await page.Locator(".feed-toolbar").BoundingBoxAsync())!;
+                    var row = (await page.Locator(".toolbar-row").BoundingBoxAsync())!;
+                    Assert.True(toolbar.Height <= row.Height + 18, $"Entire toolbar must fit one row at {width}px");
+                    await Expect(page.GetByRole(AriaRole.Link, new() { Name = "Backgrounds", Exact = true })).ToBeVisibleAsync();
                     var controls = await page.Locator(".toolbar-row").EvaluateAsync<bool>("el => { const boxes = [...el.children].filter(x => getComputedStyle(x).display !== 'none').map(x => x.getBoundingClientRect()); return boxes.every(b => Math.abs((b.top+b.bottom)/2 - (boxes[0].top+boxes[0].bottom)/2) < 1 && b.left >= 0 && b.right <= innerWidth); }");
                     Assert.True(controls, $"Controls must fit one row at {width}px");
                     foreach (var picker in new[] { ".view-picker", ".platform-picker", ".collect" })
@@ -110,6 +114,8 @@ public sealed class ToolbarTests
             await page.Locator(".collect > summary").ClickAsync();
             await page.Locator(".collect form[action='/collect'] button").ClickAsync();
             await Expect(page.Locator(".collect > summary .mobile")).ToHaveTextAsync("Requested ✓");
+            await page.SetViewportSizeAsync(320, 900);
+            Assert.True(await page.Locator(".toolbar-row").EvaluateAsync<bool>("el => { const boxes = [...el.children].filter(x => getComputedStyle(x).display !== 'none').map(x => x.getBoundingClientRect()); return boxes.every((b, i) => b.left >= 0 && b.right <= innerWidth && (i === 0 || b.left >= boxes[i - 1].right)); }"), "Queued controls must fit without overlapping at 320px");
             await page.Locator(".collect > summary").ClickAsync();
             await Expect(page.Locator(".collect form[action='/collect'] button")).ToBeDisabledAsync();
             await page.Locator(".collect > summary").ClickAsync();
