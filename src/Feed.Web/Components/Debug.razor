@@ -1,7 +1,7 @@
-<Shell Title="Debug" Stamp="@Stamp" Background="@Background" Blur="Blur" Refresh="true"><header class="toolbar glass"><div class="brand">☷ <strong>debug</strong><small>auto-refresh 10 s</small><a href="/">Back to feed</a></div></header>
+<Shell Title="Debug" Stamp="@Stamp" Background="@Background" Blur="Blur" Refresh="true"><header class="toolbar glass"><div class="brand">☷ <strong>debug</strong><small>auto-refresh 10 s</small><a href="/">Back to feed</a><a class="background-picker" href="/debug/backgrounds">Background gallery</a></div></header>
 @foreach(var warning in Warnings){<aside class="banner">@warning</aside>}
 @if(Error is not null){<aside class="banner">@Error</aside>}
-<section class="glass debug"><h2>scheduler</h2><pre>@SchedulerInfo</pre><a href="/debug/backgrounds">Background gallery</a></section>
+<section class="glass debug"><h2>scheduler</h2><pre>@SchedulerInfo</pre></section>
 <section class="glass debug"><h2>collect gates · processing</h2><pre>@Status</pre></section>
 <section class="glass debug" id="recovery"><h2>recovery and upstream warnings</h2><DataTable Rows="Issues"/></section>
 <section class="glass debug"><h2>recent runs</h2><DataTable Rows="Runs"/></section>

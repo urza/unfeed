@@ -37,7 +37,7 @@ Use `status` and `/debug` for live state; documentation contains defaults, never
 - Instagram reel verification: `/reel/<shortcode>/` or `/reels/<shortcode>/` can redirect to a different reel. The browser follows redirects; a different shortcode cannot verify the selected post. For a read-only check, try `/p/<original-shortcode>/`, preserving the original shortcode exactly. Confirm that the final URL still identifies the original and its post-level heart says `Unlike` (the 24 px control, excluding comment hearts). Do not click again merely to verify. This alternate format has worked in live inspection but is not guaranteed for every reel, and the sender does not automatically rewrite stored permalinks to it. A redirected or unavailable page leaves independent verification unresolved; do not infer that liking caused the redirect.
 - Thumbs: use `curate` to inspect and write an interpreted rule with citations. A mute-like line requires `--approved`. A thumb never directly hides or mutes.
 - Retention: use `raw prune --dry-run` and `media prune --dry-run`; never delete the raw or media tree by hand.
-- Backgrounds: put photos in `data/backgrounds/local/`; `/debug/backgrounds` pins, rotates or removes pool copies. Downloads run independently of page requests.
+- Backgrounds: use Upload files on `/debug/backgrounds`, or put photos in `data/backgrounds/local/`; `/debug/backgrounds` pins, rotates or removes pool copies. Downloads run independently of page requests.
 
 ## Backup and restore
 

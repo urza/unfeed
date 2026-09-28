@@ -32,3 +32,11 @@ Implemented permalink-matched Facebook post-dialog targeting, excluding backgrou
 ## Instagram reel reaction targeting
 
 Implemented Instagram permalink validation with singular/plural reel URL normalization. Post hearts must fit inside the viewport and pass a center hit test, excluding prefetched offscreen reels and covered controls. Ambiguity includes actionable and already-liked states. Three new synthetic browser regressions cover these cases; all seven focused Facebook/Instagram reaction tests pass. Release CLI publish and specification regeneration pass. Instance-specific deployment and selected-post verification remain in ignored storage.
+
+## Background gallery maintenance
+
+Expose the gallery directly in the feed toolbar. Normalize Bing regional image identities and consolidate identical cached downloads while preserving pins and remembering removals. Add synthetic regression coverage, update the contracts and regenerate the specification. Five focused background tests and both toolbar browser cases pass, including desktop/phone layouts with and without JavaScript. Synthetic screenshots reviewed; specification regenerated. Existing duplicate cleanup runs during background maintenance after the updated host starts. Exact-content matching does not identify differently encoded legacy copies.
+
+## Custom background uploads
+
+Add gallery instructions and a native multipart multi-file upload form. Validate format and bounded sizes, assign collision-free local filenames, publish complete files and refresh the gallery immediately. Seven focused tests pass, including a script-disabled browser upload of multiple synthetic files, asset retrieval, pinning, invalid format rejection, size/count limits, and a narrow-screen layout check. Reviewed the synthetic phone screenshot. Contracts and combined specification updated; Release Web publish passed.

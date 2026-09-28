@@ -56,7 +56,24 @@ app.MapGet("/debug",async(HttpContext ctx,Scheduler scheduler,Backgrounds backgr
  });
 });
 app.MapGet("/debug/log",(HttpContext ctx)=>Results.Text(Logs(ctx.Request.Query["file"],5000)));
-app.MapGet("/debug/backgrounds",(HttpContext ctx,Backgrounds backgrounds)=>new RazorComponentResult<Gallery>(new{Model=backgrounds.Current,Stamp=stamp,Blur=Snapshot(ctx).Config.Backgrounds.BlurPx}));
+app.MapGet("/debug/backgrounds",(HttpContext ctx,Backgrounds backgrounds)=>new RazorComponentResult<Gallery>(new{Model=backgrounds.Current,Stamp=stamp,Blur=Snapshot(ctx).Config.Backgrounds.BlurPx,UploadMessage=int.TryParse(ctx.Request.Query["uploaded"],out var uploaded)&&uploaded is >0 and <=10?$"Uploaded {uploaded} picture(s). Choose Pin to keep one selected.":null}));
+app.MapPost("/debug/backgrounds/upload",async(HttpContext ctx,Backgrounds backgrounds)=>{
+ string? error;
+ var status=400;
+ var requestLimit=ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+ if(requestLimit is {IsReadOnly:false}) requestLimit.MaxRequestBodySize=22*1024*1024;
+ try {
+  if (!ctx.Request.HasFormContentType) error="Choose pictures using the upload form.";
+  else {
+   var form=await ctx.Request.ReadFormAsync(new Microsoft.AspNetCore.Http.Features.FormOptions { MultipartBodyLengthLimit=20*1024*1024 },ctx.RequestAborted);
+   error=await backgrounds.Upload(form.Files,ctx.RequestAborted);
+   if(error is null) return (IResult)Results.Redirect($"/debug/backgrounds?uploaded={form.Files.Count}");
+  }
+ } catch(InvalidDataException) { error="The upload is too large or malformed. Use up to 10 MB per file and 20 MB total."; }
+ catch(BadHttpRequestException) { error="The upload is too large or malformed. Use up to 10 MB per file and 20 MB total."; }
+ catch(Exception e) when(e is IOException or UnauthorizedAccessException) { app.Logger.LogError(e,"Background upload could not be saved"); error="Could not finish saving the upload. Check the gallery before retrying; some files may have been saved."; status=500; }
+ return new RazorComponentResult<Gallery>(new{Model=backgrounds.Current,Stamp=stamp,Blur=Snapshot(ctx).Config.Backgrounds.BlurPx,UploadError=error}){StatusCode=status};
+});
 app.MapPost("/debug/backgrounds/{action}",async(string action,HttpContext ctx,Backgrounds backgrounds)=>{var form=await ctx.Request.ReadFormAsync();return backgrounds.Action(action,form["name"].FirstOrDefault())?Results.Redirect("/debug/backgrounds"):(IResult)Results.NotFound();});
 app.MapGet("/backgrounds/{name}",(string name,HttpContext ctx,Backgrounds backgrounds)=>{var image=backgrounds.Current.Images.FirstOrDefault(i=>i.Name==name);if(image is null||paths.SafeFile(image.Source=="local"?"backgrounds/local":"backgrounds",Path.GetFileName(image.Path)) is null)return Results.NotFound();if(ctx.Request.Headers.IfNoneMatch==image.Etag)return Results.StatusCode(304);ctx.Response.Headers.ETag=image.Etag;ctx.Response.Headers.CacheControl="public, max-age=0, must-revalidate";return (IResult)Results.File(image.Path,Type(image.Path),enableRangeProcessing:true);});
 app.MapGet("/media/{**path}",(string path,HttpContext ctx)=>{var file=paths.SafeFile("media",path);if(file is null)return Results.NotFound();ctx.Response.Headers.CacheControl="public, max-age=31536000, immutable";return (IResult)Results.File(file,Type(file),enableRangeProcessing:true);});

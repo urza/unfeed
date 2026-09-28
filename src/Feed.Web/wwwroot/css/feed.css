@@ -5,3 +5,9 @@
 .card-footer{padding-right:42px}.why{position:relative;margin-top:0}.why>summary{position:absolute;right:0;top:-27px}.why ul{padding-top:10px;margin-bottom:0}
 
 .debug-dot{display:inline-block;width:7px;height:7px;margin-left:6px;border-radius:50%;background:#f6c453;vertical-align:middle}
+
+.background-picker{display:inline-flex;align-items:center;justify-content:center;padding:8px 12px;border:1px solid #8cbcff66;border-radius:10px;background:#4c8dff28;color:var(--text);font-size:.85rem;font-weight:600;white-space:nowrap}.background-picker:hover{background:#4c8dff45;text-decoration:none}.inspection .background-picker{padding:7px 12px;border-radius:10px;color:var(--text)}.toolbar>.background-picker{display:none;align-self:flex-end;margin-bottom:8px}@container(max-width:697px){.toolbar>.background-picker{display:inline-flex}}
+
+.background-upload{display:flex!important;flex-direction:column;align-items:flex-start;gap:10px}.background-upload input{max-width:100%;font:inherit}.background-upload p{margin:0;color:var(--muted);font-size:.8rem}
+
+.background-settings{overflow-wrap:anywhere}

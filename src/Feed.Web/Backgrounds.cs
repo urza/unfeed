@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Feed.Core.Application;
 using Feed.Core.Domain;
 using Feed.Core.Infrastructure;
@@ -25,6 +26,18 @@ public sealed class Backgrounds(InstancePaths paths, InstanceFiles files, ILogge
                 }
             }
             var pinPath = paths.Get("backgrounds", "pinned.txt"); var pin = File.Exists(pinPath) ? File.ReadAllText(pinPath).Trim() : null;
+            // Prefer the pinned/current filename when consolidating old regional copies.
+            foreach (var group in images.Where(i => i.Source == "bing").GroupBy(i => i.Etag).ToArray())
+            {
+                var removedContent = Removed("sha256:" + group.Key.Trim('"'));
+                var copies = group.OrderByDescending(i => i.Name == pin).ThenByDescending(i => i.Name == snapshot.Selected).ThenBy(i => i.Name, StringComparer.Ordinal).ToArray();
+                foreach (var duplicate in copies.Skip(removedContent ? 0 : 1))
+                {
+                    RememberRemoved(duplicate.Name);
+                    File.Delete(duplicate.Path);
+                    images.Remove(duplicate);
+                }
+            }
             string? outcome = snapshot.Outcome;
             var refreshState = paths.Get("backgrounds", "refresh.json");
             if (outcome is null && File.Exists(refreshState)) try { using var state = JsonDocument.Parse(File.ReadAllText(refreshState)); if (state.RootElement.TryGetProperty("outcome", out var result)) outcome = result.GetString(); } catch (JsonException) { }
@@ -47,12 +60,50 @@ public sealed class Backgrounds(InstancePaths paths, InstanceFiles files, ILogge
             else if (action is "unpin" or "next") { if (File.Exists(pin)) File.Delete(pin); }
             else if (action == "remove")
             {
-                var image = snapshot.Images.Single(i => i.Name == name); if (image.Source == "bing") { var removed = paths.Get("backgrounds", "removed.txt"); var entries = File.Exists(removed) ? File.ReadAllLines(removed).ToHashSet() : []; entries.Add(image.Name); InstancePaths.AtomicWrite(removed, string.Join('\n', entries)); }
+                var image = snapshot.Images.Single(i => i.Name == name); if (image.Source == "bing") { RememberRemoved(image.Name, "sha256:" + image.Etag.Trim('"')); }
                 File.Delete(image.Path); if (snapshot.Pinned == name && File.Exists(pin)) File.Delete(pin);
             }
             else return false;
             Scan(action == "next"); return true;
         }
+    }
+    public async Task<string?> Upload(IFormFileCollection uploads, CancellationToken ct)
+    {
+        if (uploads.Count is < 1 or > 10) return "Choose between 1 and 10 pictures.";
+        if (uploads.Any(f => f.Length is <= 0 or > 10 * 1024 * 1024) || uploads.Sum(f => f.Length) > 20 * 1024 * 1024)
+            return "Use nonempty files up to 10 MB each and 20 MB total.";
+        var validated = new List<(string Name, byte[] Bytes)>();
+        foreach (var upload in uploads)
+        {
+            var original = Path.GetFileName(upload.FileName.Replace('\\', '/'));
+            var extension = Path.GetExtension(original).ToLowerInvariant();
+            var expected = extension switch { ".jpg" or ".jpeg" => "image/jpeg", ".png" => "image/png", ".webp" => "image/webp", _ => null };
+            if (expected is null) return "Only JPG, JPEG, PNG and WebP pictures are supported. No files were saved.";
+            using var output = new MemoryStream();
+            await upload.CopyToAsync(output, ct);
+            var bytes = output.ToArray();
+            var info = ImageHeaders.Read(bytes);
+            if (info?.Mime != expected || info.Width is not > 0 || info.Height is not > 0)
+                return "A file does not have valid image headers matching its extension. No files were saved.";
+            var stem = Regex.Replace(Path.GetFileNameWithoutExtension(original), @"[^a-zA-Z0-9_-]", "-");
+            if (stem.Length > 60) stem = stem[..60];
+            validated.Add(($"{stem}-{Guid.NewGuid():N}{extension}", bytes));
+        }
+        lock (gate)
+        {
+            var directory = paths.Get("backgrounds", "local");
+            Directory.CreateDirectory(directory);
+            foreach (var (name, bytes) in validated)
+            {
+                ct.ThrowIfCancellationRequested();
+                var full = Path.Combine(directory, name);
+                var temp = full + ".tmp";
+                try { File.WriteAllBytes(temp, bytes); File.Move(temp, full, false); }
+                finally { if (File.Exists(temp)) File.Delete(temp); }
+            }
+            Scan();
+        }
+        return null;
     }
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -77,12 +128,15 @@ public sealed class Backgrounds(InstancePaths paths, InstanceFiles files, ILogge
                 using var archive = JsonDocument.Parse(await http.GetStringAsync($"https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=8&mkt={market}", ct));
                 foreach (var item in archive.RootElement.GetProperty("images").EnumerateArray())
                 {
-                    var urlbase = item.GetProperty("urlbase").GetString(); if (urlbase is null || !urlbase.StartsWith("/th?id=OHR.", StringComparison.Ordinal) || urlbase.Contains("..") || !seen.Add(urlbase)) continue;
-                    var name = "bing-" + Prompts.Sha(urlbase)[..24] + ".jpg"; var full = paths.Get("backgrounds", name);
-                    lock (gate) { if (File.Exists(full) || Removed(name)) continue; }
+                    var urlbase = item.GetProperty("urlbase").GetString(); if (urlbase is null || !urlbase.StartsWith("/th?id=OHR.", StringComparison.Ordinal) || urlbase.Contains("..")) continue;
+                    var identity = Regex.Replace(urlbase, @"_[A-Z]{2}-[A-Z]{2}\d+(?=$|&)", "", RegexOptions.CultureInvariant);
+                    if (!seen.Add(identity)) continue;
+                    var legacyName = "bing-" + Prompts.Sha(urlbase)[..24] + ".jpg";
+                    var name = "bing-" + Prompts.Sha(identity)[..24] + ".jpg"; var full = paths.Get("backgrounds", name);
+                    lock (gate) { if (File.Exists(full) || Removed(name) || Removed(legacyName)) continue; }
                     using var response = await http.GetAsync("https://www.bing.com" + urlbase + "_1920x1080.jpg", ct); response.EnsureSuccessStatusCode(); if (response.RequestMessage?.RequestUri?.Host is not ("www.bing.com" or "bing.com") || response.Content.Headers.ContentType?.MediaType?.StartsWith("image/") != true) throw new IOException("Unexpected Bing image origin or content type");
                     var bytes = await response.Content.ReadAsByteArrayAsync(ct); if (ImageHeaders.Read(bytes) is null) throw new IOException("Invalid background image");
-                    lock (gate) { if (Removed(name)) continue; var tmp = full + ".tmp"; File.WriteAllBytes(tmp, bytes); File.Move(tmp, full, true); downloaded++; }
+                    lock (gate) { if (Removed(name) || Removed(legacyName) || Removed("sha256:" + MediaFiles.Hash(bytes))) continue; var tmp = full + ".tmp"; File.WriteAllBytes(tmp, bytes); File.Move(tmp, full, true); downloaded++; }
                 }
             }
             catch (Exception e) when (!ct.IsCancellationRequested) { failed++; log.LogWarning("Bing market {Market}: {Error}", market, e.Message); }
@@ -90,6 +144,13 @@ public sealed class Backgrounds(InstancePaths paths, InstanceFiles files, ILogge
         var outcome = $"{Clock.Now:O}: downloaded={downloaded}, failed markets={failed}";
         InstancePaths.AtomicWrite(stateFile, JsonSerializer.Serialize(new { day, ok = failed == 0, next = Clock.Now.AddMinutes(failed == 0 ? 0 : 10), outcome }));
         lock (gate) Volatile.Write(ref snapshot, snapshot with { Outcome = outcome }); Scan();
+    }
+    void RememberRemoved(params string[] names)
+    {
+        var path = paths.Get("backgrounds", "removed.txt");
+        var entries = File.Exists(path) ? File.ReadAllLines(path).ToHashSet() : [];
+        entries.UnionWith(names);
+        InstancePaths.AtomicWrite(path, string.Join('\n', entries));
     }
     bool Removed(string name) { var path = paths.Get("backgrounds", "removed.txt"); return File.Exists(path) && File.ReadAllLines(path).Contains(name); }
 }
