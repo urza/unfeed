@@ -1,19 +1,55 @@
 <Shell Title="Feed" Stamp="@Stamp" Background="@Background" Blur="Model.Instance.Config.Backgrounds.BlurPx">
-<header class="toolbar glass">
- <div class="toolbar-head"><div><div class="brand"><Mark/><strong>Feed</strong></div><small>@Model.VisibleCount posts · @Model.Friends friends
-@if(Model.AdsDropped>0){<span> · @Model.AdsDropped ads dropped</span>}
-@if (LastCollect is { } last) { <span> · last collect @FeedQuery.Relative(last.FinishedAt) ago (+@last.PostsNew)</span> }</small></div><nav class="inspection"><a class="background-picker" href="/debug/backgrounds" title="Choose a background picture">Backgrounds</a>@if (Model.Instance.Config.Llm.Enabled) { <a class="@(Model.Scope == "unsorted" ? "active" : "")" href="@(Link(Model.View, Model.Platform, "unsorted"))" title="Posts waiting for the model's verdict; not shown in any category view">Unsorted (@Model.UnsortedCount)</a> }<a href="@(Link(Model.View, Model.Platform, "hidden"))" class="@(Model.Scope == "hidden" ? "active" : "")">Hidden (@Model.HiddenCount)</a><a href="/debug" title="@DebugTitle">Debug
-@if(HasDiagnostics){<span class="debug-dot" role="img" aria-label="Diagnostics to review"></span>}</a></nav></div>
- <a class="background-picker mobile" href="/debug/backgrounds" title="Choose a background picture">Backgrounds</a>
- <div class="toolbar-row">
-  <nav class="pills views desktop">@foreach (var view in Views) { <a class="@(view.Key == Model.View ? "active" : "")" href="@Link(view.Key, Model.Platform)">@view.Label</a> }</nav>
-  <details class="dropdown mobile view-picker"><summary>@Views.First(v => v.Key == Model.View).Label <span class="caret">⌄</span></summary><div class="menu">@foreach (var view in Views) { <a class="@(view.Key == Model.View ? "active" : "")" href="@Link(view.Key, Model.Platform)">@view.Label</a> }<a href="/debug" title="@DebugTitle">Debug
-@if(HasDiagnostics){<span class="debug-dot" role="img" aria-label="Diagnostics to review"></span>}</a><a href="@Link(Model.View, Model.Platform, "hidden")">Hidden (@Model.HiddenCount)</a>@if(Model.Instance.Config.Llm.Enabled){<a href="@Link(Model.View, Model.Platform, "unsorted")">Unsorted (@Model.UnsortedCount)</a>}</div></details>
-  <nav class="pills platforms desktop"><a href="@Link(Model.View, null)" aria-label="All platforms" title="All platforms">▦</a>@foreach(var p in PickerPlatforms){<a href="@Link(Model.View,p)" class="@((p == Model.Platform ? "active " : "") + (!Model.Instance.Config.Enabled(p) ? "paused" : ""))" title="@PlatformTitle(p)" aria-label="@p">@(p == "facebook" ? "f" : "◎")</a>}</nav>
-  <details class="dropdown mobile"><summary title="@($"Platform: {Model.Platform ?? "all"}")">@(Model.Platform == "facebook" ? "f" : Model.Platform == "instagram" ? "◎" : "▦")</summary><div class="menu"><a class="@(Model.Platform is null ? "active" : "")" href="@Link(Model.View,null)">All platforms</a>@foreach(var p in PickerPlatforms){<a class="@((p == Model.Platform ? "active " : "") + (!Model.Instance.Config.Enabled(p) ? "paused" : ""))" title="@PlatformTitle(p)" href="@Link(Model.View,p)">@p</a>}</div></details>
-  <form action="/read" method="post" class="read"><button class="ghost" title="Mark all read"><span class="desktop">Mark all read</span><span class="mobile">✓</span></button></form>
-  <details class="dropdown collect"><summary><span class="desktop">@CollectLabel</span><span class="mobile">@CollectLabel.Replace("Collect requested", "Requested")</span> <span class="caret">⌄</span></summary><div class="menu"><form action="/collect" method="post"><button disabled="@(!Enabled.Any(Open))" title="@(Enabled.Any(Open) ? "Queue home collection on enabled platforms" : "No enabled platform is ready: check requests, running collects and re-login")">Collect now</button></form>@foreach(var p in Enabled){@foreach(var mode in Platforms.Modes){<form action="@($"/collect/{p}/{mode}")" method="post"><button disabled="@(!Open(p))" title="@Reason(p)">Collect @p · @mode.Replace('_',' ')</button></form>}}</div></details>
+<header class="toolbar glass feed-toolbar">
+ <div class="toolbar-head">
+  <div class="brand"><Mark/><strong>Feed</strong><span class="brand-sub">@Model.VisibleCount posts · @Model.Friends friends
+   @if(Model.AdsDropped>0){<span> · @Model.AdsDropped ads dropped</span>}
+   @if(LastCollect is { } last){<span> · last collect @FeedQuery.Relative(last.FinishedAt) ago (+@last.PostsNew)</span>}
+  </span></div>
+  <nav class="inspection" aria-label="Inspection">
+   <a class="background-picker" href="/debug/backgrounds" title="Choose a background picture">Backgrounds</a>
+   @if(Model.Instance.Config.Llm.Enabled){<a class="@(Model.Scope == "unsorted" ? "active" : "")" href="@Link(Model.View,Model.Platform,"unsorted")" title="Posts waiting for the model's verdict; not shown in any category view">Unsorted (@Model.UnsortedCount)</a>}
+   <a href="@Link(Model.View,Model.Platform,"hidden")" class="@(Model.Scope == "hidden" ? "active" : "")" title="Debug: inspect hidden posts and why">Hidden (@Model.HiddenCount)</a>
+   <a href="/debug" title="@DebugTitle">Debug
+    @if(HasDiagnostics){<span class="debug-dot" role="img" aria-label="Diagnostics to review"></span>}
+   </a>
+  </nav>
  </div>
+ <a class="background-picker mobile" href="/debug/backgrounds" title="Choose a background picture">Backgrounds</a>
+ <nav class="toolbar-row" aria-label="Feed controls">
+  <span class="pills views desktop">@foreach(var view in Views){<a class="@(view.Key == Model.View ? "active" : "")" aria-current="@(view.Key == Model.View ? "page" : null)" href="@Link(view.Key,Model.Platform)">@view.Label</a>}</span>
+  <details class="dropdown mobile view-picker">
+   <summary title="View"><span class="view-label">@Views.First(v => v.Key == Model.View).Label</span><ToolbarCaret/></summary>
+   <div class="menu">
+    @foreach(var view in Views){<a class="@(view.Key == Model.View ? "active" : "")" aria-current="@(view.Key == Model.View ? "page" : null)" href="@Link(view.Key,Model.Platform)">@view.Label</a>}
+    <div class="menu-inspection">
+     @if(Model.Instance.Config.Llm.Enabled){<a class="@(Model.Scope == "unsorted" ? "active" : "")" href="@Link(Model.View,Model.Platform,"unsorted")">Unsorted (@Model.UnsortedCount)</a>}
+     <a class="@(Model.Scope == "hidden" ? "active" : "")" href="@Link(Model.View,Model.Platform,"hidden")">Hidden (@Model.HiddenCount)</a>
+     <a href="/debug" title="@DebugTitle">Debug
+      @if(HasDiagnostics){<span class="debug-dot" role="img" aria-label="Diagnostics to review"></span>}
+     </a>
+    </div>
+   </div>
+  </details>
+  <span class="pills platforms desktop">
+   <a href="@Link(Model.View,null)" class="@(Model.Platform is null ? "active" : "")" aria-current="@(Model.Platform is null ? "page" : null)" aria-label="All platforms" title="All platforms"><PlatformGlyph/></a>
+   @foreach(var p in PickerPlatforms){<a href="@Link(Model.View,p)" class="@PlatformClass(p)" aria-current="@(p == Model.Platform ? "page" : null)" title="@PlatformTitle(p)" aria-label="@PlatformName(p)"><PlatformGlyph Platform="@p"/></a>}
+  </span>
+  <details class="dropdown mobile platform-picker">
+   <summary title="@($"Platform: {PlatformName(Model.Platform)}")" aria-label="@($"Platform: {PlatformName(Model.Platform)}")"><PlatformGlyph Platform="@Model.Platform"/><ToolbarCaret/></summary>
+   <div class="menu">
+    <a class="@(Model.Platform is null ? "active" : "")" aria-current="@(Model.Platform is null ? "page" : null)" href="@Link(Model.View,null)"><PlatformGlyph/>All platforms</a>
+    @foreach(var p in PickerPlatforms){<a class="@PlatformClass(p)" aria-current="@(p == Model.Platform ? "page" : null)" title="@PlatformTitle(p)" href="@Link(Model.View,p)"><PlatformGlyph Platform="@p"/>@PlatformName(p)</a>}
+   </div>
+  </details>
+  <form action="/read" method="post" class="read"><button class="ghost" title="Mark all read" aria-label="Mark all read"><span class="desktop">Mark all read</span><svg class="mobile read-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></form>
+  <details class="dropdown collect">
+   <summary title="Collect from every enabled platform"><span class="desktop">@CollectLabel</span><span class="mobile">@CollectLabel.Replace("Collect requested","Requested")</span><ToolbarCaret/></summary>
+   <div class="menu">
+    <form action="/collect" method="post"><button class="ghost" disabled="@(!Enabled.Any(Open))" title="@(Enabled.Any(Open) ? "Queue home collection on enabled platforms" : "No enabled platform is ready: check requests, running collects and re-login")">Collect now</button></form>
+    @foreach(var p in Enabled){@foreach(var mode in Platforms.Modes){<form action="@($"/collect/{p}/{mode}")" method="post"><button class="ghost" disabled="@(!Open(p))" title="@Reason(p)">Collect @PlatformName(p) · @ModeName(mode)</button></form>}}
+   </div>
+  </details>
+ </nav>
 </header>
 @foreach (var state in Model.States.Where(s => s.NeedsRelogin)) { <aside class="banner">Re-login needed: @state.Platform. Run <code>Feed.Cli login --platform @state.Platform</code> and finish the login in the noVNC browser.</aside> }
 @if(Model.Scope != "live"){<aside class="banner">@(Model.Scope == "hidden" ? $"Debug: showing {Model.HiddenCount} hidden posts ({Model.TotalHidden} total). Each card states which filter hid it and why." : $"Unsorted: {Model.TotalUnsorted} posts waiting for a judgment of their current content ({Model.UnsortedCount} in this scope).") <a href="@Link(Model.View,Model.Platform)">Back to feed</a></aside>}
@@ -35,7 +71,10 @@ else {
  bool Open(string p) => !Model.States.Any(s => s.Platform == p && s.NeedsRelogin) && !Model.Runs.Any(r => r.Platform == p && r.Kind == "collect" && r.Status == "running") && !Model.Requests.Any(r => r.Platform == p && r.Kind == "collect");
  bool HasDiagnostics => Model.Issues is { Length: > 0 } || Model.Coverage.Any(c => c.Stale || c.Incomplete) || Model.States.Any(s => s.NeedsRelogin) || Model.Instance.Config.Llm.Enabled && Model.UnsortedCount > 0;
  string DebugTitle => HasDiagnostics ? "Diagnostics to review: processing, warnings or coverage" : "Live debug: runs, scheduler, processes";
- string PlatformTitle(string p) => Model.Instance.Config.Enabled(p) ? p : "Paused by config: not in the default feed; this shows its stored posts";
+ static string PlatformName(string? p) => p switch { null => "All platforms", "facebook" => "Facebook", "instagram" => "Instagram", _ => p };
+ static string ModeName(string mode) => mode switch { "home" => "Home", "close_friends" => "Close friends", "all_followed" => "All followed", _ => mode.Replace('_',' ') };
+ string PlatformClass(string p) => (p == Model.Platform ? "active " : "") + (!Model.Instance.Config.Enabled(p) ? "paused" : "");
+ string PlatformTitle(string p) => Model.Instance.Config.Enabled(p) ? PlatformName(p) : "Paused by config: not in the default feed; this shows its stored posts";
  string Reason(string p) => Model.States.Any(s=>s.Platform==p&&s.NeedsRelogin) ? "Needs re-login" : Model.Runs.Any(r=>r.Platform==p&&r.Kind=="collect"&&r.Status=="running") ? "Collection is running" : Model.Requests.Any(r=>r.Platform==p&&r.Kind=="collect") ? "Collection is already requested" : Model.States.FirstOrDefault(s => s.Platform == p)?.LastRunFinishedAt is { } at && at.AddMinutes(Model.Instance.Config.Scheduler.ManualCooldownMinutes) > Clock.Now ? $"cooldown: the run starts in {Math.Ceiling((at.AddMinutes(Model.Instance.Config.Scheduler.ManualCooldownMinutes)-Clock.Now).TotalMinutes)} min" : "Queue a bounded collect";
  public static string Link(string view, string? platform, string scope="live") => "/?view=" + Uri.EscapeDataString(view) + (platform is null ? "" : "&platform="+platform) + (scope == "live" ? "" : "&"+scope+"=1");
 }

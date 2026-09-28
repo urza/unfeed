@@ -33,6 +33,15 @@ Implemented permalink-matched Facebook post-dialog targeting, excluding backgrou
 
 Implemented Instagram permalink validation with singular/plural reel URL normalization. Post hearts must fit inside the viewport and pass a center hit test, excluding prefetched offscreen reels and covered controls. Ambiguity includes actionable and already-liked states. Three new synthetic browser regressions cover these cases; all seven focused Facebook/Instagram reaction tests pass. Release CLI publish and specification regeneration pass. Instance-specific deployment and selected-post verification remain in ignored storage.
 
+## Toolbar handoff
+
+Apply the supplied toolbar design to the existing server-rendered controls: inline platform icons, glass/pill spacing, and a single-row picker layout below 698 px of content width. Preserve inspection access, collection gates and plain POST/link behavior.
+
+- Inspect handoff, current toolbar, responsive layout and browser tests: complete.
+- Implement styling, icons, responsive controls and accessible names: complete. Preserve the existing centered chevrons and mobile inspection links; keep phone panels inside the viewport.
+- Verify resize boundaries, narrow menus, platform state, and operation with/without JavaScript using synthetic browser data: complete. All four targeted browser cases pass (toolbar with/without script, existing web actions, existing layout/gallery). Screenshots visually reviewed at desktop and phone sizes.
+- Update the UI chapter and regenerate the combined specification: complete. Release Web publish passed; deployment evidence stays in private instance notes.
+
 ## Background gallery maintenance
 
 Expose the gallery directly in the feed toolbar. Normalize Bing regional image identities and consolidate identical cached downloads while preserving pins and remembering removals. Add synthetic regression coverage, update the contracts and regenerate the specification. Five focused background tests and both toolbar browser cases pass, including desktop/phone layouts with and without JavaScript. Synthetic screenshots reviewed; specification regenerated. Existing duplicate cleanup runs during background maintenance after the updated host starts. Exact-content matching does not identify differently encoded legacy copies.
