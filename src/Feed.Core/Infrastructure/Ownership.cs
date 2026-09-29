@@ -92,7 +92,7 @@ public sealed class RunLedger(DbFactory factory)
             else if (req.ChildPid is { } pid && req.ChildStartedAt is { } started && ProcessIdentity.Alive(pid, started) == false) { req.Status = "refused"; req.FinishedAt = Clock.Now; req.ExitCode = 1; req.Note = "registered child ended without outcome"; }
         }
         var expiry = Clock.Now.AddMinutes(-config.Scheduler.RunRequestTtlMinutes);
-        foreach (var req in await db.RunRequests.Where(r => r.Kind == "collect" && r.Status == "pending" && r.RequestedAt < expiry).ToListAsync(ct)) { req.Status = "expired"; req.FinishedAt = Clock.Now; req.Note = "collect request TTL elapsed"; }
+        foreach (var req in await db.RunRequests.Where(r => (r.Kind == "collect" || r.Kind == "friends" || r.Kind == "login") && r.Status == "pending" && r.RequestedAt < expiry).ToListAsync(ct)) { req.Status = "expired"; req.FinishedAt = Clock.Now; req.Note = req.Kind + " request TTL elapsed"; }
         foreach (var target in await db.SweepTargets.Where(t => t.State == "visiting").ToListAsync(ct))
             if (!await db.Runs.AnyAsync(r => r.Id == target.RunId && r.Status == "running", ct)) { target.State = "pending"; target.RunId = null; }
         foreach (var platform in await db.Likes.Where(l => l.State == "pending" && l.AttemptedAt != null).Select(l => l.Platform).Distinct().ToListAsync(ct))

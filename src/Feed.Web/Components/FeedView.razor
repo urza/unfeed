@@ -6,10 +6,9 @@
    @if(LastCollect is { } last){<span> · last collect @FeedQuery.Relative(last.FinishedAt) ago (+@last.PostsNew)</span>}
   </span></div>
   <nav class="inspection" aria-label="Inspection">
-   <a class="background-picker" href="/debug/backgrounds" title="Choose a background picture">Backgrounds</a>
    @if(Model.Instance.Config.Llm.Enabled){<a class="@(Model.Scope == "unsorted" ? "active" : "")" href="@Link(Model.View,Model.Platform,"unsorted")" title="Posts waiting for the model's verdict; not shown in any category view">Unsorted (@Model.UnsortedCount)</a>}
    <a href="@Link(Model.View,Model.Platform,"hidden")" class="@(Model.Scope == "hidden" ? "active" : "")" title="Debug: inspect hidden posts and why">Hidden (@Model.HiddenCount)</a>
-   <a href="/debug" title="@DebugTitle">Debug
+   <a class="manage-button" href="/manage" title="@DebugTitle">Manage
     @if(HasDiagnostics){<span class="debug-dot" role="img" aria-label="Diagnostics to review"></span>}
    </a>
   </nav>
@@ -23,9 +22,6 @@
     <div class="menu-inspection">
      @if(Model.Instance.Config.Llm.Enabled){<a class="@(Model.Scope == "unsorted" ? "active" : "")" href="@Link(Model.View,Model.Platform,"unsorted")">Unsorted (@Model.UnsortedCount)</a>}
      <a class="@(Model.Scope == "hidden" ? "active" : "")" href="@Link(Model.View,Model.Platform,"hidden")">Hidden (@Model.HiddenCount)</a>
-     <a href="/debug" title="@DebugTitle">Debug
-      @if(HasDiagnostics){<span class="debug-dot" role="img" aria-label="Diagnostics to review"></span>}
-     </a>
     </div>
    </div>
   </details>
@@ -41,7 +37,7 @@
    </div>
   </details>
   <form action="/read" method="post" class="read"><button class="ghost" title="Mark all read" aria-label="Mark all read"><span class="desktop">Mark all read</span><svg class="mobile read-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></form>
-  <a class="background-picker mobile" href="/debug/backgrounds" title="Choose a background picture" aria-label="Backgrounds"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></svg></a>
+  <a class="manage-button mobile" href="/manage" title="@DebugTitle" aria-label="Manage"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg>@if(HasDiagnostics){<span class="debug-dot" role="img" aria-label="Diagnostics to review"></span>}</a>
   <details class="dropdown collect">
    <summary title="Collect from every enabled platform"><span class="desktop">@CollectLabel</span><span class="mobile">@CollectLabel.Replace("Collect requested","Requested")</span><ToolbarCaret/></summary>
    <div class="menu">
@@ -70,7 +66,7 @@ else {
  string CollectLabel => Model.Runs.Any(r => r.Kind == "collect" && r.Status == "running") ? "Collecting…" : Model.Requests.Any(r => r.Kind == "collect") ? "Collect requested ✓" : "Collect";
  bool Open(string p) => !Model.States.Any(s => s.Platform == p && s.NeedsRelogin) && !Model.Runs.Any(r => r.Platform == p && r.Kind == "collect" && r.Status == "running") && !Model.Requests.Any(r => r.Platform == p && r.Kind == "collect");
  bool HasDiagnostics => Model.Issues is { Length: > 0 } || Model.Coverage.Any(c => c.Stale || c.Incomplete) || Model.States.Any(s => s.NeedsRelogin) || Model.Instance.Config.Llm.Enabled && Model.UnsortedCount > 0;
- string DebugTitle => HasDiagnostics ? "Diagnostics to review: processing, warnings or coverage" : "Live debug: runs, scheduler, processes";
+ string DebugTitle => HasDiagnostics ? "Diagnostics to review: processing, warnings or coverage" : "Manage platforms, people, schedules and settings";
  static string PlatformName(string? p) => p switch { null => "All platforms", "facebook" => "Facebook", "instagram" => "Instagram", _ => p };
  static string ModeName(string mode) => mode switch { "home" => "Home", "close_friends" => "Close friends", "all_followed" => "All followed", _ => mode.Replace('_',' ') };
  string PlatformClass(string p) => (p == Model.Platform ? "active " : "") + (!Model.Instance.Config.Enabled(p) ? "paused" : "");

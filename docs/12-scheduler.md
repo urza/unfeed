@@ -7,7 +7,7 @@ Source map: [Scheduler.cs](../src/Feed.Web/Scheduler.cs) · [Actions.cs](../src/
 ## 12.1 Shape
 
 - One hosted background service, one tick every 5 seconds, one scheduler host per instance.
-- Children are `collect --platform X --mode M`, `like --platform X`, or `process --platform all`. Automatic processing has no per-batch invocation limit. Slots supply `--trigger schedule`; manual collect requests supply `--trigger manual`.
+- Children are `collect --platform X --mode M`, `like --platform X`, `friends --platform X`, `login --platform X`, or `process --platform all`. Automatic processing has no per-batch invocation limit. Slots supply `--trigger schedule`; manual collect requests supply `--trigger manual`.
 - Children receive FEED_DATA and the web host's working directory. Resolve the CLI through FEED_CLI, then beside the host, then the development build tree up to six parents up. A DLL runs through dotnet. The resolved command appears in debug output.
 - Launch errors and tick failures are recorded with their reason. A missing CLI fails a manual request visibly. Automatic processing launch failures wait 30 minutes before another attempt, not every tick.
 - The scheduler evaluates due work with indexed queries. It never reimplements the filter or model selection rules; those are shared application operations.
@@ -17,15 +17,15 @@ Source map: [Scheduler.cs](../src/Feed.Web/Scheduler.cs) · [Actions.cs](../src/
 Before these steps, refresh the validated instance snapshot as in 4.5, even when scheduling was disabled on the previous tick. Use that snapshot throughout this tick.
 
 1. Reconcile durable claims and worker outcomes, including children launched by an earlier host (12.8). Reap dead runs by process identity, not browser-lock absence.
-2. Expire pending collect requests older than `run_request_ttl_minutes`. Like and process requests do not use this TTL. Repair state even when scheduling is disabled.
-3. If `scheduler.enabled` is false, stop. Existing workers may finish, but start no new work or maintenance.
+2. Expire pending collect, friends and login requests older than `run_request_ttl_minutes`. Like and process requests do not use this TTL. Repair state even when scheduling is disabled.
+3. Resume any management refilter intent when processing/ingest locks are available; this is local repair, not a new worker launch. If `scheduler.enabled` is false, stop. Existing workers may finish, but start no new work or maintenance.
 4. Serve manual collect requests oldest first. Refuse unknown platform/mode or a re-login requirement. Wait for collection eligibility and the platform's manual cooldown; then claim and launch.
 5. Reconcile pending Likes into one active like request per platform. A busy browser makes it wait. Like-back off fails pending unattempted hearts with the reason. A re-login requirement leaves the request pending. Otherwise launch the sender. No collect cooldown applies. Processing never blocks the browser gate.
 6. Fire eligible slots (12.3).
 7. Dispatch due retries from an existing all-followed cycle (12.10), then processing (12.9). This gate is independent of browser checkpoints, browser locks and collect cooldowns.
 8. Run daily maintenance (12.5).
 
-**Browser busy** means the platform's browser lock is held, or a claimed collect/like child is still starting its browser phase. A collect in `ingest` and any processing/model command do not make the browser busy. A registered child's phase is read from its run; before registration, a browser request reserves startup only during the two minute grace.
+**Browser busy** means the platform's browser lock is held, or a claimed collect/like/friends/login child is still starting its browser phase. A collect in `ingest` and any processing/model command do not make the browser busy. A registered child's phase is read from its run; before registration, a browser request reserves startup only during the two minute grace.
 
 **Collection eligible** additionally means no active collect for that platform, even if its browser has already closed. This avoids overlapping collection ingests while still allowing a heart or login during ingest. The page's collect guards use this definition. A held ingest lock does not by itself block a like.
 
@@ -87,6 +87,8 @@ On the first tick of each UTC day, mark `maintenance:last`, then run raw retenti
 
 - `POST /collect` inserts a home request for each enabled platform without an active collect request/run. A claimed request counts as active.
 - `POST /collect/{platform}/{mode}` inserts one under the same guard. Normalize mode aliases; unknown modes answer 404.
+- Management forms can queue `friends` and `login` for a platform. Both use browser ownership, durable claims and the request TTL. A friends refresh requires an enabled platform and no login challenge; login is allowed to resolve a challenge, including on a paused platform. Global scheduling pause prevents dispatch and disables these request buttons. Friends refresh remains add-only; it is not automatically scheduled.
+- Management can queue an instance-wide `process` request even when no due work is currently detected; the existing processing lock and backoff gates still apply. The worker only processes eligible work and does not rejudge completed history.
 - A heart press atomically queues its Likes row and ensures one active like request.
 - Unique active-request constraints and conditional claim updates prevent duplicate dispatch. UI state is derived from durable requests and runs, never just the current host's child list.
 

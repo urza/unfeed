@@ -18,6 +18,7 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
     {
         var snapshot = files.Refresh(); var c = snapshot.Config; LastTick = Clock.Now;
         foreach (var warning in await new RunLedger(factory).Recover(c, ct)) log.LogWarning("{Warning}", warning);
+        await new Management(paths, factory, new(paths)).ResumeRefilter(ct);
         if (!c.Scheduler.Enabled) return;
         await using var db = factory.Open();
         var states = await db.PlatformStates.AsNoTracking().ToDictionaryAsync(p => p.Platform, ct);
@@ -31,9 +32,10 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
         foreach (var request in await db.RunRequests.Where(r => r.Status == "pending" && r.Kind != "process").OrderBy(r => r.Id).ToListAsync(ct))
         {
             var p = request.Platform!;
-            if (!Platforms.All.Contains(p) || request.Kind is not ("collect" or "like") || request.Kind == "collect" && !Platforms.Modes.Contains(Platforms.Mode(request.Mode ?? "")))
+            if (!Platforms.All.Contains(p) || request.Kind is not ("collect" or "like" or "friends" or "login") || request.Kind == "collect" && !Platforms.Modes.Contains(Platforms.Mode(request.Mode ?? "")))
             { request.Status = "refused"; request.FinishedAt = Clock.Now; request.Note = "unknown platform, kind or mode"; continue; }
-            if (Relogin(p)) { request.Note = "needs re-login"; if (request.Kind == "collect") { request.Status = "refused"; request.FinishedAt = Clock.Now; } continue; }
+            if (request.Kind != "login" && Relogin(p)) { request.Note = "needs re-login"; if (request.Kind == "collect") { request.Status = "refused"; request.FinishedAt = Clock.Now; } continue; }
+            if (request.Kind == "friends" && !c.Enabled(p)) { request.Status = "refused"; request.FinishedAt = Clock.Now; request.Note = "platform disabled"; continue; }
             if (await BrowserBusy(p)) { request.Note = "platform busy"; continue; }
             if (request.Kind == "collect" && (await db.Runs.AnyAsync(r => r.Platform == p && r.Kind == "collect" && r.Status == "running", ct) || states.GetValueOrDefault(p)?.LastRunFinishedAt > Clock.Now.AddMinutes(-c.Scheduler.ManualCooldownMinutes))) { request.Note = "waiting for collect/cooldown"; continue; }
             await Dispatch(request, request.RetryIncomplete ? "recovery" : "manual", ct);
@@ -77,7 +79,7 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
         bool due = enabled.Length > 0 && (startup && ingestAvailable.Length > 0 || await db.RawSnapshots.AnyAsync(r => ingestAvailable.Contains(r.Platform) && !r.Parsed && !r.Deleted && r.BlockedParserVersion != PayloadParser.Version && !db.Runs.Any(run => run.Id == r.RunId && run.Status == "running" && run.Phase == "browser") && (r.AttemptedAt == null || r.AttemptedAt <= retry), ct) || judgmentReady || c.Llm.Enabled && await db.Posts.AnyAsync(p => enabled.Contains(p.Platform) && p.IngestReadyAt != null && (summaryDue && !p.Hidden && (p.Summary == null || p.SummaryContentRevision != p.ContentRevision) && (p.SummaryAttemptedAt == null || p.SummaryAttemptedAt <= retry)), ct));
         if (!due && enabled.Length > 0) due = await db.Media.Join(db.Posts.Where(p => enabled.Contains(p.Platform)), m => m.PostId, p => p.Id, (m, p) => new { m, p }).AnyAsync(x => x.m.Kind == "video" && x.m.IsCurrent && x.m.Path == null && x.m.PrunedAt == null && (x.m.AttemptedAt == null || x.m.AttemptedAt <= retry) && (x.p.Hidden || !c.Llm.Enabled || x.p.CategoriesJson != null && x.p.VerdictContentRevision == x.p.ContentRevision), ct);
         if (ingestAvailable.Length > 0) startup = false;
-        if (due && launchDue && !ResourceLock.Busy(paths, "processing")) { await Actions.EnsureRequest(db, "process", null, ct: ct); var request = await db.RunRequests.AsNoTracking().FirstOrDefaultAsync(r => r.Kind == "process" && r.Status == "pending", ct); if (request is not null) await Dispatch(request, "schedule", ct); }
+        if ((due || await db.RunRequests.AnyAsync(r => r.Kind == "process" && r.Status == "pending", ct)) && launchDue && !ResourceLock.Busy(paths, "processing")) { await Actions.EnsureRequest(db, "process", null, ct: ct); var request = await db.RunRequests.AsNoTracking().FirstOrDefaultAsync(r => r.Kind == "process" && r.Status == "pending", ct); if (request is not null) await Dispatch(request, "schedule", ct); }
         var utcDay = Clock.Now.ToString("yyyy-MM-dd"); if (await db.Get("maintenance:last", ct) != utcDay)
         {
             await db.Put("maintenance:last", utcDay, ct); using var http = new HttpClient(); var maintenance = new Maintenance(paths, factory, http);

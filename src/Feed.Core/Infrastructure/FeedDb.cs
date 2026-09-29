@@ -17,9 +17,9 @@ public sealed class FeedDb(InstancePaths paths) : DbContext
         b.Entity<Media>().HasOne<Post>().WithMany().HasForeignKey(x => x.PostId).OnDelete(DeleteBehavior.Cascade);
         b.Entity<RawSnapshot>().HasIndex(x => x.Path).IsUnique(); b.Entity<RawSnapshot>().HasIndex(x => new { x.Platform, x.CapturedAt });
         b.Entity<Run>().HasIndex(x => new { x.Platform, x.Status }); b.Entity<Run>().HasIndex(x => x.RequestId); b.Entity<Run>().HasIndex(x => x.FinishedAt);
-        b.Entity<RunRequest>().HasIndex(x => new { x.Kind, x.Platform }).IsUnique().HasFilter("Status IN ('pending','claimed') AND Kind IN ('collect','like')");
+        b.Entity<RunRequest>().HasIndex(x => new { x.Kind, x.Platform }).IsUnique().HasFilter("Status IN ('pending','claimed') AND Kind IN ('collect','like','friends','login')");
         b.Entity<RunRequest>().HasIndex(x => x.Kind).IsUnique().HasFilter("Status IN ('pending','claimed') AND Kind = 'process'"); b.Entity<RunRequest>().HasIndex(x => new { x.Status, x.RequestedAt });
-        b.Entity<RunRequest>().ToTable(t => t.HasCheckConstraint("CK_RequestScope", "(Kind = 'process' AND Platform IS NULL) OR (Kind IN ('collect','like') AND Platform IN ('facebook','instagram'))"));
+        b.Entity<RunRequest>().ToTable(t => t.HasCheckConstraint("CK_RequestScope", "(Kind = 'process' AND Platform IS NULL) OR (Kind IN ('collect','like','friends','login') AND Platform IN ('facebook','instagram'))"));
         b.Entity<Like>().HasIndex(x => new { x.PostId, x.State }); b.Entity<Like>().HasIndex(x => x.PostId).IsUnique().HasFilter("State = 'pending'"); b.Entity<Feedback>().HasIndex(x => x.PostId);
         b.Entity<Post>().HasIndex(x => new { x.Platform, x.LlmAttemptedAt, x.CapturedAt }).HasDatabaseName("IX_Posts_JudgeQueue").HasFilter("IngestReadyAt IS NOT NULL AND (Hidden = 0 OR HiddenBy = 'llm') AND (CategoriesJson IS NULL OR VerdictContentRevision IS NULL OR VerdictContentRevision <> ContentRevision OR LlmTokenLimit IS NOT NULL)");
         b.Entity<Post>().HasIndex(x => new { x.Platform, x.SummaryAttemptedAt, x.CapturedAt }).HasDatabaseName("IX_Posts_SummaryQueue").HasFilter("IngestReadyAt IS NOT NULL AND Hidden = 0 AND (Summary IS NULL OR SummaryContentRevision IS NULL OR SummaryContentRevision <> ContentRevision)");

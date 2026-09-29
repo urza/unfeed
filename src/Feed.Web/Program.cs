@@ -8,6 +8,7 @@ using Feed.Web.Components;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.AspNetCore.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
 var dataArg = args.Select((v,i)=>(v,i)).FirstOrDefault(x=>x.v=="--data");
@@ -19,6 +20,8 @@ var minimum=initial.Config.Ui.LogLevel switch{"trace"=>LogLevel.Trace,"debug"=>L
 builder.Logging.ClearProviders();builder.Logging.SetMinimumLevel(minimum);builder.Logging.AddProvider(new LogSink(paths,"web",minimum));builder.Logging.AddFilter("Microsoft",LogLevel.Warning);
 builder.Services.AddSingleton(paths);builder.Services.AddSingleton(files);builder.Services.AddSingleton(factory);builder.Services.AddSingleton<Actions>();builder.Services.AddSingleton<FeedQuery>();builder.Services.AddRazorComponents();builder.Services.AddResponseCompression();
 builder.Services.AddSingleton<Scheduler>();builder.Services.AddHostedService(sp=>sp.GetRequiredService<Scheduler>());builder.Services.AddSingleton<Backgrounds>();builder.Services.AddHostedService(sp=>sp.GetRequiredService<Backgrounds>());
+builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(paths.Get("keys"))).SetApplicationName("Feed:" + Prompts.Sha(paths.Root));
+builder.Services.AddAntiforgery();builder.Services.AddSingleton<ManagementFiles>();builder.Services.AddSingleton<Management>();
 var app=builder.Build();app.UseResponseCompression();
 var assets=Path.Combine(app.Environment.ContentRootPath,"wwwroot"); if(!Directory.Exists(assets))assets=Path.Combine(AppContext.BaseDirectory,"wwwroot");
 var stamp=Directory.Exists(assets)?Prompts.Sha(string.Join("",Directory.EnumerateFiles(assets,"*",SearchOption.AllDirectories).Order().Select(File.ReadAllText)))[..12]:"dev";
@@ -56,8 +59,10 @@ app.MapGet("/debug",async(HttpContext ctx,Scheduler scheduler,Backgrounds backgr
  });
 });
 app.MapGet("/debug/log",(HttpContext ctx)=>Results.Text(Logs(ctx.Request.Query["file"],5000)));
-app.MapGet("/debug/backgrounds",(HttpContext ctx,Backgrounds backgrounds)=>new RazorComponentResult<Gallery>(new{Model=backgrounds.Current,Stamp=stamp,Blur=Snapshot(ctx).Config.Backgrounds.BlurPx,UploadMessage=int.TryParse(ctx.Request.Query["uploaded"],out var uploaded)&&uploaded is >0 and <=10?$"Uploaded {uploaded} picture(s). Choose Pin to keep one selected.":null}));
-app.MapPost("/debug/backgrounds/upload",async(HttpContext ctx,Backgrounds backgrounds)=>{
+app.MapGet("/debug/backgrounds",(HttpContext ctx)=>Results.Redirect("/manage/backgrounds"+ctx.Request.QueryString));
+app.MapPost("/debug/backgrounds/{action}",(string action)=>Results.Redirect("/manage/backgrounds/"+Uri.EscapeDataString(action),preserveMethod:true));
+app.MapGet("/manage/backgrounds",(HttpContext ctx,Backgrounds backgrounds)=>new RazorComponentResult<Gallery>(new{Model=backgrounds.Current,Stamp=stamp,Blur=Snapshot(ctx).Config.Backgrounds.BlurPx,UploadMessage=int.TryParse(ctx.Request.Query["uploaded"],out var uploaded)&&uploaded is >0 and <=10?$"Uploaded {uploaded} picture(s). Choose Pin to keep one selected.":null}));
+app.MapPost("/manage/backgrounds/upload",async(HttpContext ctx,Backgrounds backgrounds)=>{
  string? error;
  var status=400;
  var requestLimit=ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
@@ -67,14 +72,14 @@ app.MapPost("/debug/backgrounds/upload",async(HttpContext ctx,Backgrounds backgr
   else {
    var form=await ctx.Request.ReadFormAsync(new Microsoft.AspNetCore.Http.Features.FormOptions { MultipartBodyLengthLimit=20*1024*1024 },ctx.RequestAborted);
    error=await backgrounds.Upload(form.Files,ctx.RequestAborted);
-   if(error is null) return (IResult)Results.Redirect($"/debug/backgrounds?uploaded={form.Files.Count}");
+   if(error is null) return (IResult)Results.Redirect($"/manage/backgrounds?uploaded={form.Files.Count}");
   }
  } catch(InvalidDataException) { error="The upload is too large or malformed. Use up to 10 MB per file and 20 MB total."; }
  catch(BadHttpRequestException) { error="The upload is too large or malformed. Use up to 10 MB per file and 20 MB total."; }
  catch(Exception e) when(e is IOException or UnauthorizedAccessException) { app.Logger.LogError(e,"Background upload could not be saved"); error="Could not finish saving the upload. Check the gallery before retrying; some files may have been saved."; status=500; }
  return new RazorComponentResult<Gallery>(new{Model=backgrounds.Current,Stamp=stamp,Blur=Snapshot(ctx).Config.Backgrounds.BlurPx,UploadError=error}){StatusCode=status};
 });
-app.MapPost("/debug/backgrounds/{action}",async(string action,HttpContext ctx,Backgrounds backgrounds)=>{var form=await ctx.Request.ReadFormAsync();return backgrounds.Action(action,form["name"].FirstOrDefault())?Results.Redirect("/debug/backgrounds"):(IResult)Results.NotFound();});
+app.MapPost("/manage/backgrounds/{action}",async(string action,HttpContext ctx,Backgrounds backgrounds)=>{var form=await ctx.Request.ReadFormAsync();return backgrounds.Action(action,form["name"].FirstOrDefault())?Results.Redirect("/manage/backgrounds"):(IResult)Results.NotFound();});
 app.MapGet("/backgrounds/{name}",(string name,HttpContext ctx,Backgrounds backgrounds)=>{var image=backgrounds.Current.Images.FirstOrDefault(i=>i.Name==name);if(image is null||paths.SafeFile(image.Source=="local"?"backgrounds/local":"backgrounds",Path.GetFileName(image.Path)) is null)return Results.NotFound();if(ctx.Request.Headers.IfNoneMatch==image.Etag)return Results.StatusCode(304);ctx.Response.Headers.ETag=image.Etag;ctx.Response.Headers.CacheControl="public, max-age=0, must-revalidate";return (IResult)Results.File(image.Path,Type(image.Path),enableRangeProcessing:true);});
 app.MapGet("/media/{**path}",(string path,HttpContext ctx)=>{var file=paths.SafeFile("media",path);if(file is null)return Results.NotFound();ctx.Response.Headers.CacheControl="public, max-age=31536000, immutable";return (IResult)Results.File(file,Type(file),enableRangeProcessing:true);});
 app.MapGet("/assets/{version}/{**path}",(string version,string path,HttpContext ctx)=>{if(version!=stamp)return Results.NotFound();var file=Path.GetFullPath(Path.Combine(assets,path));if(!file.StartsWith(assets+Path.DirectorySeparatorChar,StringComparison.Ordinal)||!File.Exists(file))return Results.NotFound();ctx.Response.Headers.CacheControl="public, max-age=86400";return (IResult)Results.File(file,Type(file));});
@@ -85,5 +90,6 @@ app.MapPost("/posts/{id:long}/like",async(long id,HttpContext ctx,Actions action
 app.MapGet("/posts/{id:long}/like",async(long id)=>{await using var db=factory.Open();var row=await db.Likes.AsNoTracking().Where(l=>l.PostId==id).OrderByDescending(l=>l.Id).FirstOrDefaultAsync();return Results.Json(new{state=row?.State??"none",error=row?.Error});});
 app.MapPost("/collect",async(HttpContext ctx,Actions actions)=>{foreach(var platform in Platforms.All.Where(Snapshot(ctx).Config.Enabled))await actions.Collect(platform,"home",ctx.RequestAborted);return Back(ctx);});
 app.MapPost("/collect/{platform}/{mode}",async(string platform,string mode,HttpContext ctx,Actions actions)=>{if(!Platforms.All.Contains(platform)||!Platforms.Modes.Contains(Platforms.Mode(mode)))return Results.Text($"collect refused: {platform} has no mode {mode}",statusCode:404);await actions.Collect(platform,mode,ctx.RequestAborted);return Back(ctx);});
+app.MapManagement(stamp);
 app.Run();
 public partial class Program;

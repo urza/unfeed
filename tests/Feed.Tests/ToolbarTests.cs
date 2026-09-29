@@ -41,9 +41,10 @@ public sealed class ToolbarTests
         try
         {
             using var http = new HttpClient { BaseAddress = new($"http://127.0.0.1:{port}") };
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
             while (true)
             {
+                if (server.HasExited) throw new InvalidOperationException("Web host exited: " + await stderr);
                 try { if ((await http.GetAsync("/healthz", timeout.Token)).IsSuccessStatusCode) break; }
                 catch (HttpRequestException) { }
                 await Task.Delay(100, timeout.Token);
@@ -77,7 +78,7 @@ public sealed class ToolbarTests
                     var toolbar = (await page.Locator(".feed-toolbar").BoundingBoxAsync())!;
                     var row = (await page.Locator(".toolbar-row").BoundingBoxAsync())!;
                     Assert.True(toolbar.Height <= row.Height + 18, $"Entire toolbar must fit one row at {width}px");
-                    await Expect(page.GetByRole(AriaRole.Link, new() { Name = "Backgrounds", Exact = true })).ToBeVisibleAsync();
+                    await Expect(page.GetByRole(AriaRole.Link, new() { Name = "Manage", Exact = true })).ToBeVisibleAsync();
                     var controls = await page.Locator(".toolbar-row").EvaluateAsync<bool>("el => { const boxes = [...el.children].filter(x => getComputedStyle(x).display !== 'none').map(x => x.getBoundingClientRect()); return boxes.every(b => Math.abs((b.top+b.bottom)/2 - (boxes[0].top+boxes[0].bottom)/2) < 1 && b.left >= 0 && b.right <= innerWidth); }");
                     Assert.True(controls, $"Controls must fit one row at {width}px");
                     foreach (var picker in new[] { ".view-picker", ".platform-picker", ".collect" })
@@ -100,7 +101,7 @@ public sealed class ToolbarTests
             await page.SetViewportSizeAsync(390, 844);
             await page.ScreenshotAsync(new() { Path = $"/tmp/feed-toolbar-phone-{javascript}.png" });
             await page.Locator(".view-picker > summary").ClickAsync();
-            await Expect(page.Locator(".view-picker a[href='/debug']")).ToBeVisibleAsync();
+            await Expect(page.Locator("a.manage-button.mobile")).ToBeVisibleAsync();
             if (javascript)
             {
                 await page.Keyboard.PressAsync("Escape");

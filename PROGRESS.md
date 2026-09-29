@@ -63,3 +63,16 @@ Preserve the platform-generated story title separately from the author caption t
 ## Bounded token retries and partial capture recovery
 
 Persist token-exhaustion state and use a configurable delayed budget ladder shared by processing, scheduling and diagnostics. Preserve request provenance and stop automatic escalation at the configured cap. Isolate capture errors to affected records; retain narrowly identified auxiliary errors as warnings while keeping incomplete content diagnostic. Complete: 154 non-browser tests pass, including delayed/capped retries across worker instances, request provenance, content-reset behavior, and partial-response isolation/idempotent ingest. Release CLI/Web builds pass; contracts and combined specification updated. Bounded live replay evidence remains in ignored instance notes.
+
+
+## Management page
+
+Implement platform status and queued actions, searchable people with close-friend/mute/always-show/removal controls, and editable schedules. Surface rules, categories/views, processing and retention settings with diagnostics retained. Preserve file-based configuration through validated, atomic, conflict-detecting edits; immediately reapply deterministic rules after relevant edits. Verify synthetic settings conflicts, identity resolution, worker gates and browser forms before deployment.
+
+- Inspect current configuration, filtering, scheduler and UI contracts: complete.
+- Implement management services, forms and worker dispatch: complete.
+- Verify behavior, document contracts and deploy: complete. All 166 non-browser tests and four focused browser cases pass. Migration preserves existing claims; forms work with and without JavaScript, reject stale edits and protect management POSTs with antiforgery tokens. Release builds and combined specification regeneration pass. Synthetic desktop/phone screenshots reviewed, including per-person phone cards. Form-security keys remain private to the instance. Operational evidence remains private.
+
+## Management navigation cleanup
+
+Consolidate feed entry points into a styled Manage button on desktop and phones. Share management navigation with a Backgrounds tab, move gallery forms to `/manage/backgrounds`, and preserve legacy gallery redirects. Complete: five focused browser cases pass, covering responsive controls, gallery uploads/pinning, legacy redirects and native management navigation. Debug/Release builds pass; updated specification regenerated. Read-only desktop/phone deployment checks pass; instance evidence remains private.

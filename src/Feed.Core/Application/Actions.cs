@@ -8,7 +8,7 @@ public sealed class Actions(DbFactory factory)
     public static async Task<int> EnsureRequest(FeedDb db, string kind, string? platform, string? mode = null, CancellationToken ct = default, bool retryIncomplete = false)
     {
         if (kind == "collect" && await db.Runs.AnyAsync(r => r.Kind == "collect" && r.Platform == platform && r.Status == "running", ct)) return 0;
-        return await db.Database.ExecuteSqlInterpolatedAsync($"INSERT OR IGNORE INTO RunRequests (Kind,Platform,Mode,Status,RequestedAt,RetryIncomplete) VALUES ({kind},{platform},{mode},'pending',{Clock.Now},{retryIncomplete})", ct);
+        return await db.Database.ExecuteSqlInterpolatedAsync($"INSERT OR IGNORE INTO RunRequests (Kind,Platform,Mode,Status,RequestedAt,RetryIncomplete) SELECT {kind},{platform},{mode},'pending',{Clock.Now},{retryIncomplete} WHERE NOT EXISTS (SELECT 1 FROM RunRequests WHERE Kind={kind} AND Platform IS {platform} AND Status IN ('pending','claimed'))", ct);
     }
     public async Task Collect(string platform, string mode, CancellationToken ct = default) { if (!Platforms.All.Contains(platform) || !Platforms.Modes.Contains(Platforms.Mode(mode))) throw new ArgumentException("Unknown platform or mode"); await using var db = factory.Open(); await EnsureRequest(db, "collect", platform, Platforms.Mode(mode), ct); }
     public async Task<string?> QueueLike(long id, InstanceSnapshot instance, bool force = false, CancellationToken ct = default)

@@ -1,4 +1,4 @@
-<Shell Title="Debug" Stamp="@Stamp" Background="@Background" Blur="Blur" Refresh="true"><header class="toolbar glass"><div class="brand">☷ <strong>debug</strong><small>auto-refresh 10 s</small><a href="/">Back to feed</a><a class="background-picker" href="/debug/backgrounds">Background gallery</a></div></header>
+<Shell Title="Debug" Stamp="@Stamp" Background="@Background" Blur="Blur" Refresh="true"><header class="toolbar glass"><div class="brand">☷ <strong>debug</strong><small>auto-refresh 10 s</small><a href="/manage">Manage feed</a><a href="/">Back to feed</a><a class="manage-button" href="/manage/backgrounds">Background gallery</a></div></header>
 @foreach(var warning in Warnings){<aside class="banner">@warning</aside>}
 @if(Error is not null){<aside class="banner">@Error</aside>}
 <section class="glass debug"><h2>scheduler</h2><pre>@SchedulerInfo</pre></section>

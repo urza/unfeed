@@ -175,8 +175,8 @@ Durable requests from page actions and automatic processing, claimed by the sche
 | Column | Type | Meaning |
 |---|---|---|
 | Id | integer, key | |
-| Kind | text | `collect`, `like` or `process` |
-| Platform | text? | required for collect/like; null for an instance-wide process request |
+| Kind | text | `collect`, `like`, `friends`, `login` or `process` |
+| Platform | text? | required for collect/like/friends/login; null for an instance-wide process request |
 | Mode | text? | for collect |
 | RetryIncomplete | bool | collect request may only retry due targets in an existing sweep |
 | Status | text | `pending`, `claimed`, `done`, `expired`, `refused` |
@@ -186,7 +186,7 @@ Durable requests from page actions and automatic processing, claimed by the sche
 | ExitCode | integer? | the child's persisted result; committed with its terminal run and request state. A browser lock may already have been released. |
 | Note | text? | why the row waits or was refused. The page shows it. |
 
-Indexes: (Status, RequestedAt); unique (Kind, Platform) for active collect/like requests; unique (Kind) for active process requests. Active means Status is `pending` or `claimed`. Require Platform for collect/like and null for process. The separate process index enforces one active instance-wide request; SQLite null uniqueness must not permit duplicate process requests. Claims and queue insertion use transactions and these constraints, not a read-then-write guard alone.
+Indexes: (Status, RequestedAt); unique (Kind, Platform) for active collect/like/friends/login requests; unique (Kind) for active process requests. Active means Status is `pending` or `claimed`. Require Platform for collect/like/friends/login and null for process. The separate process index enforces one active instance-wide request; SQLite null uniqueness must not permit duplicate process requests. Claims and queue insertion use transactions and these constraints, not a read-then-write guard alone.
 
 ### Feedback
 
@@ -298,7 +298,7 @@ Every set below is a set of string constants. A value outside the set is a bug, 
 | Run trigger | `schedule`, `manual` |
 | Run kind | `collect`, `process`, `friends`, `reparse`, `rescore`, `summarize`, `refilter`, `like`, `login` |
 | Run phase | `starting`, `browser`, `ingest`, `processing`, `finished` |
-| Request kind | `collect`, `like`, `process` |
+| Request kind | `collect`, `like`, `friends`, `login`, `process` |
 | Request status | `pending`, `claimed`, `done`, `expired`, `refused` |
 | Like state | `pending`, `sent`, `failed` |
 | Timeline visit status | `rendered`, `empty`, `unrendered` |
@@ -460,3 +460,6 @@ Posts persist `LlmError`, `SummaryError` and consecutive `LlmFailures`/`SummaryF
 RawSnapshots persist `Warning` for recognized nonfatal upstream faults and nullable `BlockedParserVersion` for deterministic parse failures. Such an immutable snapshot waits for a different parser version or an explicit reparse; transient file/network failures retain timed recovery. Parsed warning rows retain provenance and do not enter the retry queue.
 
 SweepTargets persist `Attempts` and nullable `RetryAt`; `retry` is a waiting state in addition to pending/visiting/done/skipped. RunRequests persist `RetryIncomplete` so a resumed recovery claim cannot accidentally start a fresh sweep. Existing terminal visits are not rewritten during migration or raw replay.
+
+
+The management queue migration expands the platform-request check constraint and active-request uniqueness to `friends` and `login`. The existing claim, startup identity and recovery columns apply unchanged. `management:refilter_pending` in Kv records unfinished management-driven refiltering; completion clears it in the same transaction as the post updates.

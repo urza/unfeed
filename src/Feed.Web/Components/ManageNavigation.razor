@@ -1,0 +1,7 @@
+<header class="toolbar glass"><div class="brand"><Mark/><strong>Manage</strong><a href="/">Back to feed</a><a href="/debug">Diagnostics @if(HasDiagnostics){<span class="debug-dot"></span>}</a></div></header>
+<nav class="manage-nav" aria-label="Management sections">@foreach(var item in Sections){<a href="@(item.Key == "backgrounds" ? "/manage/backgrounds" : $"/manage?section={item.Key}")" class="@(Section == item.Key ? "active" : "")" aria-current="@(Section == item.Key ? "page" : null)">@item.Label</a>}</nav>
+@code {
+ [Parameter] public string Section {get;set;}="overview";
+ [Parameter] public bool HasDiagnostics {get;set;}
+ static readonly (string Key, string Label)[] Sections = [("overview","Overview"),("people","People"),("schedule","Schedule"),("rules","Rules"),("categories","Categories & views"),("processing","Processing"),("storage","Storage"),("backgrounds","Backgrounds")];
+}

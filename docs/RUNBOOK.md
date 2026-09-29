@@ -28,6 +28,10 @@ Use `status` and `/debug` for live state; documentation contains defaults, never
 
 ## Editing and repairing
 
+Open **Manage** from the feed toolbar for platform status/actions, people controls, schedules, rules, existing categories/views, processing and retention. Diagnostics remains at `/debug`. Manage saves the same instance files, validates them and rejects stale forms; keep manual file editing if preferred. Its editors do not auto-refresh. Rule/person changes refilter stored posts, but new model judgments require explicit rescoring. The settings backups live under `data/settings-backups/`.
+
+Refresh friends/following adds newly discovered people and does not remove missing people. Remove from feed list clears the local relationship and profile-visit lists without deleting posts; a later import can add it back. Mute is the persistent visibility rule. Start login queues the existing headed CLI login: the owner still uses their configured noVNC browser. Global scheduler pause prevents new queued work from starting. Never treat the People table's imported relationship or last-encounter time as current platform relationship/online status.
+
 - Deterministic rules: edit instance files, `rules`, then `refilter --all` when historical posts should change.
 - Model policy/category definitions: `rescore --all`, optionally sliced by `--since` and `--limit`. A policy-only edit does not silently rejudge history.
 - Parser repair: rebuild, `reparse --platform X --all`; this never calls the model or deletes historical rows. Use `--no-network` for offline replay; disable scheduling for a fully offline session.
@@ -37,7 +41,7 @@ Use `status` and `/debug` for live state; documentation contains defaults, never
 - Instagram reel verification: `/reel/<shortcode>/` or `/reels/<shortcode>/` can redirect to a different reel. The browser follows redirects; a different shortcode cannot verify the selected post. For a read-only check, try `/p/<original-shortcode>/`, preserving the original shortcode exactly. Confirm that the final URL still identifies the original and its post-level heart says `Unlike` (the 24 px control, excluding comment hearts). Do not click again merely to verify. This alternate format has worked in live inspection but is not guaranteed for every reel, and the sender does not automatically rewrite stored permalinks to it. A redirected or unavailable page leaves independent verification unresolved; do not infer that liking caused the redirect.
 - Thumbs: use `curate` to inspect and write an interpreted rule with citations. A mute-like line requires `--approved`. A thumb never directly hides or mutes.
 - Retention: use `raw prune --dry-run` and `media prune --dry-run`; never delete the raw or media tree by hand.
-- Backgrounds: use Upload files on `/debug/backgrounds`, or put photos in `data/backgrounds/local/`; `/debug/backgrounds` pins, rotates or removes pool copies. Downloads run independently of page requests.
+- Backgrounds: use Upload files on `/manage/backgrounds`, or put photos in `data/backgrounds/local/`; `/manage/backgrounds` pins, rotates or removes pool copies. Downloads run independently of page requests.
 
 ## Backup and restore
 

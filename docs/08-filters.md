@@ -62,3 +62,12 @@ Every new post is evaluated in its insert transaction, including after a failed 
 ## 8.9 Unhide
 
 The page action clears the four visibility columns and increments VisibilityRevision. It is an explicit owner override. Stored verdicts stay; a later explicit rescore, content update or refilter may hide the post again. An answer already in flight against the prior visibility revision cannot overwrite the action.
+
+
+## Management controls
+
+The People section at `/manage` edits close-friend membership, mute and always-show rules using exact stored platform identities. If removing a person from a name-based rule that currently matches several people, retain the other current matches as exact refs. The Rules section also exposes the complete mute/show lists, including entries with no imported match. Mute is persistent policy, not a change to the platform relationship.
+
+Remove from feed list clears local `IsFriend`, removes matching close-friend and extra home-timeline entries, and skips pending/retry sweep targets. Preserve posts and their action history; reapply audience rules instead of deleting posts. A later add-only import can add the relationship back. These operations never unfriend/unfollow on the platform. A profile already being visited may finish.
+
+After a management edit, reapply deterministic gates, category restrictions and any still-applicable current-content low-score verdict. In particular, unmuting must not inadvertently bypass an existing low model score. Manual hide owners remain protected. The controls do not invoke the model.

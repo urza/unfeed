@@ -1,0 +1,14 @@
+<label class="manage-field"><span>@Label</span>
+@if(Multiline){<textarea name="@Name" rows="@Rows" maxlength="60000">@Value</textarea>}
+else{<input name="@Name" type="@Type" value="@Value" min="@(Type == "number" ? "0" : null)"/>}
+@if(Hint is not null){<small>@Hint</small>}
+</label>
+@code {
+ [Parameter] public string Label { get; set; } = "";
+ [Parameter] public string Name { get; set; } = "";
+ [Parameter] public string? Value { get; set; }
+ [Parameter] public string Type { get; set; } = "text";
+ [Parameter] public string? Hint { get; set; }
+ [Parameter] public bool Multiline { get; set; }
+ [Parameter] public int Rows { get; set; } = 4;
+}
