@@ -8,6 +8,8 @@ Public documentation describes reusable behavior and defaults. It is not an oper
 
 Completed public-repository preparation is recorded in [PUBLICATION.md](PUBLICATION.md): privacy audit, documentation reconciliation, source mapping and the human/AI setup guide.
 
+Repost attribution: summary requests now preserve caption/shared speaker boundaries, and sharing attribution remains visible above collapsed text. All 157 non-browser tests pass, including original/unknown/shared speaker requests and request-hash provenance; the browser regression passes with and without JavaScript. Release CLI/Web builds pass; summary/UI contracts and combined specification updated. Instance category refinements and bounded live checks remain private.
+
 ## Verification baseline
 
 The latest combined application verification passes all 150 tests: 137 fast tests and 13 local browser tests. Tests use synthetic data and disposable instances. Platform logins, model availability, host Chromium support and opt-in reaction targets need deployment-specific validation under [chapter 17](docs/17-testing.md).

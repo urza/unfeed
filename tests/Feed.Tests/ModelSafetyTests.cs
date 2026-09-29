@@ -13,6 +13,34 @@ public sealed class ModelSafetyTests
     sealed class Handler(Func<HttpRequestMessage,CancellationToken,Task<HttpResponseMessage>> fn):HttpMessageHandler{protected override Task<HttpResponseMessage>SendAsync(HttpRequestMessage r,CancellationToken c)=>fn(r,c);}
     static HttpResponseMessage Reply(string content)=>new(HttpStatusCode.OK){Content=new StringContent(JsonSerializer.Serialize(new{choices=new[]{new{message=new{content}}}}),Encoding.UTF8,"application/json")};
     static InstanceSnapshot Instance=>new(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("facebook",new()).Add("instagram",new()),Llm=new(){Enabled=true,BaseUrl="http://primary.test/v1",FallbackBaseUrl="",Vision=false,Batch=2,Parallel=2}},new(),Preferences.Parse(""));
+    [Theory] [InlineData(false, false)] [InlineData(true, false)] [InlineData(true, true)]
+    public async Task SummaryRequestsPreserveWhoWroteEachPart(bool shared, bool unknownOriginal)
+    {
+        await using var i = new TestInstance(); await i.Init();
+        const string story = "I am changing careers.\nLooking for a new role.\nPlease send suggestions.";
+        await using (var db = i.Factory.Open()) {
+            db.Add(new Post { Platform = "facebook", PlatformPostId = "fixture", ObservedAuthorName = "Synthetic Sharer", Text = shared ? "Please help my friend." : story,
+                SharedAuthor = shared && !unknownOriginal ? "Synthetic Original" : null, SharedText = shared ? story : null, IngestReadyAt = Clock.Now });
+            await db.SaveChangesAsync();
+        }
+        string? requestBody = null;
+        using var handler = new Handler(async (r, ct) => { requestBody = await r.Content!.ReadAsStringAsync(ct); return Reply("Synthetic summary."); });
+        using var http = new HttpClient(handler); var media = new MediaFiles(i.Paths, http);
+        var counts = await new Processing(i.Paths, i.Factory, new(http), media, new(i.Paths, i.Factory, media)).Run(Instance, new("summarize"), null, default);
+        Assert.Equal(1, counts.Completed);
+        using var request = JsonDocument.Parse(requestBody!);
+        var messages = request.RootElement.GetProperty("messages");
+        Assert.Contains("never to the sharer", messages[0].GetProperty("content").GetString());
+        using var body = JsonDocument.Parse(messages[1].GetProperty("content").GetString()!);
+        Assert.Equal("Synthetic Sharer", body.RootElement.GetProperty("author").GetString());
+        Assert.Equal(shared ? "Please help my friend." : story, body.RootElement.GetProperty("text").GetString());
+        if (shared) {
+            var original = body.RootElement.GetProperty("shared");
+            Assert.Equal(unknownOriginal ? null : "Synthetic Original", original.GetProperty("author").GetString());
+            Assert.Equal(story, original.GetProperty("text").GetString());
+        } else Assert.False(body.RootElement.TryGetProperty("shared", out _));
+        await using var check = i.Factory.Open(); Assert.Equal(Prompts.Sha(requestBody!), (await check.Posts.SingleAsync()).SummaryInputHash);
+    }
     [Fact] public async Task SelectedRescoreDoesNotTouchOtherPostsAndAcceptsEmptyCategories()
     {
         await using var i = new TestInstance(); await i.Init(); long id;

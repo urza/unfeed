@@ -26,8 +26,11 @@ public sealed class WebTests
             await using(var context=await browser.NewContextAsync(new(){JavaScriptEnabled=false}))
             {
                 var page=await context.NewPageAsync();await page.GotoAsync(http.BaseAddress.ToString());Assert.Equal(1,await page.Locator("a.background-picker:visible").CountAsync());Assert.Contains("The feed is empty. Nothing collected yet.",await page.ContentAsync());
-                long id;await using(var db=instance.Factory.Open()){var author=new Author{Platform="facebook",DisplayName="Synthetic Person",IsFriend=true,RefsJson="[\"fb:synthetic\"]"};db.Add(author);await db.SaveChangesAsync();var post=new Post{Platform="facebook",PlatformPostId="fixture",AuthorId=author.Id,Text="Synthetic caption <script>unsafe</script>",PostedAt=Clock.Now};db.Add(post);await db.SaveChangesAsync();id=post.Id;}
-                await page.ReloadAsync();Assert.Contains("Synthetic caption",await page.Locator(".caption").InnerTextAsync());Assert.Equal(0,await page.Locator(".caption script").CountAsync());
+                long id;await using(var db=instance.Factory.Open()){var author=new Author{Platform="facebook",DisplayName="Synthetic Person",IsFriend=true,RefsJson="[\"fb:synthetic\"]"};db.Add(author);await db.SaveChangesAsync();var post=new Post{Platform="facebook",PlatformPostId="fixture",AuthorId=author.Id,Text="Synthetic caption <script>unsafe</script>",PostedAt=Clock.Now,SharedAuthor="Synthetic Original",SharedText="Original life update",SharedUrl="https://example.test/original",Summary="Synthetic Original is changing careers.",SummaryContentRevision=1};db.Add(post);await db.SaveChangesAsync();id=post.Id;}
+                await page.ReloadAsync();
+                await AssertSharedAttribution(page);
+                await page.Locator(".expand-chip").ClickAsync();
+                Assert.Contains("Synthetic caption",await page.Locator(".caption").InnerTextAsync());Assert.Equal(0,await page.Locator(".caption script").CountAsync());
                 await page.Locator("form[data-action='thumb']").First.Locator("button").ClickAsync();await using(var db=instance.Factory.Open()){Assert.Equal(1,await db.Feedback.CountAsync());Assert.False((await db.Posts.FindAsync(id))!.Hidden);}
                 await page.GotoAsync(http.BaseAddress + "debug/backgrounds");
                 Assert.Contains("data/backgrounds/local/", await page.ContentAsync());
@@ -64,13 +67,20 @@ public sealed class WebTests
             }
             await using(var context=await browser.NewContextAsync(new(){ViewportSize=new(){Width=390,Height=844}}))
             {
-                var page=await context.NewPageAsync();await page.GotoAsync(http.BaseAddress.ToString());await page.WaitForSelectorAsync(".feed-grid.enhanced");Assert.Equal("/debug/backgrounds",await page.Locator("a.background-picker:visible").GetAttributeAsync("href"));Assert.Equal(1,await page.Locator(".feed-column").CountAsync());
+                var page=await context.NewPageAsync();await page.GotoAsync(http.BaseAddress.ToString());await page.WaitForSelectorAsync(".feed-grid.enhanced");await AssertSharedAttribution(page);Assert.Equal("/debug/backgrounds",await page.Locator("a.background-picker:visible").GetAttributeAsync("href"));Assert.Equal(1,await page.Locator(".feed-column").CountAsync());
                 await page.Locator("form[data-action='thumb']").First.Locator("button").ClickAsync();await page.WaitForFunctionAsync("document.querySelector('[data-count]').textContent === '2'");
                 Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));
             }
             Assert.Equal(HttpStatusCode.NotFound,(await http.GetAsync("/media/%2e%2e/feed.db")).StatusCode);
         }
         finally{if(!process.HasExited)process.Kill(true);await process.WaitForExitAsync();await stdout;await stderr;}
+    }
+    static async Task AssertSharedAttribution(IPage page)
+    {
+        Assert.True(await page.Locator(".share-attribution").IsVisibleAsync());
+        Assert.Equal("Synthetic Person shared a post by Synthetic Original", await page.Locator(".share-attribution").InnerTextAsync());
+        Assert.Equal("https://example.test/original", await page.Locator(".share-attribution a").GetAttributeAsync("href"));
+        Assert.False(await page.Locator(".text-body").IsVisibleAsync());
     }
     static string FindRoot(){var d=new DirectoryInfo(AppContext.BaseDirectory);while(d is not null&&!File.Exists(Path.Combine(d.FullName,"Feed.slnx")))d=d.Parent;return d?.FullName??throw new DirectoryNotFoundException();}
 }

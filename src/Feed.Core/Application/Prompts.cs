@@ -52,6 +52,15 @@ public static class Prompts
         return new(number, string.Join(' ', Regex.Split(reason.GetString()!.Trim(), @"\s+").Take(20)), categories);
     }
     public static bool NeedsSummary(Post p) => Regex.Split(p.DisplayText.Trim(), @"[\r\n]+").Count(x => !string.IsNullOrWhiteSpace(x)) > 2;
+    public static string SummaryJson(Post p, string? author)
+    {
+        var remaining = 4000;
+        string Cut(string? value) { var text = (value ?? "")[..Math.Min(value?.Length ?? 0, remaining)]; remaining -= text.Length; return text; }
+        var body = new Dictionary<string, object?> { ["author"] = author ?? p.ObservedAuthorName, ["text"] = Cut(p.Text) };
+        if (p.SharedAuthor is not null || p.SharedText is not null || p.SharedUrl is not null)
+            body["shared"] = new { author = p.SharedAuthor, text = Cut(p.SharedText), url = p.SharedUrl };
+        return JsonSerializer.Serialize(body, new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+    }
     public static string[] Domains(Post p) => Regex.Matches(p.DisplayText + " " + p.SharedUrl, @"https?://[^\s<>]+").Select(m => Uri.TryCreate(m.Value, UriKind.Absolute, out var u) ? u.Host : "").Where(x => x.Length > 0).Distinct().ToArray();
     public static string PostJson(Post p, RuleContext rules, IReadOnlyList<Media> media, string[] feedback)
     {
