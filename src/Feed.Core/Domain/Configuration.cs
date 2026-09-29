@@ -68,6 +68,8 @@ public sealed record LlmConfig
     public bool Vision { get; init; } = true;
     public int VisionMaxImages { get; init; } = 3;
     public int MaxTokens { get; init; } = 4000;
+    public ImmutableArray<int> TokenRetryBudgets { get; init; } = [8000, 16000];
+    public int TokenRetryDelayMinutes { get; init; } = 30;
     public int SummaryMaxTokens { get; init; } = 4000;
     public bool? SummaryEnableThinking { get; init; }
     public ImmutableArray<string> SummaryLanguages { get; init; } = ["English", "Czech", "Slovak"];
@@ -145,6 +147,7 @@ public static class InstanceValidation
         Require(c.Llm.Batch >= 1 && c.Llm.Parallel >= 1 && c.Ui.RenderCap >= 1 && c.Ui.CoverageStaleHours >= 1, "batch, parallel, render_cap and coverage_stale_hours must be at least 1");
         Require(c.Llm.Threshold is >= 0 and <= 10 && c.Llm.TimeoutSeconds >= 10 && c.Llm.MaxTokens > 0 && c.Llm.SummaryMaxTokens > 0 && c.Llm.VisionMaxImages >= 0, "Invalid model bounds");
         Require(new[] { c.RawRetentionDays, c.HiddenMediaRetentionDays, c.HiddenVideoRetentionDays, c.VideoRetentionDays, c.MaxVideoMb, c.Scheduler.JitterMinutes, c.Scheduler.ManualCooldownMinutes, c.Scheduler.RunRequestTtlMinutes, c.Ui.Stack.MinPosts, c.Ui.Stack.WindowDays }.All(n => n >= 0), "Retention, size, cooldown and stack values cannot be negative");
+        Require(c.Llm.TokenRetryDelayMinutes >= 1 && c.Llm.TokenRetryBudgets.All(n => n > 0) && c.Llm.TokenRetryBudgets.SequenceEqual(c.Llm.TokenRetryBudgets.Distinct().Order()), "Token retry budgets must be positive and strictly increasing; delay must be at least 1 minute");
         Require(c.Web.Port is >= 0 and <= 65535, "Invalid web port");
         Require(double.IsFinite(c.Backgrounds.BlurPx) && c.Backgrounds.BlurPx >= 0 && double.IsFinite(c.Likeback.MinDelaySeconds) && double.IsFinite(c.Likeback.MaxDelaySeconds) && c.Likeback.MinDelaySeconds >= 0 && c.Likeback.MaxDelaySeconds >= c.Likeback.MinDelaySeconds, "Invalid blur or delay bounds");
         Choice(c.Ui.LogLevel, "trace", "debug", "info", "warn", "error");

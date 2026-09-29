@@ -83,6 +83,7 @@ Index: (AuthorId). Only the identity resolver writes this table.
 | SummaryContentRevision | integer? | content revision summarized or checked as too short |
 | SummaryInputHash, SummaryModel, SummaryEndpoint | text? | summary provenance; model and endpoint null for the too-short marker |
 | SummarizedAt | datetime? | successful summary or too-short decision time |
+| LlmTokenLimit | integer? | last exhausted judgment budget for this content revision; null normally. Drives the bounded automatic budget ladder (9.9); cleared on success, changed content/identity, or explicit rescore dispatch. |
 | LlmError, SummaryError | text? | latest task failure on this revision, cleared on success |
 | LlmFailures, SummaryFailures | integer | consecutive task failures on this revision |
 | LlmAttemptedAt, SummaryAttemptedAt | datetime? | persisted immediately before the respective model call; null means never attempted. Used for the retry delay and backlog order (chapter 9). |

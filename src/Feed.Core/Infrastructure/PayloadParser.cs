@@ -10,7 +10,7 @@ public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyLi
 public static class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
-    public const int Version = 4;
+    public const int Version = 5;
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
     public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
@@ -38,16 +38,18 @@ public static class PayloadParser
         var posts = new Dictionary<string, Observation>(); var persons = new List<Person>(); var empty = false;
         foreach (var root in roots)
         {
+            var damaged = new List<JsonElement>();
             foreach (var error in Array(At(root, "errors")))
             {
                 var path = string.Join('/', Array(At(error, "path")).Select(Text));
                 var detail = $"{platform}/GraphQL: {Get(error, "message") ?? "upstream error"}; path={path}";
                 if (NonPostError(platform, root, error)) warnings.Add(detail);
-                else errors.Add(detail);
+                else { errors.Add(detail); damaged.Add(ErrorScope(platform, root, error)); }
             }
             var nodes = Walk(root).ToArray(); var children = nodes.SelectMany(x => Array(At(x.Node, "carousel_media"))).Select(Id).Where(s => s is not null).ToHashSet();
             foreach (var (n, parents) in nodes)
             {
+                if (damaged.Any(scope => scope.Equals(n) || parents.Contains(scope))) continue;
                 foreach (var key in platform == "instagram" ? new[] { "user_timeline", "xdt_api__v1__feed__user_timeline_graphql_connection" } : new[] { "user_timeline" })
                     if (At(n, key) is var timeline && timeline.ValueKind == JsonValueKind.Object && At(timeline, "edges").ValueKind == JsonValueKind.Array && !Array(At(timeline, "edges")).Any() && At(timeline, "page_info", "has_next_page").ValueKind == JsonValueKind.False && At(root, "errors").ValueKind == JsonValueKind.Undefined) empty = true;
                 if (people) { var person = PersonFrom(platform, n, parents); if (person is not null) persons.Add(person); continue; }
@@ -69,14 +71,57 @@ public static class PayloadParser
         if (!people && posts.Count == 0 && !empty && !(platform == "facebook" && roots.Count > 0 && roots.All(FacebookAuxiliary))) errors.Add("parser uncertainty: no recognized posts or explicit empty response");
         return new(posts.Values.ToArray(), persons.DistinctBy(p => (p.Id, p.Url)).ToArray(), empty, errors) { Warnings = warnings };
     }
+    static JsonElement ErrorScope(string platform, JsonElement root, JsonElement error)
+    {
+        var path = Array(At(error, "path")).Select(Text).ToArray();
+        int edges = platform == "facebook" && path.Length > 3 && path[0] is "node" or "user" && path[1] == "timeline_list_feed_units" && path[2] == "edges" ? 2
+            : platform == "instagram" && path.Length > 2 && path[0] is "xdt_api__v1__feed__timeline__connection" or "xdt_api__v1__feed__user_timeline_graphql_connection" && path[1] == "edges" ? 1 : -1;
+        if (edges >= 0 && int.TryParse(path[edges + 1], out var index) && index >= 0)
+        {
+            var array = At(root, new[] { "data" }.Concat(path.Take(edges + 1).Select(p => p!)).ToArray());
+            if (array.ValueKind == JsonValueKind.Array && index < array.GetArrayLength()) return array[index];
+        }
+        return root;
+    }
+    static bool FacebookAuxiliaryPostError(JsonElement root, string?[] path)
+    {
+        // Only the exact comment-attachment and rich-text entity metadata paths are optional.
+        var nodePath = path.Length > 5 && path[0] is "node" or "user" && path[1] == "timeline_list_feed_units" && path[2] == "edges" && int.TryParse(path[3], out _) && path[4] == "node" ? 5
+            : path.Length > 1 && path[0] == "node" ? 1 : 0;
+        if (nodePath == 0) return false;
+        var node = At(root, "data");
+        foreach (var part in path.Take(nodePath))
+        {
+            if (node.ValueKind == JsonValueKind.Array && int.TryParse(part, out var index) && index >= 0 && index < node.GetArrayLength()) node = node[index];
+            else node = At(node, part!);
+        }
+        if (Get(node, "post_id") is null || At(node, "actors").ValueKind != JsonValueKind.Array) return false;
+        var rest = path.Skip(nodePath).ToArray();
+        if (rest.Length == 10 && rest.Take(7).SequenceEqual(new[] { "comet_sections", "feedback", "story", "story_ufi_container", "story", "feedback_context", "interesting_top_level_comments" })
+            && int.TryParse(rest[7], out var comment) && comment >= 0 && rest[8] == "comment" && rest[9] == "attached_story") return true;
+        var messagePath = new[] { "comet_sections", "content", "story", "comet_sections", "message", "story", "message" };
+        if (rest.Length != 10 || !rest.Take(7).SequenceEqual(messagePath) || rest[7] != "ranges" || rest[9] != "entity" || !int.TryParse(rest[8], out var range) || range < 0) return false;
+        var message = At(node, messagePath); var ranges = At(message, "ranges"); var text = Get(message, "text");
+        if (text is null || ranges.ValueKind != JsonValueKind.Array || range >= ranges.GetArrayLength()) return false;
+        return int.TryParse(Get(ranges[range], "offset"), out var offset) && int.TryParse(Get(ranges[range], "length"), out var length)
+            && offset >= 0 && length >= 0 && offset <= text.Length && length <= text.Length - offset;
+    }
     static bool NonPostError(string platform, JsonElement root, JsonElement error)
     {
         var path = Array(At(error, "path")).Select(Text).ToArray();
         if (platform == "facebook")
-            return FacebookProfileTiles(root) && path.Length > 2 && path[0] == "node" && path[1] == "profile_tile_sections"
+            return FacebookAuxiliaryPostError(root, path) || FacebookProfileTiles(root) && path.Length > 2 && path[0] == "node" && path[1] == "profile_tile_sections"
                 || path.Length == 3 && path[0] is "user" or "node" && path[1] == "delegate_page"
                 && path[2] is "ctx_business_adoption_fact_based_benchmark_page_id" or "ctwa_ad4ad_insights"
                 && At(root, "data", path[0]!, "timeline_list_feed_units", "edges").ValueKind == JsonValueKind.Array;
+        if (platform == "instagram" && path.Length == 5 && path[0] == "xdt_api__v1__feed__timeline__connection" && path[1] == "edges"
+            && int.TryParse(path[2], out var edgeIndex) && edgeIndex >= 0 && path[3] == "node"
+            && path[4] is "ad" or "ad4ad_in_webfeed" or "explore_story" or "end_of_feed_demarcator" or "stories_netego" or "suggested_users" or "bloks_netego" or "abra_icebreakers_in_feed_unit")
+        {
+            var edge = Array(At(root, "data", path[0]!, "edges")).Skip(edgeIndex).FirstOrDefault();
+            var media = At(edge, "node", "media");
+            if (Get(media, "pk", "id") is not null && At(media, "user").ValueKind == JsonValueKind.Object) return true;
+        }
         // A place's icon is neither post media nor author/content. The exact observed
         // GraphQL path is required; errors on caption, user, images or edges still fail.
         return platform == "instagram" && path.Length == 6 && path[0] == "xdt_api__v1__feed__user_timeline_graphql_connection"

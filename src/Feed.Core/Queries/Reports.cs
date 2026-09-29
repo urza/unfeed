@@ -43,9 +43,10 @@ public static class Reports
             var pending = db.Posts.Where(p => p.Platform == platform && p.IngestReadyAt != null);
             foreach (var task in new[] { "judge", "summary" })
             {
-                var candidates = task == "judge" ? pending.Where(p => (!p.Hidden || p.HiddenBy == "llm") && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision)) : pending.Where(p => !p.Hidden && (p.Summary == null || p.SummaryContentRevision != p.ContentRevision));
-                var attempts = task == "judge" ? candidates.Select(p => new { p.CapturedAt, Attempt = p.LlmAttemptedAt }) : candidates.Select(p => new { p.CapturedAt, Attempt = p.SummaryAttemptedAt });
-                var rows = await attempts.ToArrayAsync(); var due = rows.Count(r => r.Attempt == null || r.Attempt <= retryCutoff); var retry = rows.Where(r => r.Attempt > retryCutoff).Select(r => r.Attempt!.Value.AddMinutes(30)).Cast<DateTime?>().Min();
+                var candidates = task == "judge" ? pending.Where(p => (!p.Hidden || p.HiddenBy == "llm") && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision || p.LlmTokenLimit != null)) : pending.Where(p => !p.Hidden && (p.Summary == null || p.SummaryContentRevision != p.ContentRevision));
+                var rows = await candidates.AsNoTracking().ToArrayAsync();
+                var due = task == "judge" ? rows.Count(JudgmentRetry.Due(s.Config.Llm, Clock.Now).Compile()) : rows.Count(p => p.SummaryAttemptedAt == null || p.SummaryAttemptedAt <= retryCutoff);
+                var retry = rows.Select(p => task == "judge" ? JudgmentRetry.After(p, s.Config.Llm) : p.SummaryAttemptedAt?.AddMinutes(30)).Where(at => at > Clock.Now).Min();
                 b.AppendLine($"{platform}/{task}: pending={rows.Length}, due={due}, oldest={rows.Select(r => (DateTime?)r.CapturedAt).Min():O}, retry={retry:O}; task backoff={await db.Get($"model:{hash}:{task}:not_before") ?? "none"}; {(s.Config.Enabled(platform) ? s.Config.Llm.Enabled ? "model enabled" : "processing model disabled" : "platform paused")}");
             }
         }

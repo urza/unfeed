@@ -5,6 +5,9 @@ using System.Text.Json;
 using Feed.Core.Domain;
 namespace Feed.Core.Infrastructure;
 
+public sealed class TokenBudgetException(int budget, int reasoningChars) : FormatException($"model token budget exhausted (max_tokens={budget}, reasoning_chars={reasoningChars}); delayed budget escalation may retry this judgment")
+{ public int Budget { get; } = budget; }
+
 public sealed record ModelReply<T>(T Value, string Endpoint);
 public sealed class ModelClient(HttpClient http)
 {
@@ -30,7 +33,7 @@ public sealed class ModelClient(HttpClient http)
                 var choices = PayloadParser.At(doc.RootElement, "choices"); var choice = PayloadParser.Array(choices).FirstOrDefault(); var content = PayloadParser.Text(PayloadParser.At(choice, "message", "content"));
                 var finish = PayloadParser.Get(choice, "finish_reason") ?? "unknown";
                 var reasoning = PayloadParser.Get(PayloadParser.At(choice, "message"), "reasoning_content", "reasoning");
-                if (finish == "length") throw new FormatException($"model token budget exhausted (max_tokens={maxTokens}, reasoning_chars={reasoning?.Length ?? 0}); raise the task token budget or configure the endpoint's reasoning budget");
+                if (finish == "length") throw new TokenBudgetException(maxTokens, reasoning?.Length ?? 0);
                 if (string.IsNullOrWhiteSpace(content)) throw new FormatException($"model returned no final content (finish_reason={finish}, reasoning_chars={reasoning?.Length ?? 0}); reasoning is not a verdict");
                 return new(parse(content), Application.Prompts.Endpoint(endpoint));
             }

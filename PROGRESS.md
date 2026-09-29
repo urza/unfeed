@@ -57,3 +57,7 @@ Allow empty category arrays in model replies, separate category eligibility from
 ## Platform story context for classification
 
 Preserve the platform-generated story title separately from the author caption through parsing, storage, content revision, model input and card rendering. Pin replay invalidation and caption separation using synthetic fixtures; migrate the nullable field and update contracts. Implemented and validated with 146 non-browser tests, including story-title isolation and replay invalidation. The replay regression also pins kind-independent UTC timestamp hashing across SQLite round-trips. Release CLI/Web builds and specification regeneration pass; live evidence is kept privately.
+
+## Bounded token retries and partial capture recovery
+
+Persist token-exhaustion state and use a configurable delayed budget ladder shared by processing, scheduling and diagnostics. Preserve request provenance and stop automatic escalation at the configured cap. Isolate capture errors to affected records; retain narrowly identified auxiliary errors as warnings while keeping incomplete content diagnostic. Complete: 154 non-browser tests pass, including delayed/capped retries across worker instances, request provenance, content-reset behavior, and partial-response isolation/idempotent ingest. Release CLI/Web builds pass; contracts and combined specification updated. Bounded live replay evidence remains in ignored instance notes.

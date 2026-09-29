@@ -99,6 +99,8 @@ The complete key list. Every key is optional. Defaults are in the table and are 
 | `vision` | bool | true | attach the post's images to the verdict call |
 | `vision_max_images` | int | 3 | images per post sent to the model |
 | `max_tokens` | int | 4000 | the verdict budget. Reasoning models spend tokens on thinking first. |
+| `token_retry_budgets` | int[] | `[8000, 16000]` | strictly increasing positive judgment budgets. After token exhaustion, try the next value above the exhausted and base budgets; `[]` disables escalation. Stops when no larger budget remains. Choose values supported by the model/provider and desired cost cap. |
+| `token_retry_delay_minutes` | int | 30 | minimum delay before a token-exhausted judgment is retried; at least 1. Ordinary errors and summaries retain their existing 30-minute delay. |
 | `summary_max_tokens` | int | 4000 | the summary budget |
 | `summary_enable_thinking` | bool? | null | Optional vLLM/Qwen chat-template override for summaries only. Null omits the extension; false disables thinking when supported by the configured endpoint(s). Judgment requests are unchanged. |
 | `summary_languages` | list | `["English", "Czech", "Slovak"]` | a summary keeps the post's language only for these. Any other post is summarized in English. Empty means always English. |

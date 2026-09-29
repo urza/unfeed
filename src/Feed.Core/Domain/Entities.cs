@@ -24,6 +24,7 @@ public sealed class Post
     public string? Summary { get; set; } public int? SummaryContentRevision { get; set; } public string? SummaryInputHash { get; set; } public string? SummaryModel { get; set; } public string? SummaryEndpoint { get; set; } public DateTime? SummarizedAt { get; set; }
     public DateTime? LlmAttemptedAt { get; set; } public DateTime? SummaryAttemptedAt { get; set; }
     public string? LlmError { get; set; } public string? SummaryError { get; set; }
+    public int? LlmTokenLimit { get; set; }
     public int LlmFailures { get; set; } public int SummaryFailures { get; set; }
     public bool Hidden { get; set; } public string? HiddenBy { get; set; } public string? HiddenReason { get; set; } public DateTime? HiddenAt { get; set; } public int VisibilityRevision { get; set; }
     public void SetHidden(string owner, string reason) { if (!ClosedValues.HideOwners.Contains(owner) || owner == "thumbs") throw new ArgumentException("Invalid hide owner"); if (!Hidden) HiddenAt = Clock.Now; Hidden = true; HiddenBy = owner; HiddenReason = reason; VisibilityRevision++; }

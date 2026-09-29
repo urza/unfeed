@@ -29,7 +29,6 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
         {
             var people = FriendsDirectory(Path.GetDirectoryName(file)!); var parsed = PayloadParser.Parse(platform, await System.IO.File.ReadAllTextAsync(file, ct), people);
             await using (var db = factory.Open()) await db.RawSnapshots.Where(r => r.Path == relative).ExecuteUpdateAsync(s => s.SetProperty(r => r.Warning, parsed.Warnings.Count == 0 ? null : string.Join("; ", parsed.Warnings)), ct);
-            if (parsed.Diagnostics.Count > 0) throw new FormatException(string.Join("; ", parsed.Diagnostics));
             if (people) foreach (var person in parsed.People)
             {
                 await using var db = factory.Open(); Author? author;
@@ -44,6 +43,8 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
             {
                 found++; var result = await Store(observation, relative, instance, offline, ct); added += result.New; revised += result.Revised; files += result.Media;
             }
+            // Safe observations are committed even when another record is incomplete.
+            if (parsed.Diagnostics.Count > 0) throw new FormatException(string.Join("; ", parsed.Diagnostics));
             await using (var db = factory.Open()) await db.RawSnapshots.Where(r => r.Path == relative).ExecuteUpdateAsync(s => s.SetProperty(r => r.Parsed, true).SetProperty(r => r.ParsedAt, Clock.Now).SetProperty(r => r.Error, (string?)null).SetProperty(r => r.BlockedParserVersion, (int?)null), ct);
             return new(found, added, revised, files, 0);
         }
@@ -72,7 +73,7 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
             originalHash = p.ContentHash; p.AuthorId = author?.Id;
             p.ObservedAuthorName = o.AuthorName; p.ObservedAuthorUrl = o.AuthorUrl; p.PostedAt = o.Post.PostedAt; p.Text = o.Post.Text; p.StoryTitle = o.Post.StoryTitle; p.Permalink = o.Post.Permalink; p.LikeRef = o.Post.LikeRef; p.IsSponsored = o.Post.IsSponsored; p.IsSuggested = o.Post.IsSuggested; p.IsReel = o.Post.IsReel; p.IsEvent = o.Post.IsEvent; p.SharedAuthor = o.Post.SharedAuthor; p.SharedText = o.Post.SharedText; p.SharedUrl = o.Post.SharedUrl; p.MemoryLabel = o.Post.MemoryLabel; p.MemoryText = o.Post.MemoryText; p.TagsJson = o.Post.TagsJson; p.LatestRawRef = raw; p.MediaManifestJson = JsonSerializer.Serialize(o.Media);
             var rows = isNew ? [] : await db.Media.Where(m => m.PostId == p.Id).ToListAsync(ct); var hash = ContentHash(p, o.Media, rows); changed = hash != originalHash;
-            if (changed) { if (!isNew) p.ContentRevision++; p.IngestReadyAt = null; p.LlmAttemptedAt = p.SummaryAttemptedAt = null; p.LlmError = p.SummaryError = null; p.LlmFailures = p.SummaryFailures = 0; p.ContentHash = hash; var authors = await db.Authors.ToListAsync(ct); Filters.Apply(p, new(author, authors, instance)); }
+            if (changed) { if (!isNew) p.ContentRevision++; p.IngestReadyAt = null; p.LlmAttemptedAt = p.SummaryAttemptedAt = null; p.LlmError = p.SummaryError = null; p.LlmFailures = p.SummaryFailures = 0; p.LlmTokenLimit = null; p.ContentHash = hash; var authors = await db.Authors.ToListAsync(ct); Filters.Apply(p, new(author, authors, instance)); }
             foreach (var row in rows) row.IsCurrent = o.Media.Any(s => s.SourceKey == row.SourceKey);
             await db.SaveChangesAsync(ct); id = p.Id; await tx.CommitAsync(ct);
         }
@@ -97,7 +98,7 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
                 if (existing is null && source.Kind != "image") { db.Add(row); rows.Add(row); }
             }
             var finalHash = ContentHash(p, o.Media, rows);
-            if (!changed && finalHash != p.ContentHash) { p.ContentRevision++; p.LlmAttemptedAt = p.SummaryAttemptedAt = null; p.LlmError = p.SummaryError = null; p.LlmFailures = p.SummaryFailures = 0; }
+            if (!changed && finalHash != p.ContentHash) { p.ContentRevision++; p.LlmAttemptedAt = p.SummaryAttemptedAt = null; p.LlmError = p.SummaryError = null; p.LlmFailures = p.SummaryFailures = 0; p.LlmTokenLimit = null; }
             p.ContentHash = finalHash; p.IngestReadyAt = Clock.Now; await db.SaveChangesAsync(ct);
             return new(1, isNew ? 1 : 0, !isNew && (changed || finalHash != originalHash) ? 1 : 0, files, 0);
         }

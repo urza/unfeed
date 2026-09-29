@@ -17,9 +17,9 @@ public sealed class WorkCounts
 }
 public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClient model, MediaFiles media, Ingest ingest)
 {
-    sealed record Batch(int Id, string Platform, string Task, int Count) { public int Settled; public int Success; public int Failure; }
-    sealed record Prepared(Post Post, RuleContext Rules, string Task, Batch Batch, object Messages, string Hash, bool Inline);
-    sealed record Result(Prepared Work, object? Value, string? Endpoint, string? Error, bool Sent);
+    sealed record Batch(int Id, string Platform, string Task, int Count) { public int Settled; public int Success; public int Failure; public int TokenFailure; }
+    sealed record Prepared(Post Post, RuleContext Rules, string Task, Batch Batch, object Messages, string Hash, bool Inline, int MaxTokens);
+    sealed record Result(Prepared Work, object? Value, string? Endpoint, string? Error, bool Sent, int? TokenLimit = null);
     public async Task<WorkCounts> Run(InstanceSnapshot instance, WorkScope scope, Action<string>? progress, CancellationToken ct, Func<WorkCounts, Task>? report = null)
     {
         using var ownership = ResourceLock.Try(paths, "processing") ?? throw new ResourceBusyException("processing busy");
@@ -109,11 +109,11 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                     if (turn.Task == "judge") query = query.Where(p => !p.Hidden || p.HiddenBy == "llm"); else query = query.Where(p => !p.Hidden);
                     if (scope.PostId is { } id) query = query.Where(p => p.Id == id);
                     else if (scope.PostIds is { } selectedIds) query = query.Where(p => selectedIds.Contains(p.Id));
-                    else if (turn.Task == "judge") query = query.Where(p => p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision || (scope.All || scope.Author != null) && p.PrefsVersion != version);
+                    else if (turn.Task == "judge") query = query.Where(p => p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision || p.LlmTokenLimit != null || (scope.All || scope.Author != null) && p.PrefsVersion != version);
                     else query = query.Where(p => p.SummaryContentRevision != p.ContentRevision || p.Summary == null);
                     if (scope.Since is { } since) query = query.Where(p => p.PostedAt >= since);
                     if (scope.Author is { } authorRef) { var authorId = await db.AuthorKeys.Where(k => k.Key == authorRef.ToLowerInvariant()).Select(k => (long?)k.AuthorId).SingleOrDefaultAsync(token); if (authorId is null) throw new ArgumentException("Unknown author ref"); query = query.Where(p => p.AuthorId == authorId); }
-                    if (scope.Kind == "process") { var retry = Clock.Now.AddMinutes(-30); query = turn.Task == "judge" ? query.Where(p => p.LlmAttemptedAt == null || p.LlmAttemptedAt <= retry).OrderBy(p => p.LlmAttemptedAt ?? p.CapturedAt).ThenBy(p => p.Id) : query.Where(p => p.SummaryAttemptedAt == null || p.SummaryAttemptedAt <= retry).OrderBy(p => p.SummaryAttemptedAt ?? p.CapturedAt).ThenBy(p => p.Id); }
+                    if (scope.Kind == "process") { var retry = Clock.Now.AddMinutes(-30); query = turn.Task == "judge" ? query.Where(JudgmentRetry.Due(instance.Config.Llm, Clock.Now)).OrderBy(p => p.LlmAttemptedAt ?? p.CapturedAt).ThenBy(p => p.Id) : query.Where(p => p.SummaryAttemptedAt == null || p.SummaryAttemptedAt <= retry).OrderBy(p => p.SummaryAttemptedAt ?? p.CapturedAt).ThenBy(p => p.Id); }
                     else query = query.OrderByDescending(p => p.PostedAt).ThenByDescending(p => p.Id);
                     var exclude = selected.Where(x => x.Task == turn.Task).Select(x => x.Id).ToArray(); query = query.Where(p => !exclude.Contains(p.Id));
                     var take = Math.Min(instance.Config.Llm.Batch, (scope.Limit ?? int.MaxValue) - budgets.GetValueOrDefault(turn.Task)); var posts = await query.Take(take).ToListAsync(token);
@@ -141,14 +141,15 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                                 var languages = instance.Config.Llm.SummaryLanguages; var language = languages.Length == 0 ? "Write the summary in English." : $"If the post is in one of these languages: {string.Join(", ", languages)}, write the summary in the language of the post. If the post is in any other language, write the summary in English.";
                                 messages.Add(new { role = "system", content = $"You summarize social media posts for a private chronological feed. Reply with ONLY a 1-2 sentence summary of the post. {language} Refer to the author by their name, never as 'the author'. No preamble, no markdown, do not quote the post." }); messages.Add(new { role = "user", content = $"Post by {rules.Author?.DisplayName ?? p.ObservedAuthorName ?? "the author"}:\n{p.DisplayText[..Math.Min(4000, p.DisplayText.Length)]}" });
                             }
-                            var hash = Prompts.Sha(JsonSerializer.Serialize(ModelClient.RequestBody(instance.Config.Llm, messages, turn.Task == "judge" ? instance.Config.Llm.MaxTokens : instance.Config.Llm.SummaryMaxTokens, turn.Task == "summary" ? instance.Config.Llm.SummaryEnableThinking : null)));
-                            var prepared = new Prepared(p, rules, turn.Task, batch, messages, hash, inline);
+                            var maxTokens = turn.Task == "judge" ? scope.Kind == "process" ? JudgmentRetry.Budget(p, instance.Config.Llm)!.Value : instance.Config.Llm.MaxTokens : instance.Config.Llm.SummaryMaxTokens;
+                            var hash = Prompts.Sha(JsonSerializer.Serialize(ModelClient.RequestBody(instance.Config.Llm, messages, maxTokens, turn.Task == "summary" ? instance.Config.Llm.SummaryEnableThinking : null)));
+                            var prepared = new Prepared(p, rules, turn.Task, batch, messages, hash, inline, maxTokens);
                             if (inline) { Interlocked.Increment(ref counts.Unapplied); await results.Writer.WriteAsync(new(prepared, "", null, null, false), token); }
                             else { Interlocked.Increment(ref counts.Prepared); await inputs.Writer.WriteAsync(prepared, token); }
                         }
                         catch (Exception e) when (e is not OperationCanceledException)
                         {
-                            var work = new Prepared(p, new(null, [], instance), turn.Task, batch, Array.Empty<object>(), "", false);
+                            var work = new Prepared(p, new(null, [], instance), turn.Task, batch, Array.Empty<object>(), "", false, instance.Config.Llm.MaxTokens);
                             await Stamp(work, token); Interlocked.Increment(ref counts.Unapplied); await results.Writer.WriteAsync(new(work, null, null, e.Message, false), token);
                         }
                     }
@@ -160,7 +161,7 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
         async Task<bool> Stamp(Prepared work, CancellationToken cancel)
         {
             await using var db = factory.Open(); var p = work.Post; var eligible = db.Posts.Where(x => x.Id == p.Id && x.ContentRevision == p.ContentRevision && x.VisibilityRevision == p.VisibilityRevision && x.IngestReadyAt != null && (!x.Hidden || work.Task == "judge" && x.HiddenBy == "llm"));
-            return (work.Task == "judge" ? await eligible.ExecuteUpdateAsync(s => s.SetProperty(x => x.LlmAttemptedAt, Clock.Now), cancel) : await eligible.ExecuteUpdateAsync(s => s.SetProperty(x => x.SummaryAttemptedAt, Clock.Now), cancel)) == 1;
+            return (work.Task == "judge" ? await eligible.ExecuteUpdateAsync(s => s.SetProperty(x => x.LlmAttemptedAt, Clock.Now).SetProperty(x => x.LlmTokenLimit, x => scope.Kind == "process" ? x.LlmTokenLimit : null), cancel) : await eligible.ExecuteUpdateAsync(s => s.SetProperty(x => x.SummaryAttemptedAt, Clock.Now), cancel)) == 1;
         }
         async Task Worker()
         {
@@ -178,10 +179,10 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                     Result result; Interlocked.Increment(ref counts.Active);
                     try
                     {
-                        if (work.Task == "judge") { var response = await model.Call(instance.Config.Llm, work.Messages, instance.Config.Llm.MaxTokens, s => Prompts.ParseVerdict(s, instance.Taxonomy), token); result = new(work, response.Value, response.Endpoint, null, true); }
-                        else { var response = await model.Call(instance.Config.Llm, work.Messages, instance.Config.Llm.SummaryMaxTokens, s => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)), token, instance.Config.Llm.SummaryEnableThinking); result = new(work, response.Value, response.Endpoint, null, true); }
+                        if (work.Task == "judge") { var response = await model.Call(instance.Config.Llm, work.Messages, work.MaxTokens, s => Prompts.ParseVerdict(s, instance.Taxonomy), token); result = new(work, response.Value, response.Endpoint, null, true); }
+                        else { var response = await model.Call(instance.Config.Llm, work.Messages, work.MaxTokens, s => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)), token, instance.Config.Llm.SummaryEnableThinking); result = new(work, response.Value, response.Endpoint, null, true); }
                     }
-                    catch (Exception e) when (e is not OperationCanceledException || !token.IsCancellationRequested) { result = new(work, null, null, e.Message, true); }
+                    catch (Exception e) when (e is not OperationCanceledException || !token.IsCancellationRequested) { result = new(work, null, null, e.Message, true, (e as TokenBudgetException)?.Budget); }
                     finally { Interlocked.Decrement(ref counts.Active); }
                     Interlocked.Increment(ref counts.Unapplied); await results.Writer.WriteAsync(result, token);
                 }
@@ -197,12 +198,12 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                     Interlocked.Decrement(ref counts.Unapplied); var w = result.Work; var batch = w.Batch; var stage = counts.Stage(w.Post.Platform, w.Task);
                     if (result.Error is not null)
                     {
-                        counts.Failed++; stage.Failed++; batch.Failure++;
+                        counts.Failed++; stage.Failed++; batch.Failure++; if (w.Task == "judge" && result.TokenLimit is not null) batch.TokenFailure++;
                         await using var db = factory.Open();
                         var current = db.Posts.Where(p => p.Id == w.Post.Id && p.ContentRevision == w.Post.ContentRevision && p.VisibilityRevision == w.Post.VisibilityRevision);
-                        if (w.Task == "judge") await current.ExecuteUpdateAsync(u => u.SetProperty(p => p.LlmError, result.Error).SetProperty(p => p.LlmFailures, p => p.LlmFailures + 1), token);
+                        if (w.Task == "judge") await current.ExecuteUpdateAsync(u => u.SetProperty(p => p.LlmError, result.Error).SetProperty(p => p.LlmFailures, p => p.LlmFailures + 1).SetProperty(p => p.LlmTokenLimit, p => result.TokenLimit ?? p.LlmTokenLimit), token);
                         else await current.ExecuteUpdateAsync(u => u.SetProperty(p => p.SummaryError, result.Error).SetProperty(p => p.SummaryFailures, p => p.SummaryFailures + 1), token);
-                        progress?.Invoke($"post #{w.Post.Id} {w.Task} failed; retry after 30 minutes: {result.Error}");
+                        progress?.Invoke($"post #{w.Post.Id} {w.Task} failed; {(w.Task == "judge" && (result.TokenLimit is not null || w.Post.LlmTokenLimit is not null) ? "token retry governed by configured budget ladder and delay" : "retry after 30 minutes")}: {result.Error}");
                     }
                     else if (result.Value is null) { counts.Superseded++; stage.Superseded++; batch.Success++; }
                     else
@@ -214,7 +215,7 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                         {
                             if (result.Value is Verdict verdict)
                             {
-                                p.LlmError = null; p.LlmFailures = 0; p.LlmScore = verdict.Score; p.LlmReason = verdict.Reason; p.CategoriesJson = JsonSerializer.Serialize(Filters.Restrict(verdict.Categories, w.Rules, p.Platform)); p.VerdictContentRevision = p.ContentRevision; p.PrefsVersion = version; p.VerdictInputHash = w.Hash; p.VerdictModel = instance.Config.Llm.Model; p.VerdictEndpoint = result.Endpoint; p.JudgedAt = Clock.Now;
+                                p.LlmError = null; p.LlmFailures = 0; p.LlmTokenLimit = null; p.LlmScore = verdict.Score; p.LlmReason = verdict.Reason; p.CategoriesJson = JsonSerializer.Serialize(Filters.Restrict(verdict.Categories, w.Rules, p.Platform)); p.VerdictContentRevision = p.ContentRevision; p.PrefsVersion = version; p.VerdictInputHash = w.Hash; p.VerdictModel = instance.Config.Llm.Model; p.VerdictEndpoint = result.Endpoint; p.JudgedAt = Clock.Now;
                                 if (verdict.Score < instance.Config.Llm.Threshold && !w.Rules.Shield("llm")) p.SetHidden("llm", $"llm {verdict.Score}: {verdict.Reason}"); else if (p.HiddenBy == "llm") p.ClearHidden();
                             }
                             else { p.SummaryError = null; p.SummaryFailures = 0; p.Summary = (string)result.Value; p.SummaryContentRevision = p.ContentRevision; p.SummaryInputHash = w.Hash; p.SummaryModel = w.Inline ? null : instance.Config.Llm.Model; p.SummaryEndpoint = result.Endpoint; p.SummarizedAt = Clock.Now; }
@@ -225,7 +226,7 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                     batch.Settled++;
                     if (batch.Settled == batch.Count)
                     {
-                        if (batch.Failure > 0 && batch.Success == 0) { await dispatchGate.WaitAsync(token); try { stopped[batch.Task] = true; } finally { dispatchGate.Release(); } await using var db = factory.Open(); await db.Put($"model:{configHash}:{batch.Task}:not_before", Clock.Now.AddMinutes(30).ToString("O"), token); }
+                        if (batch.Failure > batch.TokenFailure && batch.Success == 0) { await dispatchGate.WaitAsync(token); try { stopped[batch.Task] = true; } finally { dispatchGate.Release(); } await using var db = factory.Open(); await db.Put($"model:{configHash}:{batch.Task}:not_before", Clock.Now.AddMinutes(30).ToString("O"), token); }
                         progress?.Invoke($"batch #{batch.Id} {batch.Platform}/{batch.Task}: {counts}");
                     }
                 }
@@ -240,7 +241,7 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
         {
         await using (var db = factory.Open()) foreach (var platform in platforms)
         {
-            counts.Stage(platform, "judge").Remaining = await db.Posts.CountAsync(p => p.Platform == platform && (!p.Hidden || p.HiddenBy == "llm") && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct);
+            counts.Stage(platform, "judge").Remaining = await db.Posts.CountAsync(p => p.Platform == platform && (!p.Hidden || p.HiddenBy == "llm") && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision || p.LlmTokenLimit != null), ct);
             counts.Stage(platform, "summary").Remaining = await db.Posts.CountAsync(p => p.Platform == platform && !p.Hidden && (p.Summary == null || p.SummaryContentRevision != p.ContentRevision), ct);
             counts.Stage(platform, "raw").Remaining = await db.RawSnapshots.CountAsync(r => r.Platform == platform && !r.Deleted && !r.Parsed, ct);
             counts.Stage(platform, "video").Remaining = await db.Media.Join(db.Posts.Where(p => p.Platform == platform), m => m.PostId, p => p.Id, (m, p) => m).CountAsync(m => m.IsCurrent && m.Kind == "video" && m.Path == null && m.PrunedAt == null, ct);

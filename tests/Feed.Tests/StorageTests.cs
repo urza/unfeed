@@ -44,11 +44,11 @@ public sealed class StorageTests
         var ingest = new Ingest(i.Paths, i.Factory, new(i.Paths, new HttpClient())); await ingest.File("facebook", file, snapshot, true, default);
         await using var db = i.Factory.Open(); var post = await db.Posts.SingleAsync();
         Assert.Equal("Synthetic updated their cover photo.", post.StoryTitle); Assert.Equal("Caption", post.Text);
-        post.CategoriesJson = "[]"; post.VerdictContentRevision = post.ContentRevision; await db.SaveChangesAsync();
+        post.CategoriesJson = "[]"; post.VerdictContentRevision = post.ContentRevision; post.LlmTokenLimit = 8000; await db.SaveChangesAsync();
         Assert.Equal(0, (await ingest.File("facebook", file, snapshot, true, default)).Revised);
         await File.WriteAllTextAsync(file, raw.Replace("cover photo", "profile picture"));
         Assert.Equal(1, (await ingest.File("facebook", file, snapshot, true, default)).Revised);
-        await db.Entry(post).ReloadAsync(); Assert.False(post.Judged); Assert.Equal("Synthetic updated their profile picture.", post.StoryTitle);
+        await db.Entry(post).ReloadAsync(); Assert.False(post.Judged); Assert.Null(post.LlmTokenLimit); Assert.Equal("Synthetic updated their profile picture.", post.StoryTitle);
     }
     [Fact] public void CarouselChildrenAreExcludedEverywhere()
     {

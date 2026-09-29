@@ -20,7 +20,7 @@ public static class IdentityStore
             foreach (var duplicate in authors.Where(a => a != author))
             {
                 var posts = await db.Posts.Where(p => p.AuthorId == duplicate.Id).ToListAsync(ct);
-                foreach (var post in posts) { post.AuthorId = author.Id; post.ContentRevision++; post.VisibilityRevision++; post.LlmAttemptedAt = post.SummaryAttemptedAt = null; post.LlmError = post.SummaryError = null; post.LlmFailures = post.SummaryFailures = 0; movedPosts.Add(post); }
+                foreach (var post in posts) { post.AuthorId = author.Id; post.ContentRevision++; post.VisibilityRevision++; post.LlmAttemptedAt = post.SummaryAttemptedAt = null; post.LlmError = post.SummaryError = null; post.LlmFailures = post.SummaryFailures = 0; post.LlmTokenLimit = null; movedPosts.Add(post); }
                 await db.Feedback.Where(p => p.AuthorId == duplicate.Id).ExecuteUpdateAsync(s => s.SetProperty(p => p.AuthorId, author.Id), ct);
                 await db.TimelineVisits.Where(p => p.AuthorId == duplicate.Id).ExecuteUpdateAsync(s => s.SetProperty(p => p.AuthorId, author.Id), ct);
                 await db.AuthorKeys.Where(p => p.AuthorId == duplicate.Id).ExecuteUpdateAsync(s => s.SetProperty(p => p.AuthorId, author.Id), ct);
