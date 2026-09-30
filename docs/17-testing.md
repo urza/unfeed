@@ -149,3 +149,10 @@ Recovery hardening regressions cover link-only shares, unavailable attachments w
 
 
 Management verification uses synthetic people and disposable files: stale/manual edits must not be overwritten; invalid schedules must not write; unrelated settings and credentials must survive but never render; ambiguous name-rule removal must retain other current matches; mute/unmute must reapply stored visibility without bypassing a valid low score; local removal preserves posts and skips pending profile targets. Pin request uniqueness, browser ownership, pause/re-login behavior and interrupted-refilter recovery. Browser checks cover antiforgery rejection, editing with/without JavaScript, search state, no timed refresh, readable desktop/phone layouts and the existing toolbar. These do not prove live platform list completeness or login compatibility.
+
+
+## Video context regression and bounded live verification
+
+Synthetic checks cover supported destination selection versus arbitrary links, current native-video identity, original-story precedence, and external links versus memory/GIF attachment URLs. Verify manual/automatic caption selection, language preferences, no silent translation, normalization, truncation, response caps, malformed/playlist/redirected-video rejection, cancellation and cookie cleanup, cache keys/expiry, missing-tool fail-open behavior, and exact enriched-request provenance. A caption failure must preserve usable metadata; an enrichment failure alone must not hide a post. Disabled enrichment must make no extractor calls.
+
+For live checks, use a few already-captured video destinations and record metadata/caption availability privately. Missing captions or an extractor failure must be reported as such, not treated as verified caption support. Audit parser changes against saved captures without overwriting production history. Review both expected exclusions and legitimate personal updates containing links in an isolated instance before a bounded production repair. Synthetic tests and sampled verdicts cannot prove universal platform compatibility or model accuracy.

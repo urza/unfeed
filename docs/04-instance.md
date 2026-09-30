@@ -21,6 +21,7 @@ data/
   preferences.md         rules and the policy the model reads (4.4)
   feed.db                the SQLite database, with its -wal and -shm files (chapter 5)
   profiles/<platform>/   the Chromium profile, plus cookies.txt exported for yt-dlp
+  video-context/         private bounded metadata/caption cache; never served as media
   media/<platform>/<post id>/NN.ext      post images and videos (chapter 7)
   media/avatars/<platform>/<author id>.ext
   raw/<platform>/<run dir>/NNN.json|jsonl  raw captures and timeline screenshots (chapter 6)
@@ -67,11 +68,22 @@ The complete key list. Every key is optional. Defaults are in the table and are 
 | `hidden_video_retention_days` | int | 1 | the video of a hidden post is deleted after this shorter grace. 0 means never. |
 | `video_retention_days` | int | 180 | videos of posts older than this, by post date, are deleted. 0 means never. |
 | `max_video_mb` | int | 50 | a video above this size is not downloaded. 0 means no cap. |
+| `video_context` | object | | optional metadata and available captions before judgment, see below |
 | `ui` | object | | see below |
 | `backgrounds` | object | | see below |
 | `web` | object | | see below |
 | `browser` | object | | see below |
 | `likeback` | object | | see below |
+
+### `video_context`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | false | Enrich eligible video judgments through yt-dlp metadata and one available caption track. No video/audio download or transcription. |
+| `timeout_seconds` | int | 30 | Total extraction plus caption-fetch budget per source; 5–120 seconds. |
+| `caption_languages` | list of strings | `["en"]` | 1–10 language codes, in preference order (for example `["cs", "sk", "en"]`). Manual tracks are preferred to automatic tracks. Regional variants match their base language; no automatic translation is requested. |
+
+This is independent of `llm.vision`: captions are text, including with `rescore --text-only`. It runs only for posts selected for judgment, after deterministic filters. Enabling it does not rejudge history; use an explicit bounded `rescore` to check existing posts. Chapter [7.8](07-media.md#78-video-metadata-and-available-captions) defines support, bounds and cache behavior. Configuration edits currently use the instance file; the Manage processing form preserves this block.
 
 ### `platforms.<platform>`
 

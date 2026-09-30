@@ -10,6 +10,7 @@ The [numbered specification](docs/README.md) defines behavior and compatibility.
 | Browser sessions, platform gates and capture | [BrowserSession.cs](src/Feed.Cli/BrowserSession.cs), [Site.cs](src/Feed.Cli/Site.cs), [Capture.cs](src/Feed.Cli/Capture.cs) |
 | Payload parsing, ingest and coverage recovery | [PayloadParser.cs](src/Feed.Core/Infrastructure/PayloadParser.cs), [Ingest.cs](src/Feed.Core/Application/Ingest.cs), [TimelineCoverage.cs](src/Feed.Core/Application/TimelineCoverage.cs) |
 | Model preparation, bounded dispatch and result application | [Processing.cs](src/Feed.Core/Application/Processing.cs), [Prompts.cs](src/Feed.Core/Application/Prompts.cs), [ModelClient.cs](src/Feed.Core/Infrastructure/ModelClient.cs) |
+| Video metadata and available-caption context | [VideoContext.cs](src/Feed.Core/Infrastructure/VideoContext.cs), [video contract](docs/07-media.md#78-video-metadata-and-available-captions) |
 | Media and retention | [MediaFiles.cs](src/Feed.Core/Infrastructure/MediaFiles.cs), [Maintenance.cs](src/Feed.Core/Application/Maintenance.cs) |
 | Durable requests, locks and scheduling | [Actions.cs](src/Feed.Core/Application/Actions.cs), [Ownership.cs](src/Feed.Core/Infrastructure/Ownership.cs), [Scheduler.cs](src/Feed.Web/Scheduler.cs) |
 | Feed and diagnostics projections | [Queries](src/Feed.Core/Queries), [Razor components](src/Feed.Web/Components) |
@@ -28,6 +29,8 @@ The [numbered specification](docs/README.md) defines behavior and compatibility.
 - ASP.NET serves static Razor HTML and versioned CSS/ES modules. JavaScript enhances layout and actions; core reading, navigation and forms work without it.
 
 ## Current limitations
+
+- Video judgments use captions, preview images and optional extracted metadata/available subtitles; they do not inspect frames, listen to audio or transcribe speech. Extraction can fail and transcript input is bounded. Summaries do not consume this enrichment. See [current behavior](docs/07-media.md#78-video-metadata-and-available-captions) and [possible future upgrades](docs/VIDEO-UPGRADES.md).
 
 - Platform markup and private response formats can change. Sanitized fixtures protect known shapes; each deployment still needs live login/capture checks. A checkpoint stops browsing and may require the human.
 - Live audience imports are deliberately add-only: the completeness validator and guarded prune exist, but the adapters do not yet supply the full proof needed to authorize removals. Facebook imports friends, not followed nonfriend accounts/pages.

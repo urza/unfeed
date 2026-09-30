@@ -2,7 +2,7 @@
 
 You are here: the files on disk. Chapter 6 captured the posts and their media URLs. This chapter specifies which files are downloaded, where they live, when the video waits, and when files are deleted again. The rules limit retained media while preserving post records. They do not promise a fixed disk bound: visible images and metadata can grow with history.
 
-Source map: [MediaFiles.cs](../src/Feed.Core/Infrastructure/MediaFiles.cs) · [Maintenance.cs](../src/Feed.Core/Application/Maintenance.cs) · [MediaTests](../tests/Feed.Tests/MediaTests.cs).
+Source map: [MediaFiles.cs](../src/Feed.Core/Infrastructure/MediaFiles.cs) · [VideoContext.cs](../src/Feed.Core/Infrastructure/VideoContext.cs) · [Maintenance.cs](../src/Feed.Core/Application/Maintenance.cs) · [MediaTests](../tests/Feed.Tests/MediaTests.cs).
 
 ## 7.1 Why local files
 
@@ -29,7 +29,7 @@ At ingest, reconcile the parser manifest with current Media rows, including reco
 
 ## 7.4 Videos wait for the verdict
 
-The judge reads images only, so it loses nothing by the wait. Deterministic filters run in the insert transaction. The judge normally follows a few minutes after capture, inside the CDN URL's life; delayed recovery may encounter an expired URL and follows the ordinary download failure rules.
+The judge reads text and images, plus optional metadata and available captions (7.8). It does not inspect the video frames or audio. Deferring full video downloads saves bandwidth but leaves that content outside the verdict. Deterministic filters run in the insert transaction. The judge normally follows a few minutes after capture, inside the CDN URL's life; delayed recovery may encounter an expired URL and follows the ordinary download failure rules.
 
 - One video per post: the first progressive video URL. When none exists but the post carries a video hint, the source is the permalink, to be fetched with `yt-dlp`.
 - The slot number is the number of images taken (the image count, capped at the image limit) plus one. So the video may sit at slot 9 on Facebook and 11 on Instagram.
@@ -90,3 +90,19 @@ A value of 0 turns a policy off.
 **The disk line.** The daily job measures `media/` (with the video share), `raw/` and the free space of the data drive, and stores one line in `Kv`: `media X GB (videos Y GB) · raw Z GB · free W GB`. The status command and the debug page print that line, so neither walks thousands of files per request.
 
 Retention never deletes posts, authors, media rows or runs.
+
+
+## 7.8 Video metadata and available captions
+
+With `video_context.enabled`, a judgment may fetch external context before its model call. This is separate from retained playback files and never downloads a video or audio track. Native Facebook/Instagram posts need a current video media row and a permalink on their own platform. Recognized shared destinations include YouTube watch/shorts/embed/live links, Vimeo numeric video links, Facebook video/reel/watch/share-video links and Instagram reel links. A thumbnail alone, channel or playlist link, arbitrary article link, or URL mentioned only in a caption does not initiate extraction. At most one source is enriched: a recognized shared destination takes precedence over the native post.
+
+- Use yt-dlp with local configuration and tool caching disabled, no playlist traversal, no media download and no retries. Its stdout is capped at 4 MB and stderr at 64 KB. Require a single-video response; reject playlist/multi-video output and a recognizable changed video identity in the returned webpage URL. This check cannot prove identity for every URL shape.
+- Preserve title (500 characters), description (3000), uploader (200), nonnegative duration and at most 12 chapter titles (160 each) with start times. These are creator-supplied claims, not verified facts. Link, relation (`shared` or `post`) and availability accompany the context. Unknown fields, stream URLs, headers and raw extractor JSON do not enter the model request.
+- Select at most one manual caption track in the configured languages; only if none fits, select an automatic track. YouTube's original automatic track is preferred to its advertised machine translations, and no translation is requested. Read JSON3, WebVTT or SRT, strip formatting and collapse repeated rolling cues. Keep at most 8000 characters from the beginning and explicitly mark truncation, language and automatic origin. This is available-caption retrieval, not speech recognition. Unsupported languages/formats, missing captions and failed downloads provide no transcript.
+- Caption requests use HTTPS without browser credentials or extractor-supplied headers and do not follow redirects. Cap the caption response at 1 MB. Metadata and caption fetching share the configured total timeout, with at most two concurrent source fetches per processing instance. They occupy judgment workers while preparing evidence; image/text-only posts do not perform this fetch. Cancellation kills and observes the extractor process tree and both pipe readers.
+- Native platform extraction may use a private temporary snapshot of that platform's already-exported cookies, removed in cleanup; YouTube/Vimeo receive no Facebook/Instagram cookies. No browser profile or login session is opened. The feature makes network requests to the selected video platform and its caption endpoint.
+- A retrieval failure is explicit incomplete context, never a deterministic hide or a failed model call. Caption failure keeps usable metadata. The model still applies the owner's policy to the evidence it has; lack of evidence is not proof of a personal update. Recheck content/visibility before dispatch and applying the result. The exact enriched model request is hashed; configuration and context-format version enter provenance.
+
+Store normalized results only under private `video-context/`, outside public media routes. Cache identity includes source URL, relation, cookie platform, language preferences and context-format version. Successful results, including an authoritative absence of a supported caption track, are cached for seven days. Extraction or caption failures are cached for thirty minutes. Keep at most 256 result files, evicting oldest written files; unreadable/oversized cache entries are ignored. Cache write failure must not prevent judgment. Cache expiry alone does not schedule a new verdict: an explicitly selected rescore may fetch again after expiry. Neither enabling this feature nor deploying its prompt change silently rescores old valid judgments.
+
+**Current limitation:** the judge still does not watch videos or listen to audio. Metadata can be misleading; captions may be incomplete, automatically generated or unavailable. Private/expired links, platform challenges, missing tools and extractor changes can prevent enrichment. Cached context is a bounded snapshot, not a promise of current or complete video contents. Summaries continue to use stored post/shared text; enrichment currently affects judgments only. Future sampled frames, transcription and temporal video models are described in [possible video upgrades](VIDEO-UPGRADES.md).

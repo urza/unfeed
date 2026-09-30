@@ -25,6 +25,7 @@ public sealed record FeedConfig
     public int HiddenVideoRetentionDays { get; init; } = 1;
     public int VideoRetentionDays { get; init; } = 180;
     public int MaxVideoMb { get; init; } = 50;
+    public VideoContextConfig VideoContext { get; init; } = new();
     public UiConfig Ui { get; init; } = new();
     public BackgroundConfig Backgrounds { get; init; } = new();
     public WebConfig Web { get; init; } = new();
@@ -77,6 +78,12 @@ public sealed record LlmConfig
     public int TimeoutSeconds { get; init; } = 180;
     public int Batch { get; init; } = 20;
     public int Parallel { get; init; } = 1;
+}
+public sealed record VideoContextConfig
+{
+    public bool Enabled { get; init; }
+    public int TimeoutSeconds { get; init; } = 30;
+    public ImmutableArray<string> CaptionLanguages { get; init; } = ["en"];
 }
 public sealed record FilterConfig
 {
@@ -149,6 +156,8 @@ public static class InstanceValidation
         Require(new[] { c.RawRetentionDays, c.HiddenMediaRetentionDays, c.HiddenVideoRetentionDays, c.VideoRetentionDays, c.MaxVideoMb, c.Scheduler.JitterMinutes, c.Scheduler.ManualCooldownMinutes, c.Scheduler.RunRequestTtlMinutes, c.Ui.Stack.MinPosts, c.Ui.Stack.WindowDays }.All(n => n >= 0), "Retention, size, cooldown and stack values cannot be negative");
         Require(c.Llm.TokenRetryDelayMinutes >= 1 && c.Llm.TokenRetryBudgets.All(n => n > 0) && c.Llm.TokenRetryBudgets.SequenceEqual(c.Llm.TokenRetryBudgets.Distinct().Order()), "Token retry budgets must be positive and strictly increasing; delay must be at least 1 minute");
         Require(c.Web.Port is >= 0 and <= 65535, "Invalid web port");
+        Require(c.VideoContext.TimeoutSeconds is >= 5 and <= 120 && c.VideoContext.CaptionLanguages.Length is >= 1 and <= 10
+            && c.VideoContext.CaptionLanguages.All(l => Regex.IsMatch(l, "^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$")), "Invalid video_context timeout or caption_languages");
         Require(double.IsFinite(c.Backgrounds.BlurPx) && c.Backgrounds.BlurPx >= 0 && double.IsFinite(c.Likeback.MinDelaySeconds) && double.IsFinite(c.Likeback.MaxDelaySeconds) && c.Likeback.MinDelaySeconds >= 0 && c.Likeback.MaxDelaySeconds >= c.Likeback.MinDelaySeconds, "Invalid blur or delay bounds");
         Choice(c.Ui.LogLevel, "trace", "debug", "info", "warn", "error");
         Choice(c.Filters.Audience, "friends_and_followed", "all_captured"); Choice(c.Filters.FriendTagException, "none", "with", "any");

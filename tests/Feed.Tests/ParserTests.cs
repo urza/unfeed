@@ -7,6 +7,63 @@ using Xunit;
 namespace Feed.Tests;
 public sealed class ParserTests
 {
+    [Theory]
+    [InlineData("Story", "GenericAttachmentMedia")]
+    [InlineData("GoodwillThrowbackCard", "GenericAttachmentMedia")]
+    [InlineData("Photo", "Photo")]
+    [InlineData(null, "Video")]
+    public void FacebookNativeMemoryAndAnimatedMediaLinksAreNotExternalShares(string? target, string mediaType)
+    {
+        var raw = JsonSerializer.Serialize(new { __typename = "Story", post_id = "personal", creation_time = 1700000000,
+            message = new { text = "Our family outing" }, attachments = new[] { new { styles = new { attachment = new {
+                target = target is null ? null : new { __typename = target }, media = new { __typename = mediaType },
+                title_with_entities = new { text = "A memory or animated image" },
+                story_attachment_link_renderer = new { attachment = new { web_link = new { url = "https://example.test/item" } } }
+            } } } } });
+        var post = Assert.Single(PayloadParser.Parse("facebook", raw).Posts).Post;
+        Assert.Equal("Our family outing", post.Text); Assert.Null(post.SharedText); Assert.Null(post.SharedUrl);
+    }
+    [Fact]
+    public void FacebookAuthoredSharedStoryTakesPrecedenceOverLinkPreview()
+    {
+        const string raw = """{"__typename":"Story","post_id":"share","creation_time":1700000000,"message":{"text":"My caption"},"attached_story":{"actors":[{"name":"Original Person"}],"message":{"text":"My own family news"},"wwwURL":"https://facebook.com/original/posts/1"},"attachments":[{"styles":{"attachment":{"title_with_entities":{"text":"Unrelated preview"},"story_attachment_link_renderer":{"attachment":{"web_link":{"url":"https://example.test/article"}}}}}}]}""";
+        var post = Assert.Single(PayloadParser.Parse("facebook", raw).Posts).Post;
+        Assert.Equal("My caption", post.Text); Assert.Equal("Original Person", post.SharedAuthor);
+        Assert.Equal("My own family news", post.SharedText); Assert.Equal("https://facebook.com/original/posts/1", post.SharedUrl);
+    }
+    [Theory]
+    [InlineData("https://video.example.test/watch/clip", true)]
+    [InlineData("https://video.example.test/watch/clip", false)]
+    [InlineData("javascript:alert(1)", true)]
+    public void FacebookWebLinkWithoutTargetMarkerPreservesOnlyValidSharedContext(string url, bool title)
+    {
+        var attachment = new Dictionary<string, object?>
+        {
+            ["media"] = new { __typename = "GenericAttachmentMedia", large_share_image = new { uri = "https://cdn.example.test/preview.jpg", width = 500, height = 260 } },
+            ["story_attachment_link_renderer"] = new { attachment = new { web_link = new { url } } }
+        };
+        if (title) attachment["title_with_entities"] = new { text = "Synthetic video title" };
+        var raw = JsonSerializer.Serialize(new { __typename = "Story", post_id = "synthetic-link", creation_time = 1700000000,
+            message = new { text = "Wow!" }, actors = new[] { new { id = "501", name = "Synthetic Person" } },
+            attachments = new[] { new { styles = new { attachment } } } });
+        var parsed = PayloadParser.Parse("facebook", raw);
+        Assert.Empty(parsed.Diagnostics);
+        var observation = Assert.Single(parsed.Posts);
+        var post = observation.Post;
+        Assert.Equal("Wow!", post.Text);
+        Assert.Equal("image", Assert.Single(observation.Media).Kind);
+        var valid = url.StartsWith("https://", StringComparison.Ordinal);
+        Assert.Equal(valid ? url : null, post.SharedUrl);
+        Assert.Equal(valid && title ? "Synthetic video title" : null, post.SharedText);
+        Assert.Null(post.SharedAuthor);
+        using var prompt = JsonDocument.Parse(Prompts.PostJson(post, new(null, [], new(new(), new(), Preferences.Parse(""))), [], []));
+        Assert.Equal(valid, prompt.RootElement.TryGetProperty("shared", out var shared));
+        if (valid)
+        {
+            Assert.Equal(url, shared.GetProperty("url").GetString());
+            Assert.Equal("video.example.test", Assert.Single(prompt.RootElement.GetProperty("link_domains").EnumerateArray()).GetString());
+        }
+    }
     [Theory] [InlineData("cover photo")] [InlineData("profile picture")]
     public void FacebookStoryContextIsSeparateFromCaptionAndSharedContext(string update)
     {

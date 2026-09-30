@@ -12,17 +12,19 @@ public sealed class WorkCounts
 {
     public ConcurrentDictionary<string, StageCounts> Stages { get; } = new();
     public StageCounts Stage(string platform, string task) => Stages.GetOrAdd(platform + "/" + task, _ => new());
-    public int Selected; public int Completed; public int Failed; public int Superseded; public int Undispatched; public int Active; public int Prepared; public int Unapplied;
-    public override string ToString() => $"selected={Selected}, completed={Completed}, failed={Failed}, superseded={Superseded}, selected-but-not-dispatched={Undispatched}, active={Active}, prepared={Prepared}, unapplied={Unapplied}";
+    public int Selected; public int Completed; public int Failed; public int Superseded; public int Undispatched; public int Active; public int Prepared; public int Unapplied; public int Enriching;
+    public override string ToString() => $"selected={Selected}, completed={Completed}, failed={Failed}, superseded={Superseded}, selected-but-not-dispatched={Undispatched}, active={Active}, enriching={Enriching}, prepared={Prepared}, unapplied={Unapplied}";
 }
-public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClient model, MediaFiles media, Ingest ingest)
+public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClient model, MediaFiles media, Ingest ingest, IVideoContextProvider? videoContext = null)
 {
     sealed record Batch(int Id, string Platform, string Task, int Count) { public int Settled; public int Success; public int Failure; public int TokenFailure; }
-    sealed record Prepared(Post Post, RuleContext Rules, string Task, Batch Batch, object Messages, string Hash, bool Inline, int MaxTokens);
+    sealed record Prepared(Post Post, RuleContext Rules, string Task, Batch Batch, object Messages, string Hash, bool Inline, int MaxTokens, VideoSource? VideoSource = null);
     sealed record Result(Prepared Work, object? Value, string? Endpoint, string? Error, bool Sent, int? TokenLimit = null);
     public async Task<WorkCounts> Run(InstanceSnapshot instance, WorkScope scope, Action<string>? progress, CancellationToken ct, Func<WorkCounts, Task>? report = null)
     {
         using var ownership = ResourceLock.Try(paths, "processing") ?? throw new ResourceBusyException("processing busy");
+        using var ownedVideoContext = videoContext is null ? new VideoContextProvider(paths) : null;
+        var enrichment = videoContext ?? ownedVideoContext!;
         var counts = new WorkCounts();
         await using var reporting = new WorkReporter(counts, report);
         string[] platforms = scope.Platform == "all" ? Platforms.All.Where(instance.Config.Enabled).ToArray() : [scope.Platform];
@@ -143,7 +145,8 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                             }
                             var maxTokens = turn.Task == "judge" ? scope.Kind == "process" ? JudgmentRetry.Budget(p, instance.Config.Llm)!.Value : instance.Config.Llm.MaxTokens : instance.Config.Llm.SummaryMaxTokens;
                             var hash = Prompts.Sha(JsonSerializer.Serialize(ModelClient.RequestBody(instance.Config.Llm, messages, maxTokens, turn.Task == "summary" ? instance.Config.Llm.SummaryEnableThinking : null)));
-                            var prepared = new Prepared(p, rules, turn.Task, batch, messages, hash, inline, maxTokens);
+                            var prepared = new Prepared(p, rules, turn.Task, batch, messages, hash, inline, maxTokens,
+                                turn.Task == "judge" && instance.Config.VideoContext.Enabled ? VideoContextProvider.Source(p, files) : null);
                             if (inline) { Interlocked.Increment(ref counts.Unapplied); await results.Writer.WriteAsync(new(prepared, "", null, null, false), token); }
                             else { Interlocked.Increment(ref counts.Prepared); await inputs.Writer.WriteAsync(prepared, token); }
                         }
@@ -167,8 +170,9 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
         {
             try
             {
-                await foreach (var work in inputs.Reader.ReadAllAsync(token))
+                await foreach (var initial in inputs.Reader.ReadAllAsync(token))
                 {
+                    var work = initial;
                     Interlocked.Decrement(ref counts.Prepared);
                     bool authorized = false, closed;
                     await dispatchGate.WaitAsync(token);
@@ -176,14 +180,32 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                     finally { dispatchGate.Release(); }
                     if (closed) { Interlocked.Increment(ref counts.Undispatched); Interlocked.Increment(ref counts.Stage(work.Post.Platform, work.Task).Undispatched); continue; }
                     if (!authorized) { Interlocked.Increment(ref counts.Unapplied); await results.Writer.WriteAsync(new(work, null, null, null, false), token); continue; }
-                    Result result; Interlocked.Increment(ref counts.Active);
+                    Result result; bool active = false;
                     try
                     {
+                        if (work.VideoSource is { } source)
+                        {
+                            VideoContext context; Interlocked.Increment(ref counts.Enriching);
+                            try { context = await enrichment.Get(source, instance.Config.VideoContext, token); }
+                            finally { Interlocked.Decrement(ref counts.Enriching); }
+                            var messages = JsonSerializer.SerializeToNode(work.Messages)!;
+                            var textPart = messages[1]!["content"]![0]!;
+                            textPart["text"] = textPart["text"]!.GetValue<string>() + "\n\nVideo context:\n" + JsonSerializer.Serialize(context, InstanceValidation.Json);
+                            work = work with { Messages = messages, Hash = Prompts.Sha(JsonSerializer.Serialize(ModelClient.RequestBody(instance.Config.Llm, messages, work.MaxTokens))) };
+                            progress?.Invoke($"post #{work.Post.Id} video context: {context.Status}; captions {context.Captions?.Status ?? "not_available"}; error {context.Error ?? context.Captions?.Error ?? "none"}");
+                            // Metadata retrieval can take time. Recheck eligibility before spending a model call.
+                            await dispatchGate.WaitAsync(token);
+                            try { closed = stopped.ContainsKey(work.Task); authorized = !closed && await Stamp(work, token); }
+                            finally { dispatchGate.Release(); }
+                            if (closed) { Interlocked.Increment(ref counts.Undispatched); Interlocked.Increment(ref counts.Stage(work.Post.Platform, work.Task).Undispatched); continue; }
+                            if (!authorized) { Interlocked.Increment(ref counts.Unapplied); await results.Writer.WriteAsync(new(work, null, null, null, false), token); continue; }
+                        }
+                        Interlocked.Increment(ref counts.Active); active = true;
                         if (work.Task == "judge") { var response = await model.Call(instance.Config.Llm, work.Messages, work.MaxTokens, s => Prompts.ParseVerdict(s, instance.Taxonomy), token); result = new(work, response.Value, response.Endpoint, null, true); }
                         else { var response = await model.Call(instance.Config.Llm, work.Messages, work.MaxTokens, s => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)), token, instance.Config.Llm.SummaryEnableThinking); result = new(work, response.Value, response.Endpoint, null, true); }
                     }
                     catch (Exception e) when (e is not OperationCanceledException || !token.IsCancellationRequested) { result = new(work, null, null, e.Message, true, (e as TokenBudgetException)?.Budget); }
-                    finally { Interlocked.Decrement(ref counts.Active); }
+                    finally { if (active) Interlocked.Decrement(ref counts.Active); }
                     Interlocked.Increment(ref counts.Unapplied); await results.Writer.WriteAsync(result, token);
                 }
             }

@@ -288,7 +288,7 @@ Status distinguishes “no new ids observed”, “explicit empty response”, �
 
 ## 6.17 Recovery without an operator
 
-A link-only Facebook share may contain no caption or image. Read its `ExternalUrl` attachment's article title, source and direct web link into the shared-content fields, separately from the friend's own caption. An unavailable attachment may coexist with profile metadata; it remains recognized unavailable content, not an empty timeline.
+A link-only Facebook share may contain no caption or image. Read its attachment's article title, source and direct web link into the shared-content fields, separately from the friend's own caption. Recognize both titled `ExternalUrl` attachments and attachments with a valid HTTP(S) `story_attachment_link_renderer.attachment.web_link.url`, even when the target marker or title is absent. This fallback requires an absent/`ExternalUrl` target and absent/`GenericAttachmentMedia` media type: native story/memory/photo targets and animated/video media links are not newly classified as external shares. Captions and preview images do not change link-share recognition; an attached original authored story retains precedence. An unavailable attachment may coexist with profile metadata; it remains recognized unavailable content, not an empty timeline.
 
 GraphQL errors retain their message and field path. A strictly recognized `User.profile_tile_sections` response whose errors are confined to that same decorative subtree is a nonfatal stored warning, not failed post capture. Post/timeline errors and unknown shapes remain failures. No generic error suppression is permitted.
 

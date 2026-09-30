@@ -76,3 +76,11 @@ Implement platform status and queued actions, searchable people with close-frien
 ## Management navigation cleanup
 
 Consolidate feed entry points into a styled Manage button on desktop and phones. Share management navigation with a Backgrounds tab, move gallery forms to `/manage/backgrounds`, and preserve legacy gallery redirects. Complete: five focused browser cases pass, covering responsive controls, gallery uploads/pinning, legacy redirects and native management navigation. Debug/Release builds pass; updated specification regenerated. Read-only desktop/phone deployment checks pass; instance evidence remains private.
+
+## Shared-link context repair
+
+Preserve direct web-link attachment metadata when the optional external-target marker is absent. Add synthetic parser-to-prompt regression coverage, verify offline replay and targeted judgment, then assess video enrichment options. Complete: 169 non-browser tests pass; Release build and regenerated specification pass. Bounded live replay restores missing link context and targeted judgment applies the existing exclusion. Video enrichment assessment favors metadata and available captions first, then bounded frame sampling; no enrichment behavior changed. Private operational evidence stays in the instance.
+
+## Video context and shared-link regression audit
+
+Add optional bounded metadata/caption enrichment before judgment, with private source-keyed caching, exact input provenance and fail-open retrieval. Verify source selection, caption attribution/truncation, cache/failure/cancellation behavior, and pipeline integration. Audit the shared-link parser against synthetic boundary cases and saved captures without bulk-changing historical visibility. Document current video limits and future frame/transcription/video-model options. Complete: 204 non-browser tests and Release CLI/Web builds pass; specification regenerated. Parser fallback now excludes native memory/GIF targets, and saved-capture comparison found no changes outside shared context. Isolated model checks cover permitted linked updates and an expected exclusion. Bounded live metadata/caption extraction and production judgment checks pass; failures preserve prior valid results. Current video limitations and optional future upgrades are documented. Private evidence and deployment state remain in the instance.

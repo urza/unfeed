@@ -10,7 +10,7 @@ public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyLi
 public static class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
-    public const int Version = 5;
+    public const int Version = 7;
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
     public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
@@ -223,12 +223,15 @@ public static class PayloadParser
         var caption = Get(n, "message") ?? Get(At(n, "comet_sections", "content", "story"), "message") ?? Get(n, "text");
         var p = new Post { Platform = "facebook", PlatformPostId = id, Text = caption, PostedAt = time, IsSponsored = sponsored, ObservedAuthorName = Get(actor, "name"), ObservedAuthorUrl = authorUrl, LikeRef = Get(At(n, "feedback"), "id", "targetID"), Permalink = Url(Get(n, "wwwURL", "permalink", "permalink_url", "url"), "facebook"), SharedAuthor = Get(Array(At(shared, "actors")).FirstOrDefault(), "name"), SharedText = Get(shared, "message"), SharedUrl = Url(Get(shared, "wwwURL", "permalink_url"), "facebook") };
         p.StoryTitle = Get(At(n, "comet_sections", "context_layout", "story", "comet_sections", "title", "story"), "title");
-        // A link-only share has no caption or photo. Its article title/source belong
+        // Link shares may have captions and preview images. Their title/source belong
         // to the shared block, never to the friend's own words.
         if (shared.ValueKind == JsonValueKind.Undefined)
         {
             var link = Array(At(n, "attachments")).Select(a => At(a, "styles", "attachment"))
-                .FirstOrDefault(a => Get(At(a, "target"), "__typename") == "ExternalUrl" && Get(a, "title_with_entities") is not null);
+                .FirstOrDefault(a => (Get(At(a, "target"), "__typename") == "ExternalUrl" && Get(a, "title_with_entities") is not null)
+                    || Get(At(a, "target"), "__typename") is null or "ExternalUrl"
+                        && Get(At(a, "media"), "__typename") is null or "GenericAttachmentMedia"
+                        && Url(Get(At(a, "story_attachment_link_renderer", "attachment", "web_link"), "url"), "facebook") is not null);
             p.SharedText = Get(link, "title_with_entities"); p.SharedAuthor = Get(link, "source");
             p.SharedUrl = Url(Get(At(link, "story_attachment_link_renderer", "attachment", "web_link"), "url"), "facebook");
         }
