@@ -10,7 +10,7 @@ public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyLi
 public static class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
-    public const int Version = 8;
+    public const int Version = 9;
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
     public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
@@ -38,12 +38,17 @@ public static class PayloadParser
         var posts = new Dictionary<string, Observation>(); var persons = new List<Person>(); var empty = false;
         foreach (var root in roots)
         {
-            var damaged = new List<JsonElement>();
+            var damaged = new List<JsonElement>(); var partial = new List<JsonElement>();
             foreach (var error in Array(At(root, "errors")))
             {
                 var path = string.Join('/', Array(At(error, "path")).Select(Text));
                 var detail = $"{platform}/GraphQL: {Get(error, "message") ?? "upstream error"}; path={path}";
                 if (NonPostError(platform, root, error)) warnings.Add(detail);
+                else if (platform == "instagram" && InstagramPartialError(root, error, out var media))
+                {
+                    warnings.Add(detail + "; partial metadata unavailable (including link context where reported); usable caption/author/media retained, existing stored post protected");
+                    partial.Add(media);
+                }
                 else { errors.Add(detail); damaged.Add(ErrorScope(platform, root, error)); }
             }
             var nodes = Walk(root).ToArray(); var children = nodes.SelectMany(x => Array(At(x.Node, "carousel_media"))).Select(Id).Where(s => s is not null).ToHashSet();
@@ -56,6 +61,7 @@ public static class PayloadParser
                 var observation = platform == "instagram" ? Instagram(n, parents, children) : Facebook(n, parents);
                 if (observation is not null)
                 {
+                    observation = observation with { IsPartial = partial.Any(scope => scope.Equals(n) || parents.Contains(scope)) };
                     // A Facebook wall can contain posts by somebody other than its
                     // owner. Attribute coverage through the enclosing profile response,
                     // without changing who authored the post or granting filter bypasses.
@@ -63,7 +69,7 @@ public static class PayloadParser
                         .Where(p => Get(p, "id") is not null && parents.Contains(At(p, "timeline_list_feed_units")))
                         .Select(p => Get(p, "id")!).ToArray() : observation.TimelineOwnerIds.ToArray();
                     if (posts.TryGetValue(observation.Post.PlatformPostId, out var existing))
-                        posts[observation.Post.PlatformPostId] = existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(owners).Distinct().ToArray() };
+                        posts[observation.Post.PlatformPostId] = (existing.IsPartial && !observation.IsPartial ? observation : existing) with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(owners).Distinct().ToArray() };
                     else posts.Add(observation.Post.PlatformPostId, observation with { TimelineOwnerIds = owners });
                 }
             }
@@ -122,6 +128,7 @@ public static class PayloadParser
             var media = At(edge, "node", "media");
             if (Get(media, "pk", "id") is not null && At(media, "user").ValueKind == JsonValueKind.Object) return true;
         }
+        if (platform == "instagram" && InstagramExploreBranchError(root, error)) return true;
         // Instagram also reports a place-icon failure through an internal query alias.
         // Only the observed single-explore-media shape is known: index zero belongs
         // to that branch, not necessarily to edge zero in the outer timeline.
@@ -143,6 +150,75 @@ public static class PayloadParser
             && path[1] == "edges" && int.TryParse(path[2], out var index) && index >= 0 && path[3] == "node" && path[4] == "location" && path[5] == "profile_pic_url"
             && Array(At(root, "data", path[0]! , "edges")).Skip(index).Any();
     }
+    static JsonElement Follow(JsonElement node, IEnumerable<string?> path)
+    {
+        foreach (var part in path)
+        {
+            if (node.ValueKind == JsonValueKind.Array && int.TryParse(part, out var index) && index >= 0 && index < node.GetArrayLength()) node = node[index];
+            else if (node.ValueKind == JsonValueKind.Object && part is not null) node = At(node, part);
+            else return default;
+        }
+        return node;
+    }
+    static bool InstagramMediaUsable(JsonElement media)
+    {
+        if (Get(media, "pk", "id") is null || Get(media, "code", "shortcode") is null
+            || Get(At(media, "user"), "pk", "id", "username") is null
+            || !(At(media, "caption").ValueKind == JsonValueKind.Null || At(media, "caption", "text").ValueKind == JsonValueKind.String)) return false;
+        static bool Asset(JsonElement item) => Uri.TryCreate(Image(item), UriKind.Absolute, out var image) && image.Scheme is "https" or "http"
+            || Array(At(item, "video_versions")).Any(v => Uri.TryCreate(Get(v, "url"), UriKind.Absolute, out var video) && video.Scheme is "https" or "http");
+        var slides = At(media, "carousel_media");
+        if (slides.ValueKind == JsonValueKind.Array && slides.GetArrayLength() > 0)
+            return int.TryParse(Get(media, "carousel_media_count"), out var count) && count == slides.GetArrayLength()
+                && Array(slides).All(s => Get(s, "pk", "id") is not null && Asset(s));
+        return (!int.TryParse(Get(media, "carousel_media_count"), out var expected) || expected == 0) && Asset(media);
+    }
+    static bool InstagramExploreBranchError(JsonElement root, JsonElement error)
+    {
+        var path = Array(At(error, "path")).Select(Text).ToArray();
+        if (path.Length < 5 || path[0] != "xdt_api__v1__feed__timeline__connection" || path[1] != "edges"
+            || !int.TryParse(path[2], out var index) || index < 0 || path[3] != "node"
+            || Follow(At(root, "data"), path).ValueKind != JsonValueKind.Null) return false;
+        var node = Follow(At(root, "data"), path.Take(4));
+        if (!InstagramMediaUsable(At(node, "explore_story", "media"))) return false;
+        return path.Length == 5 && path[4] is "media" or "ad" or "ad4ad_in_webfeed" or "end_of_feed_demarcator" or "stories_netego" or "suggested_users" or "bloks_netego" or "abra_icebreakers_in_feed_unit"
+            || path.Length == 6 && path[4] == "explore_story" && path[5] == "ad";
+    }
+    static bool InstagramPartialError(JsonElement root, JsonElement error, out JsonElement media)
+    {
+        media = default;
+        var path = Array(At(error, "path")).Select(Text).ToArray();
+        if (path.Length < 6 || path[0] != "xdt_api__v1__feed__timeline__connection" || path[1] != "edges"
+            || !int.TryParse(path[2], out var index) || index < 0 || path[3] != "node"
+            || Follow(At(root, "data"), path).ValueKind != JsonValueKind.Null) return false;
+        int start = path[4] == "media" ? 5 : path[4] == "explore_story" && path[5] == "media" ? 6 : 0;
+        if (start == 0 || path.Length <= start) return false;
+        media = Follow(At(root, "data"), path.Take(start));
+        if (!InstagramMediaUsable(media)) return false;
+        var rest = path.Skip(start).ToArray();
+        if (rest.Length == 1) return rest[0] is "ai_interactive_embodiment_attachment_style_info" or "ai_label_info" or "audience" or "brs_severity"
+            or "can_reshare" or "carousel_parent_id" or "follow_hashtag_info" or "headline" or "link" or "link_text" or "story_cta";
+        if (rest.Length == 3 && rest[0] == "carousel_media" && int.TryParse(rest[1], out var slide) && slide >= 0)
+            return rest[2] is "carousel_media" or "clips_metadata" or "code" or "headline" or "link" or "organic_tracking_token" or "story_cta" or "user";
+        if (rest.Length == 3 && rest[0] == "coauthor_producers" && int.TryParse(rest[1], out var coauthor) && coauthor >= 0)
+            return Get(Follow(media, rest.Take(2)), "pk", "id", "username") is not null && rest[2] is "aigm_account_label_info" or "is_unpublished" or "supervision_info";
+        return rest.Length == 5 && rest[0] == "usertags" && rest[1] == "in" && int.TryParse(rest[2], out var tag) && tag >= 0
+            && rest[3] == "user" && rest[4] == "aigm_account_label_info" && Get(Follow(media, rest.Take(4)), "pk", "id", "username") is not null;
+    }
+    static bool FacebookComposerWithPrivacy(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object || data.EnumerateObject().Any(p => p.Name is not ("viewer" or "privacy_selector"))) return false;
+        var viewer = At(data, "viewer"); var selector = At(data, "privacy_selector"); var composer = At(viewer, "feed_comet_composer");
+        return viewer.ValueKind == JsonValueKind.Object && selector.ValueKind == JsonValueKind.Object
+            && Get(At(viewer, "actor"), "id") is not null && At(composer, "sprouts").ValueKind == JsonValueKind.Array
+            && composer.EnumerateObject().All(p => p.Name is "sprouts" or "__isICometComposer" or "__typename" or "auxiliary_footer_buttons" or "footer_primary_buttons")
+            && viewer.EnumerateObject().All(p => p.Name is "actor" or "feed_comet_composer" or "eligible_promotions" or "has_outstanding_conflicts_for_privacy_merge"
+                or "privacy_merge_metadata" or "privacy_conflict_ui_to_display" or "privacy_merge_conflict_resolution_suggested_selected_option" or "format_merge_milestone_for_user")
+            && selector.EnumerateObject().All(p => p.Name is "privacy_scope_renderer" or "can_viewer_edit" or "privacy_write_id" or "show_quick_actions_menu")
+            && Get(At(selector, "privacy_scope_renderer"), "__typename") is not null
+            && At(selector, "privacy_scope_renderer", "privacy_row_input").ValueKind == JsonValueKind.Object
+            && At(selector, "privacy_scope_renderer", "scope").ValueKind == JsonValueKind.Object;
+    }
     static bool FacebookProfileTiles(JsonElement root)
     {
         var data = At(root, "data"); var node = At(data, "node");
@@ -158,7 +234,8 @@ public static class PayloadParser
         var data = At(root, "data");
         if (data.ValueKind != JsonValueKind.Object) return false;
         var viewer = At(data, "viewer");
-        if (At(viewer, "feed_comet_composer").ValueKind == JsonValueKind.Object && viewer.EnumerateObject().All(p => p.Name is "actor" or "feed_comet_composer")) return true;
+        if (FacebookComposerWithPrivacy(data)) return true;
+        if (data.EnumerateObject().All(p => p.Name == "viewer") && At(viewer, "feed_comet_composer").ValueKind == JsonValueKind.Object && viewer.EnumerateObject().All(p => p.Name is "actor" or "feed_comet_composer")) return true;
         if (Get(At(data, "node"), "__typename") is "GroupsYouShouldJoinFeedUnit" or "PaginatedPeopleYouMayKnowFeedUnit") return true;
         var node = At(data, "node");
         if (Get(node, "__typename") == "User" && At(node, "profile_tile_sections").ValueKind == JsonValueKind.Object && node.EnumerateObject().All(p => p.Name is "__typename" or "id" or "profile_tile_sections")) return true;

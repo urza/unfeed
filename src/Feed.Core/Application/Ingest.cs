@@ -67,8 +67,22 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
         await using (var db = factory.Open())
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
-            var author = await IdentityStore.Resolve(db, o.Post.Platform, new(o.AuthorKey, o.AuthorName, o.AuthorUrl), false, ct, instance);
             var p = await db.Posts.SingleOrDefaultAsync(p => p.Platform == o.Post.Platform && p.PlatformPostId == o.Post.PlatformPostId, ct); isNew = p is null;
+            if (p is not null)
+            {
+                var currentRef = p.LatestRawRef ?? p.RawRef;
+                bool preserve = o.IsPartial && (p.IngestReadyAt is not null || currentRef != raw);
+                if (!preserve && currentRef != raw)
+                {
+                    var incoming = await db.RawSnapshots.AsNoTracking().SingleAsync(r => r.Path == raw, ct);
+                    var current = currentRef is null ? null : await db.RawSnapshots.AsNoTracking().SingleOrDefaultAsync(r => r.Path == currentRef, ct);
+                    preserve = currentRef is not null ? current is null || incoming.CapturedAt <= current.CapturedAt : incoming.CapturedAt < p.CapturedAt;
+                }
+                if (preserve) return new(1, 0, 0, 0, 0);
+            }
+            // Check provenance before resolving identities: a skipped replay must
+            // not change author records, media, verdicts or post revisions either.
+            var author = await IdentityStore.Resolve(db, o.Post.Platform, new(o.AuthorKey, o.AuthorName, o.AuthorUrl), false, ct, instance);
             p ??= new() { Platform = o.Post.Platform, PlatformPostId = o.Post.PlatformPostId, RawRef = raw }; if (isNew) db.Add(p);
             originalHash = p.ContentHash; p.AuthorId = author?.Id;
             p.ObservedAuthorName = o.AuthorName; p.ObservedAuthorUrl = o.AuthorUrl; p.PostedAt = o.Post.PostedAt; p.Text = o.Post.Text; p.StoryTitle = o.Post.StoryTitle; p.Permalink = o.Post.Permalink; p.LikeRef = o.Post.LikeRef; p.IsSponsored = o.Post.IsSponsored; p.IsSuggested = o.Post.IsSuggested; p.IsReel = o.Post.IsReel; p.IsEvent = o.Post.IsEvent; p.SharedAuthor = o.Post.SharedAuthor; p.SharedText = o.Post.SharedText; p.SharedUrl = o.Post.SharedUrl; p.MemoryLabel = o.Post.MemoryLabel; p.MemoryText = o.Post.MemoryText; p.TagsJson = o.Post.TagsJson; p.LatestRawRef = raw; p.MediaManifestJson = JsonSerializer.Serialize(o.Media);

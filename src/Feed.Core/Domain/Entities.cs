@@ -87,5 +87,6 @@ public sealed record MediaSource(string Kind, string Url, string SourceKey);
 public sealed record Observation(Post Post, string? AuthorKey, string? AuthorName, string? AuthorUrl, IReadOnlyList<MediaSource> Media)
 {
     public IReadOnlyList<string> TimelineOwnerIds { get; init; } = [];
+    public bool IsPartial { get; init; }
 }
 public sealed record Person(string? Id, string? Name, string? Url, string? Avatar = null);

@@ -8,6 +8,14 @@ using Xunit;
 namespace Feed.Tests;
 public sealed class RecoveryPresentationTests
 {
+    [Fact] public void PartialMetadataNoticeExplainsMissingLinksAndStoredPostProtection()
+    {
+        var issue = new RecoveryIssue("instagram", "saved capture", "partial metadata unavailable", 0, null, null, "Recorded warning", true);
+        Assert.Equal("partial", RecoveryPresentation.Category(issue));
+        Assert.Equal("Some post metadata was unavailable", RecoveryPresentation.Title("partial"));
+        Assert.Contains("missing fields may include links", RecoveryPresentation.Explanation("partial"));
+        Assert.Contains("Existing stored posts were protected", RecoveryPresentation.Explanation("partial"));
+    }
     [Fact] public async Task RetryPauseExhaustionAndNoticesRemainDistinctAndCaptureAssociationIsExplicit()
     {
         await using var instance = new TestInstance(); await instance.Init();
