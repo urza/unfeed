@@ -10,7 +10,7 @@ public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyLi
 public static class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
-    public const int Version = 7;
+    public const int Version = 8;
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
     public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
@@ -121,6 +121,21 @@ public static class PayloadParser
             var edge = Array(At(root, "data", path[0]!, "edges")).Skip(edgeIndex).FirstOrDefault();
             var media = At(edge, "node", "media");
             if (Get(media, "pk", "id") is not null && At(media, "user").ValueKind == JsonValueKind.Object) return true;
+        }
+        // Instagram also reports a place-icon failure through an internal query alias.
+        // Only the observed single-explore-media shape is known: index zero belongs
+        // to that branch, not necessarily to edge zero in the outer timeline.
+        if (platform == "instagram" && path.Length == 5
+            && path[0] == "_on_Query_xdt_api__v1__feed__timeline__connection_edges_node_on_XDTFeedItem_on_XDTFeedItem_explore_story_media"
+            && path[1] == "0" && path[2] == "node" && path[3] == "location" && path[4] == "profile_pic_url")
+        {
+            var candidates = Array(At(root, "data", "xdt_api__v1__feed__timeline__connection", "edges"))
+                .Select(e => At(e, "node", "explore_story", "media")).Where(m => m.ValueKind == JsonValueKind.Object).ToArray();
+            if (candidates.Length != 1) return false;
+            var media = candidates[0];
+            return Get(media, "pk", "id") is not null && Get(media, "code", "shortcode") is not null
+                && Get(At(media, "user"), "pk", "id", "username") is not null
+                && At(media, "location", "profile_pic_url").ValueKind == JsonValueKind.Null;
         }
         // A place's icon is neither post media nor author/content. The exact observed
         // GraphQL path is required; errors on caption, user, images or edges still fail.
