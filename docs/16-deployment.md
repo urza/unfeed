@@ -127,20 +127,37 @@ Bring-up validates a complete small path before a large import: capture and cove
 
 ## 16.10 Docker deployment
 
-[Dockerfile](../Dockerfile) builds both executables with the pinned SDK and packages Chromium, display/media tools and the ASP.NET runtime. [compose.yaml](../compose.yaml) mounts `./data:/data`, uses an init process, sets a restart policy, reserves shared memory and binds feed/noVNC ports to host loopback.
+[Dockerfile](../Dockerfile) builds both executables with the pinned SDK and packages Chromium, display/media tools and the ASP.NET runtime. [compose.yaml](../compose.yaml) pulls `ghcr.io/urza/unfeed:latest` by default, mounts `./data:/data`, uses an init process, sets a restart policy, reserves shared memory and binds feed/noVNC ports to host loopback.
 
 ```bash
 mkdir -p data
 # Create the private instance files with scheduling and like-back disabled first.
-FEED_UID=$(id -u) FEED_GID=$(id -g) docker compose up -d --build
+export FEED_UID=$(id -u) FEED_GID=$(id -g)
+docker compose pull
+docker compose up -d
 docker compose exec feed dotnet Feed.Cli.dll init
 docker compose exec feed dotnet Feed.Cli.dll rules
 docker compose exec feed tools/novnc.sh
 docker compose exec feed dotnet Feed.Cli.dll login --platform facebook
 ```
 
+[Publish Docker image](../.github/workflows/docker-publish.yml) builds and pushes a Linux AMD64 image on every push to `main` in `urza/unfeed`; it can also be run manually from `main`. Successful builds publish `latest`, `main` and `sha-<full-commit-sha>` tags. The workflow uses the automatic `GITHUB_TOKEN` with `packages: write`; no personal access token or repository secret is needed. OCI labels link the package to the source repository and revision. ARM64 images are not currently published.
+
+After the first successful publish, the package owner must open the **unfeed package → Package settings → Change visibility → Public** to allow anonymous pulls. GitHub container packages initially default to private even for public repositories. If the package already exists, ensure this repository has Actions write access to it. Repository or organization policy must permit GitHub Actions to publish packages.
+
+For a fixed deployment version, set `FEED_IMAGE=ghcr.io/urza/unfeed:sha-<full-commit-sha>` (or use `ghcr.io/urza/unfeed@sha256:<digest>` for an immutable reference). Export it for all Compose commands, or put it in an ignored `.env` alongside `FEED_UID` and `FEED_GID`. To upgrade, back up the instance and settle active workers, then run `docker compose pull` and `docker compose up -d`. Pulling alone does not restart the container.
+
+To build locally instead of pulling a published image:
+
+```bash
+docker build -t feed-v3 .
+export FEED_IMAGE=feed-v3
+export FEED_UID=$(id -u) FEED_GID=$(id -g)
+docker compose up -d --pull never
+```
+
 The login command waits for the human in noVNC. Use the same container CLI prefix for friends, collect, process and status. The image sets `FEED_DATA=/data` and binds the application to port 8000 inside the container; Compose publishes host loopback ports 8000 and 6901 by default. For remote login, tunnel those ports or use authenticated private access. To avoid port conflicts, keep a deployment-specific Compose override under `data/`, then pass it with `-f compose.yaml -f data/compose.override.yaml` on each invocation.
 
 Chromium sandbox support depends on the host's user-namespace/security configuration. The default is on. If launch fails with `No usable sandbox`, either provide supported sandboxing or deliberately set `browser.no_sandbox` in the private instance after assessing that host. A container does not make this the same protection as Chromium's sandbox. Verify an actual headed launch; healthy web/noVNC routes alone do not prove browser support.
 
-Stop noVNC when login work is done and no browser worker needs its display: `docker compose exec feed tools/novnc.sh stop`. `docker compose down` stops the deployment without deleting bind-mounted instance files. Before an upgrade, back up the instance, settle workers and rebuild the image; do not run direct and container schedulers against the same data at once.
+Stop noVNC when login work is done and no browser worker needs its display: `docker compose exec feed tools/novnc.sh stop`. `docker compose down` stops the deployment without deleting bind-mounted instance files. Before an upgrade, back up the instance, settle workers and pull the chosen image (or rebuild locally); do not run direct and container schedulers against the same data at once.

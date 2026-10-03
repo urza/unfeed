@@ -1,6 +1,6 @@
 services:
   feed:
-    build: .
+    image: ${FEED_IMAGE:-ghcr.io/urza/unfeed:latest}
     init: true
     user: "${FEED_UID:-1000}:${FEED_GID:-1000}"
     environment:
