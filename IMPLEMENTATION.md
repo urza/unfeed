@@ -14,6 +14,7 @@ The [numbered specification](docs/README.md) defines behavior and compatibility.
 | Media and retention | [MediaFiles.cs](src/Feed.Core/Infrastructure/MediaFiles.cs), [Maintenance.cs](src/Feed.Core/Application/Maintenance.cs) |
 | Durable requests, locks and scheduling | [Actions.cs](src/Feed.Core/Application/Actions.cs), [Ownership.cs](src/Feed.Core/Infrastructure/Ownership.cs), [Scheduler.cs](src/Feed.Web/Scheduler.cs) |
 | Feed and diagnostics projections | [Queries](src/Feed.Core/Queries), [Razor components](src/Feed.Web/Components) |
+| Person pages and targeted collection | [People.cs](src/Feed.Web/People.cs), [PersonRoutes.cs](src/Feed.Web/PersonRoutes.cs), [PersonView.razor](src/Feed.Web/Components/PersonView.razor) |
 | HTTP routes and background images | [web Program.cs](src/Feed.Web/Program.cs), [Backgrounds.cs](src/Feed.Web/Backgrounds.cs) |
 | CLI and reaction sending | [CLI Program.cs](src/Feed.Cli/Program.cs), [LikeSender.cs](src/Feed.Cli/LikeSender.cs) |
 | Deployment and verification | [build.sh](build.sh), [Dockerfile](Dockerfile), [compose.yaml](compose.yaml), [tests](tests/Feed.Tests) |

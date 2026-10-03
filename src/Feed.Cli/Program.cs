@@ -98,7 +98,7 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
                 int aggregate = 0;
                 foreach (var p in platforms)
                 {
-                    run = await ledger.Start(a.Command, p, a.Command == "collect" ? mode : null, a.Get("trigger") ?? "manual", a.Number("request-id"), a.Get("claim-token"), ct); int exit = 0; string status = "ok";
+                    run = await ledger.Start(a.Command, p, a.Command == "collect" ? mode : null, a.Get("trigger") ?? "manual", a.Number("request-id"), a.Get("claim-token"), ct, person: a.Get("person")); int exit = 0; string status = "ok";
                     if (a.Command == "login") { await ledger.Phase(run.Id, "browser", ct); await capture.Login(p, s, ct); }
                     else if (a.Command == "like") { if (postId is { } id) { var error = await actions.QueueLike(id, s, true, ct); if (error is not null) throw new ArgumentException(error); } exit = await new LikeSender(paths, factory, capture).Send(p, s, postId, ct); status = exit == 75 ? "refused" : exit == 1 ? "error" : "ok"; }
                     else if (a.Command == "friends" && a.Flag("offline")) { var dirs = RawDirs(paths, p, true, a.Flag("all-dirs")); if (dirs.Length == 0) throw new IOException("no friends capture directories"); using var held = ResourceLock.Try(paths, "ingest-" + p) ?? throw new ResourceBusyException("ingest busy"); foreach (var dir in dirs) foreach (var file in Directory.EnumerateFiles(dir).Where(IsRaw).Order()) { var result = await ingest.File(p, file, s, true, ct); run.PostsFound += result.Found; } Console.WriteLine($"friends {p}: ok (imported={run.PostsFound}, complete=false, pruned=0; offline add-only)"); }

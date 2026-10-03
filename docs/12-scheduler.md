@@ -134,3 +134,9 @@ After manual requests and scheduled slots, and once that cycle has no pending/vi
 Processing due checks exclude raw snapshots blocked on the current parser version; an upgraded parser makes them eligible again subject to the existing item delay. Debug exposes blocked raws and nonfatal upstream warnings separately from timed retries.
 
 Judgment due-work selection shares the worker's token-retry predicate: respect `llm.token_retry_delay_minutes`, dispatch only when a larger permitted budget remains, and do not launch solely for exhausted token-retry rows. Debug and CLI reports use the same eligibility rules (9.9).
+
+## 12.11 Person collection requests
+
+The person-page action stores the resolved person id and canonical profile URL in the durable collect request. It shares the existing single active collect per platform constraint; another person's request or a general collection is never silently replaced. Dispatch supplies `--mode home --person <url> --scrolls 10`, visiting only that profile and skipping configured home/close-friend visits. A worker claim must match the stored person target, including null for general collections, before starting work. Recovery preserves the target.
+
+The action requires scheduling and the platform enabled, a usable stored profile and no re-login gate. Dispatch rechecks platform enablement and the usual re-login, browser ownership and cooldown gates. Invalid or incomplete person targets are refused, never widened into a home-feed collect. Person visits continue through stored posts to the scroll cap; only three consecutive steps without page movement, height growth or additional visit post ids stop early (`stalled`). Normal processing handles captured posts. The page reports queue/run state on reload; bounded collection cannot guarantee complete history.

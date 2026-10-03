@@ -1,0 +1,42 @@
+<div class="recovery-details">
+ <p>Outstanding recovery across stored history, not just the latest collection. Times use @Zone.Id; hover over a time for UTC.</p>
+ @foreach(var state in new[]{RecoveryDisposition.Attention, RecoveryDisposition.Paused, RecoveryDisposition.Automatic, RecoveryDisposition.Informational}) {
+  var rows = Issues.Where(i => i.Disposition == state).ToArray();
+  if(rows.Length == 0) { continue; }
+  <details open="@(state != RecoveryDisposition.Informational)" class="recovery-section">
+   <summary>@RecoveryPresentation.Label(state) · @rows.Length tasks / notices</summary>
+   @foreach(var group in rows.GroupBy(i => new {i.Platform, Category = RecoveryPresentation.Category(i)})) {
+    <article class="recovery-group">
+     <h3>@Management.PlatformName(group.Key.Platform) · @RecoveryPresentation.Title(group.Key.Category) · @group.Count()</h3>
+     <p>@RecoveryPresentation.Explanation(group.Key.Category)</p>
+     @if(state == RecoveryDisposition.Automatic){<p>No action needed for these retries. @group.Count(i => i.RetryAfter <= Now || i.RetryAfter == null) eligible now · @group.Count(i => i.RetryAfter > Now) waiting for their retry times.</p>}
+     @if(state == RecoveryDisposition.Paused){<p>Automatic work will wait. See each item's pause reason below. Review <a href="/manage?section=schedule">scheduling</a>, platform settings on Overview, or <a href="/manage?section=processing">AI processing</a>. Resuming scheduling also permits other queued and scheduled work.</p>}
+     @if(state == RecoveryDisposition.Attention && group.Key.Category == "tokens"){<p>Automatic token retries have reached their limit or are disabled. Review model capacity and <a href="/manage?section=processing">processing token settings</a>. The advanced retry ladder and explicit rescoring require instance configuration or the CLI; this page does not reset attempts.</p>}
+     @if(state == RecoveryDisposition.Attention && group.Key.Category == "capture"){<p>The saved capture may need a parser update. Replaying it requires the CLI; repeating a full collection will not repair the parser. Inspect the item instructions below.</p>}
+     <details><summary>Show affected items and recovery instructions</summary>
+      @foreach(var issue in group) {
+       <div class="recovery-item">
+        <strong>@issue.Item.Replace("· judge", "· classification").Replace("raw #", "Saved capture #")</strong>
+        <p>@RecoveryPresentation.Timing(issue, Now)</p>
+        @if(issue.NextTokenBudget is int budget){<p>Next classification allowance: @budget tokens.</p>}
+        <p>Recorded failures: @issue.Attempts.
+        @if(issue.LastAttempt is DateTime attempted){<span> Last attempt: <time title="@attempted.ToString("u")">@RecoveryPresentation.At(attempted, Zone)</time>.</span>}
+        @if(issue.RetryAfter is DateTime retry){<span> Eligible after: <time title="@retry.ToString("u")">@RecoveryPresentation.At(retry, Zone)</time>.</span>}</p>
+        @if(issue.RunId is long run){<p>@(issue.PostId == null ? "Capture from" : "Latest saved capture associated with") <a href="@($"/manage?section=recovery&collection={run}#collection-{run}")">capture run #@run</a>. Classification may happen later.</p>}
+        else{<p>Collection association unavailable; the attempt time is not a collection time.</p>}
+        <details><summary>Technical details</summary><p>@issue.Problem</p><p>@issue.Recovery</p></details>
+       </div>
+      }
+     </details>
+    </article>
+   }
+  </details>
+ }
+ @if(Issues.Length == 0){<p>No outstanding recovery or recent upstream notices.</p>}
+ <p><a href="/debug#recovery">Open technical diagnostics</a> · <a href="/manage?section=recovery">Refresh recovery</a></p>
+</div>
+@code {
+ [Parameter] public RecoveryIssue[] Issues { get; set; } = [];
+ [Parameter] public TimeZoneInfo Zone { get; set; } = TimeZoneInfo.Utc;
+ DateTime Now { get; } = Clock.Now;
+}

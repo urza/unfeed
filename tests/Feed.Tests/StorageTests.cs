@@ -79,8 +79,8 @@ public sealed class StorageTests
         await using var i=new TestInstance();await i.Init();await using var db=i.Factory.Open();
         var a=await IdentityStore.Resolve(db,"facebook",new("123","Fixture one",null),true,default);
         var b=await IdentityStore.Resolve(db,"facebook",new(null,"Fixture two","https://facebook.com/fixture"),false,default);
-        var p=new Post{Platform="facebook",PlatformPostId="post",AuthorId=b!.Id,CategoriesJson="[]",VerdictContentRevision=1,IngestReadyAt=Clock.Now};db.Add(p);await db.SaveChangesAsync();db.Feedback.Add(new(){PostId=p.Id,AuthorId=b.Id,Value=1});db.TimelineVisits.Add(new(){AuthorId=b.Id,Platform="facebook"});await db.SaveChangesAsync();
+        var p=new Post{Platform="facebook",PlatformPostId="post",AuthorId=b!.Id,CategoriesJson="[]",VerdictContentRevision=1,IngestReadyAt=Clock.Now};db.Add(p);await db.SaveChangesAsync();db.Feedback.Add(new(){PostId=p.Id,AuthorId=b.Id,Value=1});db.TimelineVisits.Add(new(){AuthorId=b.Id,Platform="facebook"});db.RunRequests.Add(new(){Platform="facebook",Mode="home",PersonAuthorId=b.Id,Person="https://facebook.com/fixture"});await db.SaveChangesAsync();
         await IdentityStore.Resolve(db,"facebook",new("123","Fixture merged","https://facebook.com/fixture"),false,default);
-        await db.Entry(p).ReloadAsync();Assert.Equal(a!.Id,p.AuthorId);Assert.Equal(2,p.ContentRevision);Assert.False(p.Judged);Assert.Equal(a.Id,(await db.Feedback.AsNoTracking().SingleAsync()).AuthorId);Assert.Equal(a.Id,(await db.TimelineVisits.AsNoTracking().SingleAsync()).AuthorId);Assert.NotEmpty(p.ContentHash);
+        await db.Entry(p).ReloadAsync();Assert.Equal(a!.Id,p.AuthorId);Assert.Equal(2,p.ContentRevision);Assert.False(p.Judged);Assert.Equal(a.Id,(await db.Feedback.AsNoTracking().SingleAsync()).AuthorId);Assert.Equal(a.Id,(await db.TimelineVisits.AsNoTracking().SingleAsync()).AuthorId);Assert.Equal(a.Id,(await db.RunRequests.AsNoTracking().SingleAsync()).PersonAuthorId);Assert.NotEmpty(p.ContentHash);
     }
 }

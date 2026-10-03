@@ -34,8 +34,10 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
             var p = request.Platform!;
             if (!Platforms.All.Contains(p) || request.Kind is not ("collect" or "like" or "friends" or "login") || request.Kind == "collect" && !Platforms.Modes.Contains(Platforms.Mode(request.Mode ?? "")))
             { request.Status = "refused"; request.FinishedAt = Clock.Now; request.Note = "unknown platform, kind or mode"; continue; }
+            if ((request.Person is not null || request.PersonAuthorId is not null) && (request.Person is null || request.Kind != "collect" || request.Mode != "home" || request.RetryIncomplete || request.PersonAuthorId is null || Identity.UrlRef(p, request.Person) is null))
+            { request.Status = "refused"; request.FinishedAt = Clock.Now; request.Note = "invalid person collection target"; continue; }
             if (request.Kind != "login" && Relogin(p)) { request.Note = "needs re-login"; if (request.Kind == "collect") { request.Status = "refused"; request.FinishedAt = Clock.Now; } continue; }
-            if (request.Kind == "friends" && !c.Enabled(p)) { request.Status = "refused"; request.FinishedAt = Clock.Now; request.Note = "platform disabled"; continue; }
+            if ((request.Kind == "friends" || request.Person is not null) && !c.Enabled(p)) { request.Status = "refused"; request.FinishedAt = Clock.Now; request.Note = "platform disabled"; continue; }
             if (await BrowserBusy(p)) { request.Note = "platform busy"; continue; }
             if (request.Kind == "collect" && (await db.Runs.AnyAsync(r => r.Platform == p && r.Kind == "collect" && r.Status == "running", ct) || states.GetValueOrDefault(p)?.LastRunFinishedAt > Clock.Now.AddMinutes(-c.Scheduler.ManualCooldownMinutes))) { request.Note = "waiting for collect/cooldown"; continue; }
             await Dispatch(request, request.RetryIncomplete ? "recovery" : "manual", ct);
@@ -96,6 +98,7 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
             foreach (var arg in new[] { request.Kind, "--platform", request.Platform ?? "all", "--request-id", request.Id.ToString(), "--claim-token", token, "--trigger", trigger }) start.ArgumentList.Add(arg);
             if (request.Mode is not null) { start.ArgumentList.Add("--mode"); start.ArgumentList.Add(request.Mode); }
             if (request.RetryIncomplete) start.ArgumentList.Add("--retry-incomplete");
+            if (request.Person is not null) { start.ArgumentList.Add("--person"); start.ArgumentList.Add(request.Person); start.ArgumentList.Add("--scrolls"); start.ArgumentList.Add(People.CollectionScrolls.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
             start.Environment["FEED_DATA"] = paths.Root; var child = Process.Start(start) ?? throw new IOException("CLI failed to start"); log.LogInformation("Dispatched request #{Request} child pid={Pid}", request.Id, child.Id);
             _ = ObserveStartup(child, request.Id, token);
         }

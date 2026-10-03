@@ -179,6 +179,7 @@ Durable requests from page actions and automatic processing, claimed by the sche
 | Platform | text? | required for collect/like/friends/login; null for an instance-wide process request |
 | Mode | text? | for collect |
 | RetryIncomplete | bool | collect request may only retry due targets in an existing sweep |
+| PersonAuthorId, Person | integer?, text? | optional resolved person id and canonical profile URL for a bounded person collect; both supplied together, only for home mode without RetryIncomplete. Existing requests have null targets. Identity merges re-point the person id while retaining the requested URL. |
 | Status | text | `pending`, `claimed`, `done`, `expired`, `refused` |
 | RequestedAt, ClaimedAt?, FinishedAt? | datetime | |
 | ClaimToken | text? | a fresh random token per claim, passed to the child; every child registration and completion must match it |
@@ -371,7 +372,7 @@ Author identity is resolved during ingest through shared rules and persisted evi
 If neither a valid author id nor a canonical profile URL yields a ref, return no author: store the post with AuthorId null and its observed name/URL. Do not create an Authors row, match by display name, or group unrelated observations under a placeholder. Such a post has no author-derived friend, close-friend, bypass or feedback status; configured tag exceptions can still apply. A later observation with proven refs may resolve it through normal ingest and content revision rules.
 
 1. Look up AuthorKeys on that platform for any of the observation's refs.
-2. When several authors match, they are one person. Keep the best row (friend flag first, then avatar present, then post count, then lowest id) and merge the others into it: re-point posts, feedback author refs, coverage visits and sweep targets; fill null fields; OR the friend flag; take earliest first-seen; move keys; delete merged rows; rebuild RefsJson. Duplicate targets within a sweep coalesce at the earliest position; a terminal visit keeps that target completed. Retain visit history and recompute the cycle's target total.
+2. When several authors match, they are one person. Keep the best row (friend flag first, then avatar present, then post count, then lowest id) and merge the others into it: re-point posts, feedback author refs, coverage visits, person collection requests and sweep targets; fill null fields; OR the friend flag; take earliest first-seen; move keys; delete merged rows; rebuild RefsJson. Duplicate targets within a sweep coalesce at the earliest position; a terminal visit keeps that target completed. Retain visit history and recompute the cycle's target total.
 3. Otherwise match on exact (Platform, PlatformAuthorId), only when the observation has a valid author id. Never match null ids to each other.
 4. Otherwise insert.
 5. On update, a known value is never overwritten by a missing one. `IsFriend` is only ever set to true here. `LastSeenAt` moves forward. New refs are added unless the key exists anywhere. RefsJson is rewritten sorted.

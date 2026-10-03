@@ -1,0 +1,20 @@
+<div class="recovery-summary" data-status-refresh>
+ <h2>Processing health</h2>
+ @if(Attention > 0){<p><strong>@Attention tasks need your attention.</strong> Review the recovery instructions.</p>}
+ else if(Paused > 0){<p><strong>Recovery is paused.</strong> Review the pause reason before resuming work.</p>}
+ else if(Automatic > 0){<p><strong>Automatic recovery is scheduled.</strong> No action needed for these processing retries.</p>}
+ else{<p><strong>No outstanding processing recovery.</strong></p>}
+ <p>@Pending visible posts awaiting classification · @Automatic tasks retrying automatically · @Paused paused · @Attention need attention</p>
+ <p class="muted">A post can have separate classification and summary tasks. Collection coverage and login status are shown separately.</p>
+ <a href="/manage?section=recovery">View recovery progress</a>
+ <p class="muted">Updated <time datetime="@UpdatedAt.ToString("O")">@RecoveryPresentation.At(UpdatedAt, Zone)</time>. <span class="status-auto-note" hidden>Status refreshes every 15 seconds while this page is visible.</span><noscript>Use Refresh status to update.</noscript></p>
+</div>
+@code {
+ [Parameter] public RecoveryIssue[] Issues { get; set; } = [];
+ [Parameter] public int Pending { get; set; }
+ [Parameter] public DateTime UpdatedAt { get; set; }
+ [Parameter] public TimeZoneInfo Zone { get; set; } = TimeZoneInfo.Utc;
+ int Attention => Issues.Count(i => i.Disposition == RecoveryDisposition.Attention);
+ int Automatic => Issues.Count(i => i.Disposition == RecoveryDisposition.Automatic);
+ int Paused => Issues.Count(i => i.Disposition == RecoveryDisposition.Paused);
+}

@@ -38,6 +38,8 @@ dotnet out/Feed.Web.dll
 
 The default feed address is `http://127.0.0.1:8000`. Install Chromium and display dependencies before login, following the runbook. For Docker, start with [its deployment instructions](docs/RUNBOOK.md#optional-docker); the same instance files and CLI operations apply. `--data <directory>` or `FEED_DATA` selects another instance location; exclude it from Git and Docker build contexts if it is inside a checkout.
 
+Click an author’s name to open their Feed person page, browse collected posts by category, inspect local person settings, or collect their latest posts. The original platform profile remains linked there.
+
 Use **Manage** in the feed toolbar for platform actions, people controls, schedules and feed settings. Technical logs and recovery details remain under **Diagnostics**. The CLI and direct instance-file editing continue to work.
 
 ## Documentation and development

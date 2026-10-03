@@ -42,3 +42,13 @@
 @media(max-width:850px){.manage-platforms,.schedule-grid{grid-template-columns:1fr}.manage-heading{flex-direction:column}.manage-panel{padding:18px}.schedule-form+.schedule-form{border-top:1px solid #ffffff26;padding-top:16px}}
 
 @media(max-width:650px){.people-table,.people-table tbody{display:block}.people-table thead{display:none}.people-table tr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:18px 0;border-bottom:1px solid #ffffff26}.people-table td{display:block;padding:0;border:0;min-width:0}.people-table td:first-child,.people-table td:nth-child(2),.people-table td:last-child{grid-column:1/-1}.people-table td[data-label]::before{content:attr(data-label);display:block;color:#adb9c9;font-size:.76rem;margin-bottom:4px}.people-table td:nth-child(2)::before{display:inline;margin-right:8px}.people-table .person-name{min-width:0}.people-table details{min-width:0;max-width:none}.people-table .state-toggle{width:100%}}
+
+.person-nav,.person-filters{display:flex;flex-wrap:wrap;gap:12px;padding:14px 18px;margin-bottom:18px}.person-nav{justify-content:space-between}.person-profile{padding:24px;margin-bottom:18px;overflow-wrap:anywhere}.person-heading{display:flex;align-items:center;gap:16px}.person-heading h1{margin:0}.person-heading p{margin:6px 0 12px}.person-profile details{margin:16px 0}.person-profile summary{cursor:pointer}.person-collect{display:flex;align-items:center;flex-wrap:wrap;gap:18px}.person-collect button{padding:10px 16px;border-radius:12px}.person-status:empty{display:none}.person-filters a{padding:6px 10px;border-radius:10px}.person-filters [aria-current=page]{background:var(--accent);color:#fff}.person-count{margin:16px 0;padding:12px 18px;color:var(--text)}@media(max-width:600px){.person-profile{padding:16px}.person-heading h1{font-size:1.5rem}.person-filters{gap:6px;padding:10px}}
+
+/* Rotating wallpaper must never be the text background. */
+.person-count,.page-footer{background:rgba(16,21,30,.95);border:1px solid #ffffff14;border-radius:14px}.page-footer{margin-top:24px;padding:14px 18px}
+
+/* Recovery text always has an opaque surface, including on bright photographs. */
+.recovery-summary,.recovery-group{background:#142132;border:1px solid #52657b;border-radius:12px;padding:16px;margin:14px 0;overflow-wrap:anywhere}.recovery-section{border-top:1px solid #52657b;padding-top:12px}.recovery-item{border-top:1px solid #52657b;padding:14px 0}.recovery-details time{font-variant-numeric:tabular-nums}.recovery-group h3{margin-top:0}.recovery-group:target{outline:2px solid #8cbcff;scroll-margin-top:20px}
+
+.management > .toolbar{background:#121c2bf5}

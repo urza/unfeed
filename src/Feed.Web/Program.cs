@@ -21,7 +21,7 @@ builder.Logging.ClearProviders();builder.Logging.SetMinimumLevel(minimum);builde
 builder.Services.AddSingleton(paths);builder.Services.AddSingleton(files);builder.Services.AddSingleton(factory);builder.Services.AddSingleton<Actions>();builder.Services.AddSingleton<FeedQuery>();builder.Services.AddRazorComponents();builder.Services.AddResponseCompression();
 builder.Services.AddSingleton<Scheduler>();builder.Services.AddHostedService(sp=>sp.GetRequiredService<Scheduler>());builder.Services.AddSingleton<Backgrounds>();builder.Services.AddHostedService(sp=>sp.GetRequiredService<Backgrounds>());
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(paths.Get("keys"))).SetApplicationName("Feed:" + Prompts.Sha(paths.Root));
-builder.Services.AddAntiforgery();builder.Services.AddSingleton<ManagementFiles>();builder.Services.AddSingleton<Management>();
+builder.Services.AddAntiforgery();builder.Services.AddSingleton<ManagementFiles>();builder.Services.AddSingleton<Management>();builder.Services.AddSingleton<People>();
 var app=builder.Build();app.UseResponseCompression();
 var assets=Path.Combine(app.Environment.ContentRootPath,"wwwroot"); if(!Directory.Exists(assets))assets=Path.Combine(AppContext.BaseDirectory,"wwwroot");
 var stamp=Directory.Exists(assets)?Prompts.Sha(string.Join("",Directory.EnumerateFiles(assets,"*",SearchOption.AllDirectories).Order().Select(File.ReadAllText)))[..12]:"dev";
@@ -91,5 +91,6 @@ app.MapGet("/posts/{id:long}/like",async(long id)=>{await using var db=factory.O
 app.MapPost("/collect",async(HttpContext ctx,Actions actions)=>{foreach(var platform in Platforms.All.Where(Snapshot(ctx).Config.Enabled))await actions.Collect(platform,"home",ctx.RequestAborted);return Back(ctx);});
 app.MapPost("/collect/{platform}/{mode}",async(string platform,string mode,HttpContext ctx,Actions actions)=>{if(!Platforms.All.Contains(platform)||!Platforms.Modes.Contains(Platforms.Mode(mode)))return Results.Text($"collect refused: {platform} has no mode {mode}",statusCode:404);await actions.Collect(platform,mode,ctx.RequestAborted);return Back(ctx);});
 app.MapManagement(stamp);
+app.MapPeople(stamp);
 app.Run();
 public partial class Program;

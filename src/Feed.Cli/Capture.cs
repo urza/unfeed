@@ -86,12 +86,19 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
                 while (DateTime.UtcNow < end) { await Check(); await Drain(); if (explicitEmpty && timeline) return ("empty", "explicit_empty"); if (await page.Locator(Site.Selectors(platform, timeline)).CountAsync() > 0) { rendered = true; break; } await Task.Delay(2000, ct); }
                 if (!rendered) { await Check(); if (timeline) return ("unrendered", "timeout"); throw new IOException("feed never appeared; session stale or page blocked"); }
                 if (platform == "facebook") { int n = 0; foreach (var embedded in PayloadParser.Embedded(await page.ContentAsync())) { await Save(embedded); n++; } Console.WriteLine($"embedded: {n} preloaded batch(es)"); }
-                int idle = 0;
+                var personVisit = options.Person is not null && options.Mode != "all_followed";
+                var progress = new CollectionProgress(personVisit);
                 for (int n = 0; n < cap; n++)
                 {
-                    await Check(); await page.Mouse.WheelAsync(0, 900); await Task.Delay(Random.Shared.Next(2000, 5001), ct); scrolls++; await Drain();
-                    var fresh = captured.Keys.Count(seen.Add); idle = fresh > 0 ? 0 : idle + 1;
-                    if (explicitEmpty && timeline) return ("empty", "explicit_empty"); if (idle >= 3) return ("rendered", "no_new");
+                    await Check();
+                    var before = personVisit ? await ScrollPosition.Read(page) : null;
+                    var observedBefore = surfaceObservations.Count;
+                    await page.Mouse.WheelAsync(0, 900); await Task.Delay(Random.Shared.Next(2000, 5001), ct); scrolls++; await Drain();
+                    await Check();
+                    var fresh = captured.Keys.Count(seen.Add);
+                    var pageAdvanced = before is not null && (await ScrollPosition.Read(page)).AdvancedFrom(before);
+                    if (explicitEmpty && timeline) return ("empty", "explicit_empty");
+                    if (progress.Observe(fresh > 0, surfaceObservations.Count > observedBefore, pageAdvanced) is { } stop) return ("rendered", stop);
                 }
                 return ("rendered", "depth");
             }

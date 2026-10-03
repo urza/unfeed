@@ -1,0 +1,34 @@
+<Shell Title="@Name" Stamp="@Stamp" Background="@Background" Blur="Model.Feed.Instance.Config.Backgrounds.BlurPx">
+<header class="person-nav glass"><a href="/">← Back to feed</a><a href="/manage?section=people">Manage people</a></header>
+<section class="person-profile glass">
+ <div class="person-heading">@if(Model.Author.AvatarPath is {} avatar){<img class="avatar" src="@("/"+avatar)" width="64" height="64" alt=""/>}<div><h1>@Name</h1><p>@Management.PlatformName(Model.Author.Platform) @if(Model.ProfileUrl is {} url){<span> · <a href="@url" target="_blank" rel="noopener noreferrer">Open platform profile ↗</a></span>}</p></div></div>
+ <div class="badges"><span class="badge">@(Model.Author.IsFriend ? "In your feed list" : "Outside your feed list")</span>@if(Model.Close){<span class="badge">Close friend</span>}@if(Model.Muted){<span class="badge">Muted</span>}@if(Model.Always){<span class="badge">Always show</span>}@if(Model.HomeTimeline){<span class="badge">Included in home timeline visits</span>}</div>
+ <details><summary>Person details and feed settings</summary>
+ <dl class="manage-facts"><dt>First encountered</dt><dd>@Model.Author.FirstSeenAt.ToString("u")</dd><dt>Last encountered</dt><dd>@Model.Author.LastSeenAt.ToString("u")</dd><dt>Identity references</dt><dd>@string.Join(", ", Identity.Keys(Model.Author))</dd><dt>Configured author views</dt><dd>@(Model.Views.Length == 0 ? "None" : string.Join(", ", Model.Views))</dd>
+ @if(Model.Always){<dt>Always-show bypasses</dt><dd>@string.Join(", ", Model.Feed.Instance.Config.Filters.AlwaysShowBypasses)</dd>}
+ @if(Model.Visit is {} visit){<dt>Last timeline check</dt><dd>@visit.At.ToString("u") · @visit.Status · @visit.CaptureStatus · @visit.PostsFound observed posts @if(visit.Note is not null){<span> · @visit.Note</span>}</dd>}
+ </dl><p>These are stored observations and your local settings. Muted posts stay hidden; Always show only bypasses the configured filters.</p>
+ </details>
+ <div class="person-collect"><form method="post" action="@($"/people/{Model.Author.Id}/collect")"><input type="hidden" name="__RequestVerificationToken" value="@RequestToken"/><button class="primary" disabled="@(Model.Blocked is not null)" title="@Model.Blocked">Collect latest posts</button></form><a href="@Link(Model.Category, Model.Feed.Scope)">Refresh page</a></div>
+ <p class="person-status" role="status">@if(Message is not null){<span>@Message </span>}@if(Model.Blocked is not null){<span>@Model.Blocked </span>}@if(Model.Request is {} request){<span>Latest person collection: @(Model.Run?.Status == "running" ? "collecting" : request.Status == "pending" ? "waiting" : request.Status == "claimed" ? "starting" : Model.Run?.Status ?? request.Status). @request.Note </span>}</p>
+ <p class="meta">Checks this profile with up to @People.CollectionScrolls scrolls, continuing through posts already collected. Stops early if the page stalls or needs login. Browser availability and cooldowns may delay collection. New posts use normal processing; a check does not guarantee complete history.</p>
+</section>
+<nav class="person-filters glass" aria-label="Person post filters">
+ <a href="@Link(null)" aria-current="@(Model.Category is null && Model.Feed.Scope == "live" ? "page" : null)">All posts</a>
+ @foreach(var category in Model.Feed.Instance.Taxonomy.Categories){<a href="@Link(category.Key)" aria-current="@(Model.Category == category.Key ? "page" : null)">@category.Label</a>}
+ <a href="@Link(null,"unsorted")" aria-current="@(Model.Feed.Scope == "unsorted" ? "page" : null)">Unsorted (@Model.Feed.UnsortedCount)</a><a href="@Link(null,"hidden")" aria-current="@(Model.Feed.Scope == "hidden" ? "page" : null)">Hidden (@Model.Feed.HiddenCount)</a>
+</nav>
+<p class="person-count">@Shown posts shown@(Model.Feed.Scope == "hidden" ? " · hidden by your rules" : Model.Feed.Scope == "unsorted" ? " · awaiting current judgments" : " · newest first"). @if(Model.Feed.Scope == "live" && Model.Feed.VisibleCount > Shown){<span>Showing the newest @Shown of @Model.Feed.VisibleCount matching posts (your configured page limit).</span>}@if(Model.Feed.Scope == "live" && Model.Category is null){<span>Includes posts awaiting categories. Hidden posts are separate.</span>}</p>
+@if(Model.Feed.Items.Length == 0){<section class="empty glass"><p>@(Model.Feed.Scope == "hidden" ? "No hidden posts from this person." : Model.Feed.Scope == "unsorted" ? "No posts from this person are waiting for a judgment." : Model.Category is not null ? "No visible posts from this person in this category yet." : "No visible posts collected from this person yet.")</p></section>}
+else{<UnitList Items="Model.Feed.Items" Model="Model.Feed"/>}
+</Shell>
+@code {
+ [Parameter,EditorRequired] public PersonPage Model {get;set;}=null!;
+ [Parameter] public string Stamp {get;set;}="dev";
+ [Parameter] public string? Background {get;set;}
+ [Parameter] public string RequestToken {get;set;}="";
+ [Parameter] public string? Message {get;set;}
+ string Name => Model.Author.DisplayName ?? "Unknown author";
+ int Shown => Model.Feed.Items.Sum(u => 1 + u.Folded.Length);
+ string Link(string? category, string scope="live") => $"/people/{Model.Author.Id}?scope={scope}" + (category is null ? "" : "&category="+Uri.EscapeDataString(category));
+}

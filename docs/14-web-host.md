@@ -49,6 +49,8 @@ Every browser-requested application mutation remains an HTTP POST to an action r
 | `POST /posts/{id}/like` | validates, queues a `Likes` row, writes a like run request (chapter 11) | redirect back; 409 with the problem text when the post cannot be liked |
 | `GET /posts/{id}/like` | the newest `Likes` row of the post | JSON `{"state": "none|pending|sent|failed", "error": "<text or null>"}`. The card polls it after a press. |
 | `POST /posts/{id}/unhide` | calls the shared ClearHidden operation, including its VisibilityRevision increment (5.2) | redirect back |
+| `GET /people/{id}?category=<key>&scope=<live|hidden|unsorted>` | stored person details, effective local flags, person-scoped feed and collection state; category applies only to live scope | static page with no-store; missing person 404, unknown category redirects to unfiltered person page |
+| `POST /people/{id}/collect` | antiforgery-protected form; resolves a canonical profile from the stored author, queues a bounded person collect subject to chapter 12 gates | redirect to person page with outcome; missing person 404, invalid antiforgery token 400; never accepts an arbitrary target URL from the form |
 | `POST /collect` | a home request for each enabled platform without a pending/claimed collect request or active collect run; processing runs do not block it. Insertion uses the unique active-request constraint. | redirect back |
 | `POST /collect/{platform}/{mode}` | one request with the same collect-specific guard; mode aliases are accepted | redirect back; 404 "collect refused: <platform> has no mode <mode>" |
 
@@ -156,7 +158,8 @@ Source: [ManagementRoutes](../src/Feed.Web/ManagementRoutes.cs), [Management](..
 
 | Route | Behavior |
 |---|---|
-| `GET /manage` | Overview by default; `section=people`, `schedule`, `rules`, `categories`, `processing` or `storage` selects an editor. No automatic refresh. |
+| `GET /manage` | Overview by default; `section=people`, `schedule`, `rules`, `categories`, `processing` or `storage` selects an editor. Only read-only processing summaries refresh automatically; editor forms do not. |
+| `GET /manage?section=recovery` | Grouped processing recovery, informational notices, recent classification completions and collection visit reports. Optional `collection` includes a selected older capture run. |
 | `GET /manage?section=people` | Search with `q`, restrict `platform`, filter `friends`, `removed`, `close`, `muted` or `always`; `page` selects a bounded 40-person page. |
 | `POST /manage/settings/{action}` | Validated file edit for scheduler, platform, schedule, timing, rules, filters, category, view, storage or processing. |
 | `POST /manage/people/{id}/{action}` | `close`, `mute`, `always` set membership using `enabled`; `remove` removes the local relationship. |

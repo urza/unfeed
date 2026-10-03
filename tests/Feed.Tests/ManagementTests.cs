@@ -125,8 +125,8 @@ public sealed class ManagementTests
         await using var i=new TestInstance();await i.Init();
         await using var db=i.Factory.Open();var migrator=db.GetService<IMigrator>();
         await migrator.MigrateAsync("20260929065137_JudgmentTokenRetry");
-        db.RunRequests.Add(new(){Kind="collect",Platform="facebook",Mode="home",Status="claimed",ClaimToken="synthetic-token",ChildPid=123,RetryIncomplete=true});await db.SaveChangesAsync();db.ChangeTracker.Clear();
-        await migrator.MigrateAsync();var request=await db.RunRequests.SingleAsync();Assert.Equal("synthetic-token",request.ClaimToken);Assert.Equal(123,request.ChildPid);Assert.True(request.RetryIncomplete);
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO RunRequests (Kind,Platform,Mode,Status,ClaimToken,ChildPid,RetryIncomplete,RequestedAt) VALUES ('collect','facebook','home','claimed','synthetic-token',123,1,{Clock.Now})");
+        await migrator.MigrateAsync();var request=await db.RunRequests.SingleAsync();Assert.Equal("synthetic-token",request.ClaimToken);Assert.Equal(123,request.ChildPid);Assert.True(request.RetryIncomplete);Assert.Null(request.Person);Assert.Null(request.PersonAuthorId);
         Assert.Equal(1,await Actions.EnsureRequest(db,"friends","facebook"));Assert.Equal(0,await Actions.EnsureRequest(db,"friends","facebook"));Assert.Equal(1,await Actions.EnsureRequest(db,"login","facebook"));
         Assert.Equal(3,await db.RunRequests.CountAsync());
     }

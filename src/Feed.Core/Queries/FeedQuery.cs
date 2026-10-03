@@ -10,15 +10,17 @@ public sealed record FeedUnit(Card Lead, Card[] Folded, string? Badge);
 public sealed record FeedPage(InstanceSnapshot Instance, string View, string? Platform, string Scope, FeedUnit[] Items, int VisibleCount, int HiddenCount, int UnsortedCount, int Friends, string[] KnownPlatforms, PlatformState[] States, Run[] Runs, RunRequest[] Requests, string? LastVisit, string EmptyMessage, int AdsDropped, CoverageRow[] Coverage, string? ModelRetry, int TotalHidden, int TotalUnsorted, RecoveryIssue[]? Issues = null);
 public sealed class FeedQuery(DbFactory factory)
 {
-    public async Task<FeedPage> Read(InstanceSnapshot instance, string view, string? platform, string scope, CancellationToken ct)
+    public async Task<FeedPage> Read(InstanceSnapshot instance, string view, string? platform, string scope, CancellationToken ct, long? authorId = null, string? category = null)
     {
         await using var db = factory.Open(); await db.Database.OpenConnectionAsync(ct);
         await using var readTransaction = ((Microsoft.Data.Sqlite.SqliteConnection)db.Database.GetDbConnection()).BeginTransaction(deferred: true);
         await db.Database.UseTransactionAsync(readTransaction, ct);
-        var known = await db.Posts.Select(p => p.Platform).Distinct().OrderBy(p => p).ToArrayAsync(ct); if (platform is not null && !known.Contains(platform)) throw new ArgumentException("unknown platform");
+        var known = await db.Posts.Select(p => p.Platform).Distinct().OrderBy(p => p).ToArrayAsync(ct); if (authorId is null && platform is not null && !known.Contains(platform)) throw new ArgumentException("unknown platform");
         if (view != "all" && !instance.Taxonomy.Views.Any(v => v.Key == view)) throw new ArgumentException("unknown view");
         var authors = await db.Authors.AsNoTracking().ToArrayAsync(ct); var posts = await db.Posts.AsNoTracking().OrderByDescending(p => p.PostedAt).ThenByDescending(p => p.Id).ToArrayAsync(ct);
-        var scoped = posts.Where(p => platform is null ? instance.Config.Enabled(p.Platform) : p.Platform == platform).ToArray();
+        if (authorId is not null && !authors.Any(a => a.Id == authorId)) throw new KeyNotFoundException("Person not found");
+        if (category is not null && !instance.Taxonomy.Categories.Any(c => c.Key == category)) throw new ArgumentException("unknown category");
+        var scoped = posts.Where(p => authorId is not null ? p.AuthorId == authorId : platform is null ? instance.Config.Enabled(p.Platform) : p.Platform == platform).ToArray();
         var authorMap = authors.ToDictionary(a => a.Id); var version = Prompts.Version(instance);
         var histories = posts.Where(p => p.AuthorId != null && p.PostedAt != null).GroupBy(p => p.AuthorId!.Value).ToDictionary(g => g.Key, g => g.Select(p => p.PostedAt!.Value).Order().ToArray());
         var authorViews = instance.Taxonomy.Views.Where(v => v.Authors is not null).ToDictionary(v => v.Key, v => v.Authors!.Value.SelectMany(e => Identity.Resolve(e, authors)).Select(a => a.Id).ToHashSet());
@@ -30,9 +32,10 @@ public sealed class FeedQuery(DbFactory factory)
         }
         (bool Match, string? Why) ComputeMatch(Post p, string key)
         {
+            if (authorId is not null) return (category is null || p.Judged && (JsonSerializer.Deserialize<string[]>(p.CategoriesJson!) ?? []).Contains(category), null);
             if (key == "all") return (!instance.Config.Llm.Enabled || p.Judged, null);
             var v = instance.Taxonomy.Views.Single(v => v.Key == key);
-            if (v.Category is { } category) return (p.Judged && (JsonSerializer.Deserialize<string[]>(p.CategoriesJson!) ?? []).Contains(category) && (v.Authors is null || p.AuthorId is { } authorId && authorViews[key].Contains(authorId)), null);
+            if (v.Category is { } viewCategory) return (p.Judged && (JsonSerializer.Deserialize<string[]>(p.CategoriesJson!) ?? []).Contains(viewCategory) && (v.Authors is null || p.AuthorId is { } authorId && authorViews[key].Contains(authorId)), null);
             if (v.Authors is { } entries) return (p.AuthorId is { } id && authorViews[key].Contains(id), null);
             if (v.Rare is { } rare)
             {
@@ -75,7 +78,7 @@ public sealed class FeedQuery(DbFactory factory)
                     units.Add(new(card, folded, $"{folded.Length + 1} repeated posts")); continue;
                 }
             }
-            if (stack.MinPosts > 0 && card.Post.AuthorId is { } id && card.Post.PostedAt is { } date && !protectedAuthors.Contains(id))
+            if (authorId is null && stack.MinPosts > 0 && card.Post.AuthorId is { } id && card.Post.PostedAt is { } date && !protectedAuthors.Contains(id))
             {
                 var burst = cardsByAuthor[id].Where(c => c.Post.PostedAt <= date && c.Post.PostedAt >= date.AddDays(-stack.WindowDays) && !consumed.Contains(c.Post.Id)).ToArray(); if (burst.Length + 1 >= stack.MinPosts) { folded = burst; foreach (var c in burst) consumed.Add(c.Post.Id); }
             }

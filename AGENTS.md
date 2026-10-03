@@ -10,4 +10,6 @@ All personal names, handles, policies, categories, endpoints, credentials, profi
 
 Resolve routine implementation choices autonomously. Preserve behavioral contracts, document material contradictions or limitations, and update affected specification chapters with code changes. Regenerate docs/spec.html after numbered Markdown changes. Use relevant builds/tests; do not claim synthetic tests prove live platform compatibility.
 
+UI readability rule: every page has rotating photographic backgrounds. Never place text or controls directly on the wallpaper, including counts, helper text, dividers, status messages and footers. Give them a sufficiently opaque contrasting surface; blur or text shadows alone are not protection. Check readability against bright and busy backgrounds on desktop and phones.
+
 For substantial work, keep a concise public plan/progress record containing only reusable engineering information. Keep live counts, account-specific findings, machine paths and service state in data/. Continue authorized implementation beyond planning. Do not publish private state in commits, issue bodies, screenshots or release archives.

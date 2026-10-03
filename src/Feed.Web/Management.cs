@@ -9,16 +9,35 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Feed.Web;
 
+public sealed record ProcessingCompletion(long PostId, string Platform, string Task, DateTime At);
 public sealed record PersonRow(Author Author, bool Close, bool Muted, bool Always, int Posts, int Hidden, DateTime? Latest, TimelineVisit? Visit, string? Retry);
 public sealed record PlatformOverview(string Platform, int Friends, int Posts, int Hidden, PlatformState? State, Run? Collection, Run? Import, Run[] Running, RunRequest[] Requests, string Next);
-public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnapshot Instance, PlatformOverview[] Platforms, PersonRow[] People, int PeopleCount, int Page, string Query, string Platform, string Filter, string Section, string Disk, string? DiskAt, int Pending, int Failures);
+public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnapshot Instance, PlatformOverview[] Platforms, PersonRow[] People, int PeopleCount, int Page, string Query, string Platform, string Filter, string Section, string Disk, string? DiskAt, int Pending, int Failures)
+{
+    public RecoveryIssue[] Recovery { get; init; } = [];
+    public ProcessingCompletion[] RecentCompletions { get; init; } = [];
+    public Run[] Collections { get; init; } = [];
+    public TimelineVisit[] CollectionVisits { get; init; } = [];
+    public DateTime UpdatedAt { get; init; } = Clock.Now;
+}
 
 public sealed class Management(InstancePaths paths, DbFactory factory, ManagementFiles documents)
 {
     public static string PlatformName(string p) => p == "facebook" ? "Facebook" : "Instagram";
     public static string ModeName(string mode) => mode switch { "home" => "Home feed", "close_friends" => "Home + close friends", _ => "Everyone followed" };
+    public static string RelativeTime(DateTime at, DateTime now)
+    {
+        var delta = at - now;
+        var seconds = Math.Abs(delta.TotalSeconds);
+        if (seconds < 60) return delta > TimeSpan.Zero ? "in less than a minute" : "just now";
+        var (count, unit) = seconds < 3600 ? ((int)(seconds / 60), "minute")
+            : seconds < 86400 ? ((int)(seconds / 3600), "hour")
+            : ((int)(seconds / 86400), "day");
+        var duration = $"{count} {unit}{(count == 1 ? "" : "s")}";
+        return delta > TimeSpan.Zero ? $"in {duration}" : $"{duration} ago";
+    }
     public static string Reference(Author a) => Identity.Keys(a).FirstOrDefault(k => k == Platforms.Prefix(a.Platform) + ":" + a.PlatformAuthorId) ?? Identity.Keys(a).FirstOrDefault() ?? throw new FormatException("This person has no usable identity reference.");
-    public async Task<ManagementPage> Read(string section, string query, string platform, string filter, int page, CancellationToken ct)
+    public async Task<ManagementPage> Read(string section, string query, string platform, string filter, int page, CancellationToken ct, long? collectionId = null)
     {
         var docs = documents.Read(); var s = docs.Snapshot();
         await using var db = factory.Open();
@@ -36,7 +55,12 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         var postCounts = await db.Posts.GroupBy(p => p.Platform).Select(g => new { Platform = g.Key, Total = g.Count(), Hidden = g.Count(p => p.Hidden) }).ToArrayAsync(ct);
         var kv = await db.Kv.AsNoTracking().Where(k => k.Key.StartsWith("slot:")).ToDictionaryAsync(k => k.Key, k => k.Value, ct);
         var overviews = Platforms.All.Select(p => new PlatformOverview(p, authors.Count(a => a.Platform == p && a.IsFriend), postCounts.FirstOrDefault(c => c.Platform == p)?.Total ?? 0, postCounts.FirstOrDefault(c => c.Platform == p)?.Hidden ?? 0, states.FirstOrDefault(x => x.Platform == p), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "collect"), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "friends"), runs.Where(r => r.Platform == p && r.Status == "running").ToArray(), requests.Where(r => r.Platform == p).ToArray(), NextRun(s.Config, p, Clock.Now, kv))).ToArray();
-        return new(docs, s, overviews, visiblePeople.Skip((page - 1) * 40).Take(40).ToArray(), visiblePeople.Length, page, query, platform, filter, section, await db.Get("disk:summary", ct) ?? "Not measured yet", await db.Get("disk:at", ct), await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct), await db.Posts.CountAsync(p => p.LlmError != null || p.SummaryError != null, ct));
+        return new(docs, s, overviews, visiblePeople.Skip((page - 1) * 40).Take(40).ToArray(), visiblePeople.Length, page, query, platform, filter, section, await db.Get("disk:summary", ct) ?? "Not measured yet", await db.Get("disk:at", ct), await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct), await db.Posts.CountAsync(p => p.LlmError != null || p.SummaryError != null, ct)) {
+            Recovery = await RecoveryQuery.Read(db, s, ct: ct),
+            Collections = runs.Where(r => r.Kind == "collect").Take(10).Concat(runs.Where(r => r.Id == collectionId)).DistinctBy(r => r.Id).ToArray(),
+            RecentCompletions = section == "recovery" ? (await db.Posts.AsNoTracking().Where(p => p.JudgedAt > Clock.Now.AddDays(-1) && p.VerdictContentRevision == p.ContentRevision && p.LlmError == null).OrderByDescending(p => p.JudgedAt).Take(10).Select(p => new ProcessingCompletion(p.Id, p.Platform, "Classification completed", p.JudgedAt!.Value)).ToArrayAsync(ct)) : [],
+            CollectionVisits = section == "recovery" ? await db.TimelineVisits.AsNoTracking().Where(v => db.Runs.Where(r => r.Kind == "collect").OrderByDescending(r => r.Id).Take(10).Select(r => r.Id).Contains(v.RunId) || v.RunId == collectionId).ToArrayAsync(ct) : []
+        };
     }
     public static string NextRun(FeedConfig c, string platform, DateTime now, IReadOnlyDictionary<string, string> fired)
     {
@@ -48,7 +72,11 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         {
             var date = local.Date.AddDays(day); var key = date.ToString("yyyy-MM-dd");
             var candidates = settings.Schedule.Where(x => settings.ScheduledOn(x.Key, DateOnly.FromDateTime(date))).SelectMany(x => x.Value.Select(slot => new { Mode = x.Key, Slot = slot, Fire = date + TimeSpan.Parse(slot) + TimeSpan.FromMinutes(Scheduler.Jitter(platform, x.Key, slot, key, c.Scheduler.JitterMinutes)) })).Where(x => x.Fire >= local.AddMinutes(-30) && !(day == 0 && fired.GetValueOrDefault($"slot:{platform}:{x.Mode}:{x.Slot}") == key)).OrderBy(x => x.Fire).ToArray();
-            if (candidates.FirstOrDefault() is { } next) return $"{ModeName(next.Mode)} · {next.Fire:ddd dd MMM yyyy HH:mm} ({c.Zone.Id})";
+            if (candidates.FirstOrDefault() is { } next)
+            {
+                var utc = new DateTimeOffset(DateTime.SpecifyKind(next.Fire, DateTimeKind.Unspecified), c.Zone.GetUtcOffset(next.Fire)).UtcDateTime;
+                return $"{ModeName(next.Mode)} · {next.Fire:ddd dd MMM yyyy HH:mm} ({c.Zone.Id}) · {RelativeTime(utc, now)}";
+            }
         }
         return "No run planned in the next ten years";
     }

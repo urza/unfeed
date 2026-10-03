@@ -50,13 +50,13 @@ public static partial class ProcessIdentity
 }
 public sealed class RunLedger(DbFactory factory)
 {
-    public async Task<Run> Start(string kind, string? platform, string? mode = null, string trigger = "manual", long? requestId = null, string? token = null, CancellationToken ct = default)
+    public async Task<Run> Start(string kind, string? platform, string? mode = null, string trigger = "manual", long? requestId = null, string? token = null, CancellationToken ct = default, string? person = null)
     {
         await using var db = factory.Open(); await using var tx = await db.Database.BeginTransactionAsync(ct);
         var start = ProcessIdentity.StartTime(Environment.ProcessId);
         if (requestId is not null)
         {
-            var n = await db.RunRequests.Where(r => r.Id == requestId && r.Status == "claimed" && r.ClaimToken == token && r.ChildPid == null && r.Kind == kind && r.Platform == platform && (kind != "collect" || r.Mode == mode)).ExecuteUpdateAsync(s => s.SetProperty(r => r.ChildPid, Environment.ProcessId).SetProperty(r => r.ChildStartedAt, start), ct);
+            var n = await db.RunRequests.Where(r => r.Id == requestId && r.Status == "claimed" && r.ClaimToken == token && r.ChildPid == null && r.Kind == kind && r.Platform == platform && (kind != "collect" || r.Mode == mode && r.Person == person)).ExecuteUpdateAsync(s => s.SetProperty(r => r.ChildPid, Environment.ProcessId).SetProperty(r => r.ChildStartedAt, start), ct);
             if (n != 1) throw new InvalidOperationException("Stale or already registered scheduler claim");
         }
         var run = new Run { Kind = kind, Platform = platform, Mode = mode, Trigger = trigger, ProcessPid = Environment.ProcessId, ProcessStartedAt = start, RequestId = requestId };

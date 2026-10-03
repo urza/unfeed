@@ -3,7 +3,7 @@
 @if(Error is not null){<aside class="banner">@Error</aside>}
 <section class="glass debug"><h2>scheduler</h2><pre>@SchedulerInfo</pre></section>
 <section class="glass debug"><h2>collect gates · processing</h2><pre>@Status</pre></section>
-<section class="glass debug" id="recovery"><h2>recovery and upstream warnings</h2><DataTable Rows="Issues"/></section>
+<section class="glass debug" id="recovery"><h2>recovery and upstream warnings</h2><p><a href="/manage?section=recovery">Open guided recovery: what needs attention and what retries automatically</a></p><details open><summary>Technical recovery rows</summary><DataTable Rows="@(Issues.Where(i => i is not RecoveryIssue r || !r.Informational).ToArray())"/></details><details><summary>Informational upstream notices — no replay needed</summary><DataTable Rows="@(Issues.Where(i => i is RecoveryIssue r && r.Informational).ToArray())"/></details></section>
 <section class="glass debug"><h2>recent runs</h2><DataTable Rows="Runs"/></section>
 <section class="glass debug"><h2>log tail</h2><a href="/debug/log?file=cli">CLI log</a> · <a href="/debug/log?file=web">Web log</a><pre>@Log</pre></section>
 <section class="glass debug"><h2>run requests</h2><DataTable Rows="Requests"/></section>
