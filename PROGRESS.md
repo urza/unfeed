@@ -108,3 +108,7 @@ Recognize expanded Facebook composer/privacy responses and intact Instagram Expl
 ## Container publishing
 
 Publish the existing Docker image to GHCR on main pushes, using repository-token authentication, pinned actions, build caching and revision tags. Default Compose to the published image while documenting local builds, version selection, upgrades and package visibility. Complete: actionlint and Compose validation pass, including the image override; the combined specification is regenerated. A local Docker build reached dependency installation but failed because the build environment ran out of disk space. Full image build and registry publication remain to be verified by the first GitHub Actions run; no live platform compatibility is claimed.
+
+## Multiple Explore location-icon warnings
+
+Extend exact location-icon warning recognition to indexed Explore branches and direct Explore media paths, preserving null branch slots and requiring usable media with an explicitly null icon. Complete engineering checks: all 304 non-browser tests and Release CLI/Web builds pass; collector contract and combined specification updated. Saved-response parsing and isolated offline replay pass, with existing post/media state preserved through a guarded repair. Deployment and operational evidence remain private; synthetic tests do not establish general live platform compatibility.

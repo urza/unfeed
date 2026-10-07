@@ -72,4 +72,61 @@ public sealed class InstagramExploreWarningTests
         var parsed = PayloadParser.Parse("instagram", raw.ToJsonString());
         Assert.Single(parsed.Warnings); Assert.NotEmpty(parsed.Diagnostics); Assert.Empty(parsed.Posts); Assert.False(parsed.ExplicitEmpty);
     }
+    static JsonObject MultipleExplore()
+    {
+        var raw = Fixture(); var second = Edges(raw)[1]!.DeepClone();
+        second["node"]!["explore_story"]!["media"]!["pk"] = "104";
+        second["node"]!["explore_story"]!["media"]!["code"] = "synthetic104";
+        Edges(raw).Add(second);
+        return raw;
+    }
+
+    [Theory] [InlineData(false)] [InlineData(true)]
+    public void MultipleExploreIconsPreservePostsForAliasAndDirectPaths(bool direct)
+    {
+        var raw = MultipleExplore(); var errors = raw["errors"]!.AsArray(); errors.Clear();
+        for (int i = 0; i < 2; i++) errors.Add(new JsonObject { ["message"] = "execution error", ["path"] = direct
+            ? new JsonArray("xdt_api__v1__feed__timeline__connection", "edges", i == 0 ? 1 : 3, "node", "explore_story", "media", "location", "profile_pic_url")
+            : new JsonArray(Alias, i, "node", "location", "profile_pic_url") });
+        var parsed = PayloadParser.Parse("instagram", raw.ToJsonString());
+        Assert.Empty(parsed.Diagnostics); Assert.Equal(2, parsed.Warnings.Count); Assert.Equal(4, parsed.Posts.Count);
+        Assert.All(parsed.Posts, p => { Assert.False(p.IsPartial); Assert.Single(p.Media); });
+        Assert.False(parsed.ExplicitEmpty);
+    }
+
+    [Theory] [InlineData(false)] [InlineData(true)]
+    public void AliasIndexSelectsExploreBranchWithoutRequiringOtherPlaceIcons(bool nullMedia)
+    {
+        var raw = MultipleExplore();
+        if (nullMedia) Edges(raw)[1]!["node"]!["explore_story"]!["media"] = null;
+        else ExploreMedia(raw)["location"] = null;
+        raw["errors"]![0]!["path"]![1] = 1;
+        var parsed = PayloadParser.Parse("instagram", raw.ToJsonString());
+        Assert.Empty(parsed.Diagnostics); Assert.Single(parsed.Warnings);
+        Assert.Equal(nullMedia ? 3 : 4, parsed.Posts.Count);
+    }
+
+    [Theory]
+    [InlineData("out_of_range")] [InlineData("negative")] [InlineData("caption")]
+    [InlineData("missing_icon")] [InlineData("nonnull_icon")] [InlineData("missing_author")]
+    [InlineData("missing_caption")] [InlineData("missing_image")]
+    public void DirectPathDoesNotExcuseContentOrUnverifiedShape(string change)
+    {
+        var raw = Fixture(); var path = new JsonArray("xdt_api__v1__feed__timeline__connection", "edges", 1, "node", "explore_story", "media", "location", "profile_pic_url");
+        raw["errors"]![0]!["path"] = path;
+        switch (change) {
+            case "out_of_range": path[2] = 9; break;
+            case "negative": path[2] = -1; break;
+            case "caption": path[6] = "caption"; break;
+            case "missing_icon": ExploreMedia(raw)["location"]!.AsObject().Remove("profile_pic_url"); break;
+            case "nonnull_icon": ExploreMedia(raw)["location"]!["profile_pic_url"] = "https://media.example.test/icon.jpg"; break;
+            case "missing_author": ExploreMedia(raw).Remove("user"); break;
+            case "missing_caption": ExploreMedia(raw).Remove("caption"); break;
+            case "missing_image": ExploreMedia(raw).Remove("image_versions2"); break;
+        }
+        var parsed = PayloadParser.Parse("instagram", raw.ToJsonString());
+        Assert.NotEmpty(parsed.Diagnostics); Assert.Empty(parsed.Warnings);
+        Assert.DoesNotContain(parsed.Posts, p => p.Post.PlatformPostId == "102");
+    }
+
 }

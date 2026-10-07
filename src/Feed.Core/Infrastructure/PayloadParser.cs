@@ -10,7 +10,7 @@ public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyLi
 public static class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
-    public const int Version = 9;
+    public const int Version = 10;
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
     public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
@@ -129,21 +129,28 @@ public static class PayloadParser
             if (Get(media, "pk", "id") is not null && At(media, "user").ValueKind == JsonValueKind.Object) return true;
         }
         if (platform == "instagram" && InstagramExploreBranchError(root, error)) return true;
-        // Instagram also reports a place-icon failure through an internal query alias.
-        // Only the observed single-explore-media shape is known: index zero belongs
-        // to that branch, not necessarily to edge zero in the outer timeline.
+        // The alias indexes Explore branches in response order, not outer timeline edges.
+        // Keep null media slots so malformed branches cannot shift the index.
         if (platform == "instagram" && path.Length == 5
             && path[0] == "_on_Query_xdt_api__v1__feed__timeline__connection_edges_node_on_XDTFeedItem_on_XDTFeedItem_explore_story_media"
-            && path[1] == "0" && path[2] == "node" && path[3] == "location" && path[4] == "profile_pic_url")
+            && int.TryParse(path[1], out var exploreIndex) && exploreIndex >= 0
+            && path[2] == "node" && path[3] == "location" && path[4] == "profile_pic_url")
         {
             var candidates = Array(At(root, "data", "xdt_api__v1__feed__timeline__connection", "edges"))
-                .Select(e => At(e, "node", "explore_story", "media")).Where(m => m.ValueKind == JsonValueKind.Object).ToArray();
-            if (candidates.Length != 1) return false;
-            var media = candidates[0];
-            return Get(media, "pk", "id") is not null && Get(media, "code", "shortcode") is not null
-                && Get(At(media, "user"), "pk", "id", "username") is not null
+                .Select(e => At(e, "node", "explore_story")).Where(e => e.ValueKind == JsonValueKind.Object)
+                .Select(e => At(e, "media")).ToArray();
+            if (exploreIndex >= candidates.Length) return false;
+            var media = candidates[exploreIndex];
+            return InstagramMediaUsable(media)
+                && candidates.Count(m => Get(m, "pk", "id") == Get(media, "pk", "id")) == 1
                 && At(media, "location", "profile_pic_url").ValueKind == JsonValueKind.Null;
         }
+        if (platform == "instagram" && path.Length == 8 && path[0] == "xdt_api__v1__feed__timeline__connection"
+            && path[1] == "edges" && int.TryParse(path[2], out var exploreEdge) && exploreEdge >= 0
+            && path[3] == "node" && path[4] == "explore_story" && path[5] == "media"
+            && path[6] == "location" && path[7] == "profile_pic_url")
+            return InstagramMediaUsable(Follow(At(root, "data"), path.Take(6)))
+                && Follow(At(root, "data"), path).ValueKind == JsonValueKind.Null;
         // A place's icon is neither post media nor author/content. The exact observed
         // GraphQL path is required; errors on caption, user, images or edges still fail.
         return platform == "instagram" && path.Length == 6 && path[0] == "xdt_api__v1__feed__user_timeline_graphql_connection"
