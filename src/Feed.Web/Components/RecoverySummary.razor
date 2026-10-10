@@ -1,11 +1,12 @@
 <div class="recovery-summary" data-status-refresh>
  <h2>Processing health</h2>
- @if(Attention > 0){<p><strong>@Attention tasks need your attention.</strong> Review the recovery instructions.</p>}
+ @if(Attention > 0){<p><strong>@Attention issue groups or tasks need your attention.</strong> Review the recovery instructions.</p>}
  else if(Paused > 0){<p><strong>Recovery is paused.</strong> Review the pause reason before resuming work.</p>}
  else if(Automatic > 0){<p><strong>Automatic recovery is scheduled.</strong> No action needed for these processing retries.</p>}
+ else if(Compatibility > 0){<p><strong>Collection compatibility notices.</strong> Some captured responses remain unresolved; collection may be incomplete.</p>}
  else{<p><strong>No outstanding processing recovery.</strong></p>}
- <p>@Pending visible posts awaiting classification · @Automatic tasks retrying automatically · @Paused paused · @Attention need attention</p>
- <p class="muted">A post can have separate classification and summary tasks. Collection coverage and login status are shown separately.</p>
+ <p>@Pending visible posts awaiting classification · @Automatic groups or tasks retrying automatically · @Paused paused · @Attention need attention · @Compatibility compatibility groups</p>
+ <p class="muted">Counts combine capture issue groups and model tasks. A post can have separate classification and summary tasks. Collection coverage and login status are shown separately.</p>
  <a href="/manage?section=recovery">View recovery progress</a>
  <p class="muted">Updated <time datetime="@UpdatedAt.ToString("O")">@RecoveryPresentation.At(UpdatedAt, Zone)</time>. <span class="status-auto-note" hidden>Status refreshes every 15 seconds while this page is visible.</span><noscript>Use Refresh status to update.</noscript></p>
 </div>
@@ -14,6 +15,7 @@
  [Parameter] public int Pending { get; set; }
  [Parameter] public DateTime UpdatedAt { get; set; }
  [Parameter] public TimeZoneInfo Zone { get; set; } = TimeZoneInfo.Utc;
+ int Compatibility => Issues.Count(i => i.Disposition == RecoveryDisposition.Compatibility);
  int Attention => Issues.Count(i => i.Disposition == RecoveryDisposition.Attention);
  int Automatic => Issues.Count(i => i.Disposition == RecoveryDisposition.Automatic);
  int Paused => Issues.Count(i => i.Disposition == RecoveryDisposition.Paused);

@@ -40,9 +40,27 @@ public sealed class Media
 }
 public sealed class RawSnapshot
 {
+    public string? CaptureToken { get; set; }
     public long Id { get; set; } public string Platform { get; set; } = ""; public long? RunId { get; set; } public string Path { get; set; } = ""; public string Kind { get; set; } = "feed"; public DateTime CapturedAt { get; set; } = Clock.Now;
     public bool Parsed { get; set; } public DateTime? AttemptedAt { get; set; } public DateTime? ParsedAt { get; set; } public string? Error { get; set; } public bool Deleted { get; set; } public long Bytes { get; set; }
     public int? BlockedParserVersion { get; set; } public string? Warning { get; set; }
+    public string? ContextJson { get; set; } public string? ClassificationJson { get; set; } public int? ParserVersion { get; set; }
+    public int RecoveryAttempts { get; set; } public DateTime? RecoveryAttemptedAt { get; set; } public string? RecoveryState { get; set; }
+    public string? RecoveryKey { get; set; } public string? RecoveryError { get; set; }
+}
+public sealed class RawDiagnostic
+{
+    public long Id { get; set; } public long RawSnapshotId { get; set; } public string Code { get; set; } = "";
+    public string Fingerprint { get; set; } = ""; public string Path { get; set; } = ""; public string Impact { get; set; } = "";
+    public string Evidence { get; set; } = ""; public int Root { get; set; } public int ParserVersion { get; set; }
+}
+public sealed class CaptureRecoveryAttempt
+{
+    public long Id { get; set; } public long RawSnapshotId { get; set; } public DateTime StartedAt { get; set; } = Clock.Now;
+    public DateTime? FinishedAt { get; set; } public string State { get; set; } = "running"; public string? Error { get; set; }
+    public string BodyHash { get; set; } = ""; public string InputHash { get; set; } = ""; public string? Response { get; set; } public string? RequestJson { get; set; }
+    public string Model { get; set; } = ""; public string? Endpoint { get; set; } public int PromptVersion { get; set; }
+    public string? ProposalJson { get; set; } public string? Validation { get; set; }
 }
 public sealed class Run
 {
@@ -71,6 +89,9 @@ public sealed class Like
 public sealed class PlatformState { public string Platform { get; set; } = ""; public bool NeedsRelogin { get; set; } public DateTime? LastOkRunAt { get; set; } public DateTime? LastRunFinishedAt { get; set; } public DateTime UpdatedAt { get; set; } = Clock.Now; }
 public sealed class TimelineVisit
 {
+    public string? VisualDiagnosisJson { get; set; } public string? VisualError { get; set; }
+    public DateTime? VisualAttemptedAt { get; set; } public int VisualAttempts { get; set; }
+    public string? CaptureToken { get; set; }
     public long Id { get; set; } public string Platform { get; set; } = ""; public long? AuthorId { get; set; } public string Url { get; set; } = ""; public string Name { get; set; } = ""; public long RunId { get; set; } public DateTime At { get; set; } = Clock.Now;
     public string Status { get; set; } = "unrendered"; public string CaptureStatus { get; set; } = "incomplete"; public int PostsFound { get; set; } public DateTime? NewestPostedAt { get; set; } public DateTime? OldestPostedAt { get; set; } public string StopReason { get; set; } = "interrupted"; public string? Note { get; set; } public string? Screenshot { get; set; }
 }

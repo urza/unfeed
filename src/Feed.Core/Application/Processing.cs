@@ -258,6 +258,15 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
         var apply = Apply(); var workers = Enumerable.Range(0, instance.Config.Llm.Parallel).Select(_ => Worker()).ToArray(); var feed = Feed();
         try { await feed; await Task.WhenAll(workers); results.Writer.TryComplete(); await apply; Volatile.Write(ref modelFinished, true); await recovery; await videoWork; }
         finally { cancellation.Cancel(); recoveryCancellation.Cancel(); inputs.Writer.TryComplete(); results.Writer.TryComplete(); try { await Task.WhenAll(workers.Append(feed).Append(apply).Append(recovery).Append(videoWork)); } catch when (ct.IsCancellationRequested) { } }
+        if (scope.Kind == "process")
+        {
+            var recovered = await new CaptureRecovery(paths, factory, model, ingest).Run(instance, platforms, scope.Limit ?? instance.Config.CaptureRecovery.Batch, ct, report: (platform, state) => {
+                var stage = counts.Stage(platform, "capture-model"); stage.Selected++;
+                if (state is "applied" or "observed") stage.Completed++; else { stage.Failed++; counts.Failed++; }
+            });
+            progress?.Invoke($"capture model recovery: applied={recovered}");
+        }
+        if (scope.Kind == "process") await new VisitDiagnosis(paths, factory, model).Run(instance, platforms, scope.Limit ?? instance.Config.CaptureRecovery.Batch, ct);
         await Remaining();
         async Task Remaining()
         {

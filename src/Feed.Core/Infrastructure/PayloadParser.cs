@@ -6,11 +6,13 @@ namespace Feed.Core.Infrastructure;
 public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyList<Person> People, bool ExplicitEmpty, IReadOnlyList<string> Diagnostics)
 {
     public IReadOnlyList<string> Warnings { get; init; } = [];
+    public IReadOnlyList<CapturePart> Parts { get; init; } = [];
+    public IReadOnlyList<CaptureDiagnostic> Issues { get; init; } = [];
 }
 public static class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
-    public const int Version = 10;
+    public const int Version = 12;
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
     public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
@@ -30,7 +32,59 @@ public static class PayloadParser
         var query = u.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries).Where(x => !transient.Contains(x.Split('=')[0], StringComparer.OrdinalIgnoreCase));
         return new UriBuilder(u) { Query = string.Join('&', query), Fragment = "" }.Uri.ToString();
     }
-    public static ParsedCapture Parse(string platform, string body, bool people = false)
+    public static ParsedCapture Parse(string platform, string body, bool people = false, CaptureContext? context = null)
+    {
+        var roots = new List<string>();
+        try { using var doc = JsonDocument.Parse(body); roots.Add(body); }
+        catch (JsonException) { roots.AddRange(body.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.StartsWith("for (;;);", StringComparison.Ordinal) ? l[9..] : l)); }
+        if (roots.Count == 0) roots.Add(body);
+        var observations = new Dictionary<string, Observation>(); var persons = new List<Person>();
+        var parts = new List<CapturePart>(); var issues = new List<CaptureDiagnostic>(); var errors = new List<string>(); var warnings = new List<string>();
+        for (var index = 0; index < roots.Count; index++)
+        {
+            var parsed = ParseCore(platform, roots[index], people); JsonElement root = default;
+            try { using var doc = JsonDocument.Parse(roots[index]); root = doc.RootElement.Clone(); } catch (JsonException) { }
+            // Inspect independent data siblings as well as JSONL roots. A successful
+            // post branch cannot establish that an unfamiliar sibling is harmless.
+            var data = At(root, "data");
+            if (!people && parsed.Posts.Count > 0 && data.ValueKind == JsonValueKind.Object && data.EnumerateObject().Count() > 1)
+            {
+                foreach (var branch in data.EnumerateObject())
+                {
+                    if (branch.Value.ValueKind is JsonValueKind.Null or JsonValueKind.False || EnvelopeMetadata(platform, branch)) continue;
+                    var wrapped = JsonSerializer.Serialize(new { data = new Dictionary<string, JsonElement> { [branch.Name] = branch.Value } });
+                    var sibling = ParseCore(platform, wrapped);
+                    if (sibling.Posts.Count == 0 && !sibling.ExplicitEmpty && sibling.Diagnostics.Count > 0)
+                    {
+                        var message = "parser uncertainty: unrecognized data branch; path=data/" + branch.Name;
+                        parsed = parsed with { Diagnostics = parsed.Diagnostics.Append(message).ToArray() };
+                    }
+                }
+            }
+            foreach (var o in parsed.Posts)
+                if (observations.TryGetValue(o.Post.PlatformPostId, out var old)) observations[o.Post.PlatformPostId] = (old.IsPartial && !o.IsPartial ? o : old) with { TimelineOwnerIds = old.TimelineOwnerIds.Concat(o.TimelineOwnerIds).Distinct().ToArray() };
+                else observations.Add(o.Post.PlatformPostId, o);
+            persons.AddRange(parsed.People); errors.AddRange(parsed.Diagnostics); warnings.AddRange(parsed.Warnings);
+            parts.Add(new(index, parsed.Posts.Count > 0 ? "posts" : parsed.ExplicitEmpty ? "explicit_empty" : parsed.Diagnostics.Count == 0 ? "auxiliary" : "unknown", parsed.Posts.Count, parsed.ExplicitEmpty));
+            issues.AddRange(parsed.Diagnostics.Select(m => CaptureDiagnostics.Create(platform, context?.Operation, root, index, m, false)));
+            issues.AddRange(parsed.Warnings.Select(m => CaptureDiagnostics.Create(platform, context?.Operation, root, index, m, true)));
+        }
+        return new(observations.Values.ToArray(), persons.DistinctBy(p => (p.Id, p.Url)).ToArray(), parts.Any(p => p.ExplicitEmpty), errors) { Warnings = warnings, Parts = parts, Issues = issues };
+    }
+    static bool EnvelopeMetadata(string platform, JsonProperty branch)
+    {
+        var value = branch.Value;
+        static bool Scalar(JsonElement e) => e.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null;
+        if (platform == "instagram" && branch.Name == "xdt_viewer")
+            return value.ValueKind == JsonValueKind.Object && value.EnumerateObject().All(p => p.Name == "user")
+                && Get(At(value, "user"), "id") is not null && At(value, "user").EnumerateObject().All(p => p.Name == "id");
+        if (platform != "facebook") return false;
+        if (branch.Name is "cursor" or "deduplication_key" or "min_gap_type_index_string" or "sposnsor_new_distac_action" or "top_story_cache_score" or "brs_content_label" or "is_ad_eligible_for_ad_pod") return Scalar(value);
+        if (value.ValueKind != JsonValueKind.Object) return false;
+        string[] fields = branch.Name switch { "cat_sensitive" => ["enc", "cat"], "feed_backend_data" => ["qid", "original_qid", "vsid", "vspos", "should_recent_vpv_fetch_tracking_data", "serialized_payloads"], _ => [] };
+        return fields.Length > 0 && value.EnumerateObject().Any() && value.EnumerateObject().All(p => fields.Contains(p.Name) && Scalar(p.Value));
+    }
+    static ParsedCapture ParseCore(string platform, string body, bool people = false)
     {
         var roots = new List<JsonElement>(); var errors = new List<string>(); var warnings = new List<string>();
         try { using var d = JsonDocument.Parse(body); roots.Add(d.RootElement.Clone()); }
@@ -233,6 +287,48 @@ public static class PayloadParser
             && Get(node, "__typename") == "User" && At(node, "profile_tile_sections").ValueKind == JsonValueKind.Object
             && node.EnumerateObject().All(p => p.Name is "__typename" or "id" or "profile_tile_sections");
     }
+    static bool FacebookProfileHeader(JsonElement root)
+    {
+        var data = At(root, "data");
+        if (data.ValueKind != JsonValueKind.Object) return false;
+        var user = At(data, "user"); var header = At(user, "profile_header_renderer");
+        if (At(root, "path").ValueKind == JsonValueKind.Undefined && At(root, "label").ValueKind == JsonValueKind.Undefined)
+            return data.EnumerateObject().All(p => p.Name == "user") && Get(user, "id") is { } id
+                && user.EnumerateObject().All(p => p.Name is "id" or "profile_header_renderer" or "profile_plus_post_transition_modal")
+                && At(user, "profile_plus_post_transition_modal").ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
+                && Get(header, "__typename") == "XFBProfileEntityConvergenceHeaderRenderer"
+                && Get(At(header, "user"), "__typename") == "User" && Get(At(header, "user"), "id") == id
+                && At(header, "user").EnumerateObject().All(p => p.Name is "__isProfile" or "name" or "profile_picture_for_sticky_bar"
+                    or "__isEntity" or "__typename" or "url" or "gender" or "wem_private_sharing_bundle" or "is_viewer_friend"
+                    or "user_avatar" or "__isRenderedProfile" or "cover_photo" or "avatar_cover_photo_takeover_type"
+                    or "profile_active_messenger_room" or "story_bucket" or "is_additional_profile_plus" or "delegate_page" or "id"
+                    or "live_video_for_comet_live_ring" or "msgr_user_rich_status" or "is_live_for_comet_live_ring" or "profilePhoto"
+                    or "profilePicLarge" or "profilePicMedium" or "profilePicSmall" or "profile_video" or "profile_picture_expiration_time"
+                    or "header_top_row" or "profile_tabs" or "alternate_name" or "username_for_profile" or "ai_profile_attribution_subtitle"
+                    or "show_verified_badge_on_profile" or "is_visibly_memorialized" or "profile_social_context"
+                    or "is_eligible_for_comet_floating_action_bar" or "top_banner" or "if_viewer_can_see_pymk_unit_on_initial_load")
+                && header.EnumerateObject().All(p => p.Name is "__typename" or "user" or "viewer" or "nux" or "restriction_violation_status"
+                    or "legal_reporting_uri" or "legal_reporting_cta_type" or "__module_operation_ProfileCometHeaderQuery" or "__module_component_ProfileCometHeaderQuery");
+        var path = Array(At(root, "path")).Select(Text).ToArray();
+        if (!path.SequenceEqual(new[] { "user", "profile_header_renderer", "user" })
+            && !path.SequenceEqual(new[] { "user", "profile_header_renderer", "user", "header_top_row", "profile_user" })) return false;
+        string[] fields = Get(root, "label") switch
+        {
+            "ProfileCometProfilePicture_user$defer$ProfileCometLockedProfilePopover_user" => ["name", "gender", "wem_private_sharing_bundle"],
+            "ProfileCometProfilePicture_user$defer$ProfileCometProfilePictureViewMenu_user"
+                or "ProfileCometProfilePicture_user$defer$ProfileCometProfilePictureEditMenu_user"
+                or "ProfileCometProfilePicture_user$defer$ProfileCometProfilePictureTemporaryEditMenu_user" => ["story_bucket"],
+            "ProfileCometProfilePicture_profile$defer$ProfileCometProfilePictureViewMenu_profile"
+                or "ProfileCometProfilePicture_profile$defer$ProfileCometProfilePictureEditMenu_profile" => ["__isProfile", "profile_photo", "profilePic160", "profile_video", "profile_picture_is_silhouette"],
+            "ProfileCometProfilePicture_profile$defer$ProfileCometProfilePictureTemporaryEditMenu_profile" => ["__isProfile", "profile_photo", "profile_picture_expiration_time", "profilePic160", "profile_video"],
+            "ProfileCometDirectoryHeaderTopRow_renderer$defer$ProfileCometHeaderPrimaryActionBar_actor"
+                or "ProfileCometEntityConvergenceHeader_profileHeaderRenderer$defer$ProfileCometHeaderPrimaryActionBar_actor" => ["__isActorWithActionBar", "is_viewer_eligible_for_directory_on_comet", "is_viewer_eligible_for_pymk_carat_in_comet_directory", "primaryActions", "__isNode", "__isHasRecommendationsUnit", "recommendations_unit"],
+            "ProfileCometEntityConvergenceHeader_profileHeaderRenderer$defer$ProfileCometHeaderActionBar_actor"
+                or "ProfileCometEntityConvergenceHeader_profileHeaderRenderer$defer$ProfileCometHeaderMoreActionButton_actor" => ["__isActorWithActionBar", "primaryActions", "secondaryActions", "is_scaled_category_view_enabled", "newMoreOptionsActions", "profile_plus_transition_path"],
+            _ => []
+        };
+        return fields.Length > 0 && data.EnumerateObject().Any() && data.EnumerateObject().All(p => fields.Contains(p.Name));
+    }
     static bool FacebookAuxiliary(JsonElement root)
     {
         // Observed non-post feed responses, not proof of an empty timeline. Keep unknown
@@ -240,6 +336,13 @@ public static class PayloadParser
         if (At(root, "errors").ValueKind != JsonValueKind.Undefined && !(Array(At(root, "errors")).Any() && Array(At(root, "errors")).All(e => NonPostError("facebook", root, e)))) return false;
         var data = At(root, "data");
         if (data.ValueKind != JsonValueKind.Object) return false;
+        if (FacebookProfileHeader(root)) return true;
+        if (Get(At(data, "node"), "__typename") == "DiscoverFeedUnit" && Get(At(data, "cat_sensitive"), "cat") == "MULTI_FB_STORIES_TRAY"
+            && data.EnumerateObject().All(p => p.Name == "node" || EnvelopeMetadata("facebook", p) || p.Value.ValueKind == JsonValueKind.Null)
+            && At(data, "node", "content", "item_objects") is var trays && trays.ValueKind == JsonValueKind.Array && trays.GetArrayLength() > 0
+            && Array(trays).All(t => Get(At(t, "data"), "__typename") == "DirectMessageThreadBucket" && Get(At(t, "data"), "__isStoryBucket") == "DirectMessageThreadBucket"
+                && t.EnumerateObject().All(p => p.Name is "data" or "id"))
+            && !Walk(data).Any(n => At(n.Node, "post_id").ValueKind != JsonValueKind.Undefined || At(n.Node, "attachments").ValueKind != JsonValueKind.Undefined)) return true;
         var viewer = At(data, "viewer");
         if (FacebookComposerWithPrivacy(data)) return true;
         if (data.EnumerateObject().All(p => p.Name == "viewer") && At(viewer, "feed_comet_composer").ValueKind == JsonValueKind.Object && viewer.EnumerateObject().All(p => p.Name is "actor" or "feed_comet_composer")) return true;
@@ -380,7 +483,8 @@ public static class PayloadParser
         var numeric = new[] { reference[3..], Get(n, "userID", "id", "idString", "__dr") }.FirstOrDefault(x => long.TryParse(x, out _));
         return new(numeric ?? Get(n, "ent_id") ?? reference[3..], name, url, Get(n, "img_url") ?? Get(At(n, "profile_picture"), "uri"));
     }
-    public static IEnumerable<string> Embedded(string html)
+    public static IEnumerable<string> Embedded(string html) => EmbeddedCaptures(html).Select(x => x.Body);
+    public static IEnumerable<(string Body, string Operation)> EmbeddedCaptures(string html)
     {
         foreach (Match match in Regex.Matches(html, "<script[^>]*type=[\"']application/json[\"'][^>]*>(.*?)</script>", RegexOptions.Singleline | RegexOptions.IgnoreCase))
         {
@@ -388,9 +492,9 @@ public static class PayloadParser
             foreach (var payload in EmbeddedWalk(root)) yield return payload;
         }
     }
-    static IEnumerable<string> EmbeddedWalk(JsonElement e)
+    static IEnumerable<(string Body, string Operation)> EmbeddedWalk(JsonElement e)
     {
-        if (e.ValueKind == JsonValueKind.Array) { var a = e.EnumerateArray().ToArray(); if (a.Length == 2 && Text(a[0])?.Contains("Feed", StringComparison.OrdinalIgnoreCase) == true && At(a[1], "__bbox", "result", "data").ValueKind == JsonValueKind.Object) yield return At(a[1], "__bbox", "result").GetRawText(); foreach (var child in a) foreach (var p in EmbeddedWalk(child)) yield return p; }
+        if (e.ValueKind == JsonValueKind.Array) { var a = e.EnumerateArray().ToArray(); if (a.Length == 2 && Text(a[0])?.Contains("Feed", StringComparison.OrdinalIgnoreCase) == true && At(a[1], "__bbox", "result", "data").ValueKind == JsonValueKind.Object) yield return (At(a[1], "__bbox", "result").GetRawText(), Text(a[0])!); foreach (var child in a) foreach (var p in EmbeddedWalk(child)) yield return p; }
         if (e.ValueKind == JsonValueKind.Object) foreach (var property in e.EnumerateObject()) foreach (var p in EmbeddedWalk(property.Value)) yield return p;
     }
 }

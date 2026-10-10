@@ -14,6 +14,13 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
     {
         var relative = Path.GetRelativePath(paths.Root, file); var info = new FileInfo(file); await using var db = factory.Open();
         await db.Database.ExecuteSqlInterpolatedAsync($"INSERT OR IGNORE INTO RawSnapshots (Platform,RunId,Path,Kind,CapturedAt,Parsed,Deleted,Bytes) VALUES ({platform},{runId},{relative},{(FriendsDirectory(info.DirectoryName!) ? "friends" : "feed")},{info.LastWriteTimeUtc},0,0,{info.Length})", ct);
+        if (!System.IO.File.Exists(file + ".context") && !System.IO.File.Exists(file + ".visits")) return;
+        if (!System.IO.File.Exists(file + ".visits") && await db.RawSnapshots.AnyAsync(r => r.Path == relative && r.CaptureToken != null, ct)) return;
+        try {
+            var context = CaptureContext.Read(file, await System.IO.File.ReadAllTextAsync(file, ct));
+            var token = System.IO.File.Exists(file + ".visits") ? null : context?.Visit;
+            await db.RawSnapshots.Where(r => r.Path == relative).ExecuteUpdateAsync(u => u.SetProperty(r => r.CaptureToken, token), ct);
+        } catch (Exception e) when (e is IOException or FormatException) { /* Ingest records malformed evidence. No identity is inferred. */ }
     }
     public async Task Discover(string platform, CancellationToken ct)
     {
@@ -27,7 +34,22 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
         await using (var db = factory.Open()) await db.RawSnapshots.Where(r => r.Path == relative).ExecuteUpdateAsync(s => s.SetProperty(r => r.AttemptedAt, Clock.Now), ct);
         try
         {
-            var people = FriendsDirectory(Path.GetDirectoryName(file)!); var parsed = PayloadParser.Parse(platform, await System.IO.File.ReadAllTextAsync(file, ct), people);
+            var people = FriendsDirectory(Path.GetDirectoryName(file)!); var body = await System.IO.File.ReadAllTextAsync(file, ct);
+            var context = CaptureContext.Read(file, body);
+            var parsed = CaptureRecovery.ParseSaved(platform, body, file, people, context);
+            await using (var diagnosticsDb = factory.Open())
+            {
+                await using var tx = await diagnosticsDb.Database.BeginTransactionAsync(ct);
+                var raw = await diagnosticsDb.RawSnapshots.SingleAsync(r => r.Path == relative, ct);
+                if (raw.ParserVersion != PayloadParser.Version || raw.BlockedParserVersion is { } blocked && blocked != PayloadParser.Version) { raw.RecoveryAttempts = 0; raw.RecoveryState = null; raw.RecoveryAttemptedAt = null; raw.RecoveryError = null; raw.RecoveryKey = null; }
+                raw.ContextJson = context is null ? null : JsonSerializer.Serialize(context);
+                // Multi-visit deduplication cannot safely assign this capture to one person.
+                raw.CaptureToken = System.IO.File.Exists(file + ".visits") ? null : context?.Visit;
+                raw.ClassificationJson = JsonSerializer.Serialize(parsed.Parts); raw.ParserVersion = PayloadParser.Version;
+                await diagnosticsDb.RawDiagnostics.Where(d => d.RawSnapshotId == raw.Id).ExecuteDeleteAsync(ct);
+                foreach (var d in parsed.Issues) diagnosticsDb.RawDiagnostics.Add(new() { RawSnapshotId = raw.Id, Code = d.Code, Fingerprint = d.Fingerprint, Path = d.Path, Impact = d.Impact, Evidence = d.Evidence, Root = d.Root, ParserVersion = PayloadParser.Version });
+                await diagnosticsDb.SaveChangesAsync(ct); await tx.CommitAsync(ct);
+            }
             await using (var db = factory.Open()) await db.RawSnapshots.Where(r => r.Path == relative).ExecuteUpdateAsync(s => s.SetProperty(r => r.Warning, parsed.Warnings.Count == 0 ? null : string.Join("; ", parsed.Warnings)), ct);
             if (people) foreach (var person in parsed.People)
             {

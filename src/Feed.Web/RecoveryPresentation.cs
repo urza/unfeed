@@ -23,6 +23,7 @@ public static class RecoveryPresentation
     };
     public static string Label(RecoveryDisposition state) => state switch {
         RecoveryDisposition.Automatic => "Retrying automatically", RecoveryDisposition.Paused => "Recovery paused",
+        RecoveryDisposition.Compatibility => "Collection compatibility",
         RecoveryDisposition.Informational => "Informational notices", _ => "Needs your attention"
     };
     public static string Timing(RecoveryIssue issue, DateTime now) => issue.Disposition switch {

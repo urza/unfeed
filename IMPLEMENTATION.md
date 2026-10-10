@@ -41,3 +41,10 @@ The [numbered specification](docs/README.md) defines behavior and compatibility.
 - The feed and noVNC have no authentication. Deployment requires private access. Chromium sandbox support depends on the host; disabling its sandbox is an explicit instance choice.
 
 These limitations describe the current release. They do not weaken the specification's privacy, identity, safe-write or recovery guarantees. Instance-specific evidence and workarounds stay in data/.
+
+
+## Capture classification and local-model recovery
+
+CaptureContext preserves origin evidence alongside immutable raw bodies. PayloadParser classifies independent roots and data siblings and emits structured diagnostics. CaptureIndex backfills diagnostics without ingestion; ParserAudit emits private read-only comparison reports. RecoveryQuery groups stored signatures and reads paginated representative/detail rows independently from summaries. CaptureRecovery records bounded model attempts, validates source pointers and stores hash-bound overlays for ordinary ingestion. Supported automatic actions are profile metadata clearance and constrained simple partial-post extraction; unknown/complex content remains diagnostic. It never generates executable parser code. Model bodies are not redacted, and only the primary configured endpoint is used.
+
+Collection recovery separates compatibility investigation from actionable owner attention. `CaptureHealth` derives supersession only from verified single-visit tokens, same-person later captured posts and completed ingestion. `RecoveryEvidence` constrains model evidence to generated IDs and retains source validation; `VisitDiagnosis` provides bounded advisory screenshot/DOM classification without mutating coverage or posts. Missing/ambiguous legacy provenance is intentionally not inferred.

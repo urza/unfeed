@@ -464,3 +464,14 @@ SweepTargets persist `Attempts` and nullable `RetryAt`; `retry` is a waiting sta
 
 
 The management queue migration expands the platform-request check constraint and active-request uniqueness to `friends` and `login`. The existing claim, startup identity and recovery columns apply unchanged. `management:refilter_pending` in Kv records unfinished management-driven refiltering; completion clears it in the same transaction as the post updates.
+
+
+## Capture classification and model-attempt provenance
+
+RawSnapshots additionally store nullable `ContextJson`, `ClassificationJson`, `ParserVersion`, `RecoveryAttemptedAt`, `RecoveryState`, `RecoveryKey`, `RecoveryError`, and `RecoveryAttempts` (default zero). Existing records remain unresolved until an actual successful replay. `RawDiagnostics` contains the current structured issues per raw: code, normalized path, affected root, content impact, fingerprint, human-readable evidence and parser version. Diagnostic indexing can backfill these fields without ingesting posts or changing historical failure/coverage outcomes.
+
+`CaptureRecoveryAttempts` records raw identity, start/finish, state/error, source and input hashes, exact request messages/response, model/endpoint, prompt version, proposal and validation result. Attempt history is retained when a successful replay replaces current diagnostics. Recovery overlays bind validated proposals to exact raw-body hashes and are revalidated on replay. They never rewrite the raw bytes. A parser version change resets the per-capture model budget during actual ingest, preserving attempt history.
+
+`TimelineVisits.CaptureToken` is nullable for old visits. New request context is frozen at request start and refers to that token; late responses are saved but cannot supply posts or empty evidence for the next visit. An unavailable association stays unknown.
+
+RawSnapshot also stores nullable CaptureToken for verified single-visit association; duplicate multi-visit captures remain unassigned. TimelineVisit stores VisualDiagnosisJson, VisualError, VisualAttemptedAt and VisualAttempts. Visual diagnosis never changes the recorded capture outcome. Current-alert supersession is derived from later clean visits and completed ingestion, preserving the historical records. Raw/visit CaptureToken indexes support the association checks.

@@ -174,6 +174,48 @@ public sealed class ParserTests
     [InlineData("{\"data\":{\"node\":{\"__typename\":\"UnknownFeedUnit\"}}}")]
     [InlineData("{\"errors\":[],\"data\":{\"node\":{\"__typename\":\"GroupsYouShouldJoinFeedUnit\"}}}")]
     public void UnknownOrErroredFacebookResponsesRemainDiagnostic(string body) => Assert.NotEmpty(PayloadParser.Parse("facebook", body).Diagnostics);
+    [Fact]
+    public void FacebookProfileHeaderRequiresKnownShapeAndMatchingIdentity()
+    {
+        const string raw = """{"data":{"user":{"id":"fixture-person","profile_header_renderer":{"__typename":"XFBProfileEntityConvergenceHeaderRenderer","user":{"__typename":"User","id":"fixture-person","name":"Synthetic Person"}},"profile_plus_post_transition_modal":null}}}""";
+        var parsed = PayloadParser.Parse("facebook", raw);
+        Assert.Empty(parsed.Diagnostics); Assert.Empty(parsed.Posts); Assert.False(parsed.ExplicitEmpty);
+        foreach (var invalid in new[] {
+            raw.Replace("XFBProfileEntityConvergenceHeaderRenderer", "UnknownHeader"),
+            raw.Replace("\"name\":\"Synthetic Person\"", "\"timeline_list_feed_units\":{}"),
+            raw.Replace("\"profile_plus_post_transition_modal\":null", "\"timeline_list_feed_units\":{}"),
+            raw.Replace("\"profile_plus_post_transition_modal\":null", "\"profile_plus_post_transition_modal\":{}"),
+            raw.Replace("\"__typename\":\"User\",\"id\":\"fixture-person\"", "\"__typename\":\"User\",\"id\":\"other-person\""),
+            raw.Replace("{\"data\":", "{\"errors\":[{\"message\":\"Synthetic failure\"}],\"data\":") })
+            Assert.NotEmpty(PayloadParser.Parse("facebook", invalid).Diagnostics);
+    }
+    [Theory]
+    [InlineData("ProfileCometProfilePicture_user$defer$ProfileCometLockedProfilePopover_user", "name")]
+    [InlineData("ProfileCometProfilePicture_user$defer$ProfileCometProfilePictureViewMenu_user", "story_bucket")]
+    [InlineData("ProfileCometProfilePicture_user$defer$ProfileCometProfilePictureEditMenu_user", "story_bucket")]
+    [InlineData("ProfileCometProfilePicture_user$defer$ProfileCometProfilePictureTemporaryEditMenu_user", "story_bucket")]
+    [InlineData("ProfileCometProfilePicture_profile$defer$ProfileCometProfilePictureViewMenu_profile", "profile_photo")]
+    [InlineData("ProfileCometProfilePicture_profile$defer$ProfileCometProfilePictureEditMenu_profile", "profile_photo")]
+    [InlineData("ProfileCometProfilePicture_profile$defer$ProfileCometProfilePictureTemporaryEditMenu_profile", "profile_photo")]
+    [InlineData("ProfileCometDirectoryHeaderTopRow_renderer$defer$ProfileCometHeaderPrimaryActionBar_actor", "primaryActions")]
+    [InlineData("ProfileCometEntityConvergenceHeader_profileHeaderRenderer$defer$ProfileCometHeaderPrimaryActionBar_actor", "primaryActions")]
+    [InlineData("ProfileCometEntityConvergenceHeader_profileHeaderRenderer$defer$ProfileCometHeaderActionBar_actor", "secondaryActions")]
+    [InlineData("ProfileCometEntityConvergenceHeader_profileHeaderRenderer$defer$ProfileCometHeaderMoreActionButton_actor", "secondaryActions")]
+    public void FacebookDeferredProfileControlsRequireExactLabelsPathsAndFields(string label, string field)
+    {
+        foreach (var path in new[] { new[] { "user", "profile_header_renderer", "user" }, new[] { "user", "profile_header_renderer", "user", "header_top_row", "profile_user" } })
+        {
+            var raw = System.Text.Json.JsonSerializer.Serialize(new { label, path, data = new Dictionary<string, object?> { [field] = null } });
+            var parsed = PayloadParser.Parse("facebook", raw);
+            Assert.Empty(parsed.Diagnostics); Assert.Empty(parsed.Posts); Assert.False(parsed.ExplicitEmpty);
+            Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace(field, "unknown_field")).Diagnostics);
+            Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("profile_header_renderer", "timeline_list_feed_units")).Diagnostics);
+            Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace(label, "Unknown$defer$" + label.Split("$defer$")[1])).Diagnostics);
+            Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("\"data\":{", "\"data\":{\"post_id\":\"fixture-post\"," )).Diagnostics);
+            Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("{\"label\":", "{\"errors\":[{\"message\":\"Synthetic failure\"}],\"label\":" )).Diagnostics);
+            Assert.NotEmpty(PayloadParser.Parse("facebook", raw + "\n{\"data\":{\"unknown_feed\":{}}}").Diagnostics);
+        }
+    }
     [Theory]
     [InlineData("CometAudioLanguageUtils_dubtrackMapping", "dubbed_track_mapping")]
     [InlineData("VideoPlayerWithLiveVideoEndscreenAndChaining_video", "live_end_text")]

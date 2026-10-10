@@ -9,11 +9,16 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Feed.Web;
 
+public sealed record RecoveryAttemptSummary(long Id, long RawId, string State, string? Validation, string? Error, DateTime At);
 public sealed record ProcessingCompletion(long PostId, string Platform, string Task, DateTime At);
 public sealed record PersonRow(Author Author, bool Close, bool Muted, bool Always, int Posts, int Hidden, DateTime? Latest, TimelineVisit? Visit, string? Retry);
 public sealed record PlatformOverview(string Platform, int Friends, int Posts, int Hidden, PlatformState? State, Run? Collection, Run? Import, Run[] Running, RunRequest[] Requests, string Next);
 public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnapshot Instance, PlatformOverview[] Platforms, PersonRow[] People, int PeopleCount, int Page, string Query, string Platform, string Filter, string Section, string Disk, string? DiskAt, int Pending, int Failures)
 {
+    public RecoveryAttemptSummary[] RecoveryAttempts { get; init; } = [];
+    public string? RecoverySignature { get; init; }
+    public int RecoveryPage { get; init; } = 1;
+    public RecoveryIssue[] RecoverySummary { get; init; } = [];
     public RecoveryIssue[] Recovery { get; init; } = [];
     public ProcessingCompletion[] RecentCompletions { get; init; } = [];
     public Run[] Collections { get; init; } = [];
@@ -37,7 +42,7 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         return delta > TimeSpan.Zero ? $"in {duration}" : $"{duration} ago";
     }
     public static string Reference(Author a) => Identity.Keys(a).FirstOrDefault(k => k == Platforms.Prefix(a.Platform) + ":" + a.PlatformAuthorId) ?? Identity.Keys(a).FirstOrDefault() ?? throw new FormatException("This person has no usable identity reference.");
-    public async Task<ManagementPage> Read(string section, string query, string platform, string filter, int page, CancellationToken ct, long? collectionId = null)
+    public async Task<ManagementPage> Read(string section, string query, string platform, string filter, int page, CancellationToken ct, long? collectionId = null, string? signature = null)
     {
         var docs = documents.Read(); var s = docs.Snapshot();
         await using var db = factory.Open();
@@ -49,14 +54,17 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
             var rules = new RuleContext(a, authors, s); var count = counts.FirstOrDefault(c => c.Id == a.Id);
             return new PersonRow(a, rules.CloseFriend, s.Preferences.Mutes.Any(e => Identity.Matches(e, a)), s.Preferences.Shows.Any(e => Identity.Resolve(e, authors).Any(x => x.Id == a.Id)), count?.Total ?? 0, count?.Hidden ?? 0, count?.Latest, visits.FirstOrDefault(v => v.AuthorId == a.Id), targets.FirstOrDefault(t => t.AuthorId == a.Id) is { } t ? $"Retry {t.Attempts}/{TimelineCoverage.MaxAttempts}; due {t.RetryAt:u}" : null);
         }).Where(p => filter switch { "friends" => p.Author.IsFriend, "removed" => !p.Author.IsFriend, "close" => p.Close, "muted" => p.Muted, "always" => p.Always, _ => true }).ToArray();
-        page = Math.Clamp(page, 1, Math.Max(1, (visiblePeople.Length + 39) / 40));
+        page = section == "recovery" ? Math.Max(1, page) : Math.Clamp(page, 1, Math.Max(1, (visiblePeople.Length + 39) / 40));
         var states = await db.PlatformStates.AsNoTracking().ToArrayAsync(ct); var runs = await db.Runs.AsNoTracking().OrderByDescending(r => r.Id).ToArrayAsync(ct);
         var requests = await db.RunRequests.AsNoTracking().Where(r => r.Status == "pending" || r.Status == "claimed").ToArrayAsync(ct);
         var postCounts = await db.Posts.GroupBy(p => p.Platform).Select(g => new { Platform = g.Key, Total = g.Count(), Hidden = g.Count(p => p.Hidden) }).ToArrayAsync(ct);
         var kv = await db.Kv.AsNoTracking().Where(k => k.Key.StartsWith("slot:")).ToDictionaryAsync(k => k.Key, k => k.Value, ct);
         var overviews = Platforms.All.Select(p => new PlatformOverview(p, authors.Count(a => a.Platform == p && a.IsFriend), postCounts.FirstOrDefault(c => c.Platform == p)?.Total ?? 0, postCounts.FirstOrDefault(c => c.Platform == p)?.Hidden ?? 0, states.FirstOrDefault(x => x.Platform == p), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "collect"), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "friends"), runs.Where(r => r.Platform == p && r.Status == "running").ToArray(), requests.Where(r => r.Platform == p).ToArray(), NextRun(s.Config, p, Clock.Now, kv))).ToArray();
         return new(docs, s, overviews, visiblePeople.Skip((page - 1) * 40).Take(40).ToArray(), visiblePeople.Length, page, query, platform, filter, section, await db.Get("disk:summary", ct) ?? "Not measured yet", await db.Get("disk:at", ct), await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct), await db.Posts.CountAsync(p => p.LlmError != null || p.SummaryError != null, ct)) {
-            Recovery = await RecoveryQuery.Read(db, s, ct: ct),
+            RecoveryAttempts = section == "recovery" ? await db.CaptureRecoveryAttempts.AsNoTracking().OrderByDescending(a => a.Id).Take(10).Select(a => new RecoveryAttemptSummary(a.Id, a.RawSnapshotId, a.State, a.Validation, a.Error, a.StartedAt)).ToArrayAsync(ct) : [],
+            RecoverySignature = signature, RecoveryPage = Math.Max(1, page),
+            RecoverySummary = await RecoveryQuery.Read(db, s, ct: ct, grouped: true, summaryOnly: true),
+            Recovery = await RecoveryQuery.Read(db, s, ct: ct, grouped: signature is null, fingerprint: signature, page: page),
             Collections = runs.Where(r => r.Kind == "collect").Take(10).Concat(runs.Where(r => r.Id == collectionId)).DistinctBy(r => r.Id).ToArray(),
             RecentCompletions = section == "recovery" ? (await db.Posts.AsNoTracking().Where(p => p.JudgedAt > Clock.Now.AddDays(-1) && p.VerdictContentRevision == p.ContentRevision && p.LlmError == null).OrderByDescending(p => p.JudgedAt).Take(10).Select(p => new ProcessingCompletion(p.Id, p.Platform, "Classification completed", p.JudgedAt!.Value)).ToArrayAsync(ct)) : [],
             CollectionVisits = section == "recovery" ? await db.TimelineVisits.AsNoTracking().Where(v => db.Runs.Where(r => r.Kind == "collect").OrderByDescending(r => r.Id).Take(10).Select(r => r.Id).Contains(v.RunId) || v.RunId == collectionId).ToArrayAsync(ct) : []

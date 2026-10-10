@@ -21,6 +21,9 @@ Usage: dotnet out/Feed.Cli.dll COMMAND [--data DIR] [options]
   collect --platform X|all [--mode home|close_friends|all_followed] [--scrolls N] [--person H] [--friends A,B] [--friends-limit N] [--retry-incomplete]
   friends --platform X [--offline [--all-dirs]]
   reparse --platform X [--run DIR | --path DIR | --all | --failed] [--no-network]
+  capture-index --platform X [--limit N]
+  parser-audit --platform X [--raw-ids N,N | --run-id N | --failed] [--limit N] --output FILE
+  capture-recover --platform X|all [--raw-ids N,N] [--mode observe|apply] [--limit N]
   process --platform X|all [--limit N]
   refilter [--post-id N | --since DATE | --all]
   rescore [--all] [--platform X] [--limit N] [--since DATE] [--post-id N | --post-ids N,N,...] [--author REF] [--text-only]
@@ -47,12 +50,36 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
             if (a.Command == "browser") { if (a.Positionals.Count != 1 || a.Positionals[0] is not ("install" or "install-deps")) throw new ArgumentException("browser install|install-deps"); return Microsoft.Playwright.Program.Main([a.Positionals[0], "chromium"]); }
             var paths = new InstancePaths(a.Get("data")); paths.Create(); InstanceFiles files;
             try { files = new(paths); } catch (Exception e) when (e is FormatException or JsonException) { Console.Error.WriteLine("config error: " + e.Message); return 2; }
-            var s = files.Current; var factory = new DbFactory(paths); await using (var db = factory.Open()) await db.Initialize(ct);
+            var s = files.Current; var factory = new DbFactory(paths);
+            if (a.Command == "parser-audit")
+            {
+                var output = a.Get("output") ?? throw new ArgumentException("--output is required; use a private instance path");
+                output = Path.GetFullPath(output);
+                if (!output.StartsWith(paths.Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal) || !output.EndsWith(".json", StringComparison.OrdinalIgnoreCase) || File.Exists(output)) throw new ArgumentException("Audit output must be a new .json file inside the instance");
+                var report = await ParserAudit.Read(factory, a.Platform(), a.Number("limit") ?? 20, a.Get("raw-ids") is { } rawIds ? ParseIds(rawIds) : null, a.Number("run-id"), a.Flag("failed"), ct);
+                Directory.CreateDirectory(Path.GetDirectoryName(output)!); InstancePaths.AtomicWrite(output, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true })); Console.WriteLine($"parser-audit: {report.Length} captures; report={output}; no ingest or model calls"); return 0;
+            }
+            await using (var db = factory.Open()) await db.Initialize(ct);
             var level = (a.Get("log-level") ?? s.Config.Ui.LogLevel) switch { "trace" => LogLevel.Trace, "debug" => LogLevel.Debug, "warn" => LogLevel.Warning, "error" => LogLevel.Error, _ => LogLevel.Information };
             logs = new(paths, "cli", level, a.Flag("quiet")); Console.SetOut(new LoggedOutput(originalOutput, logs, a.Flag("quiet"))); logs.Write(LogLevel.Information, "cli", "command " + a.Command + "; instance=" + paths.Root); ledger = new(factory);
             if (a.Command is "help" or "--help" || a.Flag("help")) { Console.WriteLine(Usage); return 0; }
             if (a.Get("request-id") is null != (a.Get("claim-token") is null)) throw new ArgumentException("--request-id and --claim-token are required together");
             using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan }; var media = new MediaFiles(paths, http); var ingest = new Ingest(paths, factory, media); var capture = new Capture(paths, factory, ingest, ledger); var actions = new Actions(factory); var maintenance = new Maintenance(paths, factory, http);
+            if (a.Command == "capture-index")
+            {
+                var indexLimit = a.Number("limit") ?? 100;
+                if (indexLimit > 5000) throw new ArgumentException("Index limit cannot exceed 5000");
+                Console.WriteLine($"capture-index: {await CaptureIndex.Run(factory, a.Platform(), indexLimit, ct)} captures indexed; no post replay"); return 0;
+            }
+            if (a.Command == "capture-recover")
+            {
+                var p = a.Platform(true); var recoveryMode = a.Get("mode") ?? s.Config.CaptureRecovery.Mode;
+                if (recoveryMode is not ("observe" or "apply")) throw new ArgumentException("Recovery mode must be observe or apply");
+                using var ownership = ResourceLock.Try(paths, "processing") ?? throw new ResourceBusyException("processing busy");
+                var snapshot = s with { Config = s.Config with { CaptureRecovery = s.Config.CaptureRecovery with { Mode = recoveryMode } } };
+                var n = await new CaptureRecovery(paths, factory, new ModelClient(http), ingest).Run(snapshot, p == "all" ? Platforms.All.Where(s.Config.Enabled).ToArray() : [p], a.Number("limit") ?? s.Config.CaptureRecovery.Batch, ct, a.Get("raw-ids") is { } rawIds ? ParseIds(rawIds) : null);
+                Console.WriteLine($"capture-recover: applied={n}; inspect saved model attempts and Recovery for unresolved proposals"); return 0;
+            }
             if (a.Command == "init") { Console.WriteLine($"init: instance at {paths.Root}, database {paths.Database} ready; config {(File.Exists(paths.Get("config.json")) ? "found" : "absent (defaults: every platform paused)")}"); return 0; }
             if (a.Command == "rules") { Console.Write(await Reports.Rules(factory, s)); return 0; }
             if (a.Command == "status") { foreach (var line in await ledger.Recover(s.Config, ct)) Console.WriteLine(line); Console.Write(await Reports.Status(factory, s)); return 0; }

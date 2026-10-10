@@ -81,6 +81,65 @@ namespace Feed.Core.Infrastructure.Migrations
                     b.ToTable("AuthorKeys");
                 });
 
+            modelBuilder.Entity("Feed.Core.Domain.CaptureRecoveryAttempt", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("BodyHash")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Endpoint")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("FinishedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("InputHash")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Model")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("PromptVersion")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProposalJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("RawSnapshotId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RequestJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Response")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Validation")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RawSnapshotId", "StartedAt");
+
+                    b.ToTable("CaptureRecoveryAttempts");
+                });
+
             modelBuilder.Entity("Feed.Core.Domain.Feedback", b =>
                 {
                     b.Property<long>("Id")
@@ -463,6 +522,50 @@ namespace Feed.Core.Infrastructure.Migrations
                     b.ToTable("Posts");
                 });
 
+            modelBuilder.Entity("Feed.Core.Domain.RawDiagnostic", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Evidence")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Impact")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ParserVersion")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Path")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("RawSnapshotId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Root")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RawSnapshotId");
+
+                    b.HasIndex("Fingerprint", "RawSnapshotId");
+
+                    b.ToTable("RawDiagnostics");
+                });
+
             modelBuilder.Entity("Feed.Core.Domain.RawSnapshot", b =>
                 {
                     b.Property<long>("Id")
@@ -478,7 +581,16 @@ namespace Feed.Core.Infrastructure.Migrations
                     b.Property<long>("Bytes")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("CaptureToken")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CapturedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClassificationJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContextJson")
                         .HasColumnType("TEXT");
 
                     b.Property<bool>("Deleted")
@@ -497,12 +609,30 @@ namespace Feed.Core.Infrastructure.Migrations
                     b.Property<DateTime?>("ParsedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("ParserVersion")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Path")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Platform")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("RecoveryAttemptedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("RecoveryAttempts")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RecoveryError")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RecoveryKey")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RecoveryState")
                         .HasColumnType("TEXT");
 
                     b.Property<long?>("RunId")
@@ -513,8 +643,12 @@ namespace Feed.Core.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CaptureToken");
+
                     b.HasIndex("Path")
                         .IsUnique();
+
+                    b.HasIndex("RecoveryKey");
 
                     b.HasIndex("Platform", "CapturedAt");
 
@@ -718,6 +852,9 @@ namespace Feed.Core.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("CaptureToken")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -756,7 +893,21 @@ namespace Feed.Core.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("VisualAttemptedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("VisualAttempts")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("VisualDiagnosisJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("VisualError")
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("CaptureToken");
 
                     b.HasIndex("Platform", "Url", "Id");
 
@@ -768,6 +919,15 @@ namespace Feed.Core.Infrastructure.Migrations
                     b.HasOne("Feed.Core.Domain.Author", null)
                         .WithMany()
                         .HasForeignKey("AuthorId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Feed.Core.Domain.CaptureRecoveryAttempt", b =>
+                {
+                    b.HasOne("Feed.Core.Domain.RawSnapshot", null)
+                        .WithMany()
+                        .HasForeignKey("RawSnapshotId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
@@ -787,6 +947,15 @@ namespace Feed.Core.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("AuthorId")
                         .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("Feed.Core.Domain.RawDiagnostic", b =>
+                {
+                    b.HasOne("Feed.Core.Domain.RawSnapshot", null)
+                        .WithMany()
+                        .HasForeignKey("RawSnapshotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 #pragma warning restore 612, 618
         }

@@ -1,0 +1,16 @@
+<Shell Title="Capture recovery audit" Stamp="@Stamp" Background="@Background">
+<div class="management"><section class="manage-panel glass">
+<h1>Capture recovery audit</h1><a href="/manage?section=recovery">Back to Recovery</a>
+<p>Capture #@Attempt.RawSnapshotId · @Attempt.State · validation: @Attempt.Validation</p>
+<p>Model: @Attempt.Model · prompt version @Attempt.PromptVersion · started @Attempt.StartedAt.ToString("u")</p>
+@if(Attempt.Error is not null){<p>@Attempt.Error</p>}
+<p>Source hash: <code>@Attempt.BodyHash</code></p>
+<details open><summary>Model response</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">@Attempt.Response</pre></details>
+<details><summary>Exact request messages</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">@Attempt.RequestJson</pre></details>
+</section></div>
+</Shell>
+@code {
+[Parameter, EditorRequired] public CaptureRecoveryAttempt Attempt { get; set; } = default!;
+[Parameter] public string Stamp { get; set; } = "dev";
+[Parameter] public string? Background { get; set; }
+}

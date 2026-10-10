@@ -18,6 +18,7 @@ public sealed record FeedConfig
     public string? Timezone { get; init; }
     public ImmutableDictionary<string, PlatformConfig> Platforms { get; init; } = ImmutableDictionary<string, PlatformConfig>.Empty;
     public LlmConfig Llm { get; init; } = new();
+    public CaptureRecoveryConfig CaptureRecovery { get; init; } = new();
     public FilterConfig Filters { get; init; } = new();
     public SchedulerConfig Scheduler { get; init; } = new();
     public int RawRetentionDays { get; init; } = 60;
@@ -78,6 +79,17 @@ public sealed record LlmConfig
     public int TimeoutSeconds { get; init; } = 180;
     public int Batch { get; init; } = 20;
     public int Parallel { get; init; } = 1;
+}
+public sealed record CaptureRecoveryConfig
+{
+    public bool? EnableThinking { get; init; }
+    public bool VisualDiagnosis { get; init; }
+    public string Mode { get; init; } = "off";
+    public int Batch { get; init; } = 2;
+    public int MaxAttempts { get; init; } = 2;
+    public int RetryMinutes { get; init; } = 60;
+    public int MaxInputChars { get; init; } = 120000;
+    public int MaxTokens { get; init; } = 8000;
 }
 public sealed record VideoContextConfig
 {
@@ -151,6 +163,10 @@ public static class InstanceValidation
     {
         static void Require(bool condition, string message) { if (!condition) throw new FormatException(message); }
         static void Choice(string s, params string[] values) { if (!values.Contains(s)) throw new FormatException($"Unknown value: {s}"); }
+        Choice(c.CaptureRecovery.Mode, "off", "observe", "apply");
+        Require(c.CaptureRecovery.Batch is >= 1 and <= 20 && c.CaptureRecovery.MaxAttempts is >= 1 and <= 5
+            && c.CaptureRecovery.RetryMinutes >= 1 && c.CaptureRecovery.MaxInputChars is >= 1000 and <= 1000000
+            && c.CaptureRecovery.MaxTokens is >= 256 and <= 32000, "Invalid capture_recovery bounds");
         Require(c.Llm.Batch >= 1 && c.Llm.Parallel >= 1 && c.Ui.RenderCap >= 1 && c.Ui.CoverageStaleHours >= 1, "batch, parallel, render_cap and coverage_stale_hours must be at least 1");
         Require(c.Llm.Threshold is >= 0 and <= 10 && c.Llm.TimeoutSeconds >= 10 && c.Llm.MaxTokens > 0 && c.Llm.SummaryMaxTokens > 0 && c.Llm.VisionMaxImages >= 0, "Invalid model bounds");
         Require(new[] { c.RawRetentionDays, c.HiddenMediaRetentionDays, c.HiddenVideoRetentionDays, c.VideoRetentionDays, c.MaxVideoMb, c.Scheduler.JitterMinutes, c.Scheduler.ManualCooldownMinutes, c.Scheduler.RunRequestTtlMinutes, c.Ui.Stack.MinPosts, c.Ui.Stack.WindowDays }.All(n => n >= 0), "Retention, size, cooldown and stack values cannot be negative");

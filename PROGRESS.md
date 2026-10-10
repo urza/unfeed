@@ -112,3 +112,17 @@ Publish the existing Docker image to GHCR on main pushes, using repository-token
 ## Multiple Explore location-icon warnings
 
 Extend exact location-icon warning recognition to indexed Explore branches and direct Explore media paths, preserving null branch slots and requiring usable media with an explicitly null icon. Complete engineering checks: all 304 non-browser tests and Release CLI/Web builds pass; collector contract and combined specification updated. Saved-response parsing and isolated offline replay pass, with existing post/media state preserved through a guarded repair. Deployment and operational evidence remain private; synthetic tests do not establish general live platform compatibility.
+
+
+## Facebook profile-header capture compatibility
+
+Recognize narrowly identified profile-header and deferred profile-control responses as auxiliary metadata, without claiming an empty timeline. Add synthetic positive and rejection tests, validate saved captures offline, and rehearse targeted replay before deployment. Preserve post content, media, author records and historical coverage. Complete: 316 non-browser tests and Release CLI/Web publishes pass; combined specification regenerated. Offline rehearsal and deployed targeted replay preserve all post, media, author and coverage records. Health and recovery verification are recorded in private instance evidence.
+
+
+## Capture classification and recovery redesign
+
+Implemented: [implementation plan](docs/CAPTURE-RECOVERY-PLAN.md) covers durable request/preload context, independent root classification, structured diagnostics, paginated issue groups and bounded audit/index tooling. Local-model recovery uses source pointers, validated observation/apply modes and durable request/response audits; raw content is sent intact within the input bound. Endpoint outages share a cooldown without exhausting capture decision budgets. All 333 non-browser tests, both management browser modes and Release CLI/Web publishes pass; specification regenerated. Saved-capture comparison and isolated migration/index rehearsal preserve existing outcomes and historical records. Deployment preservation checks passed; operational evidence remains private. Bounded actual-model checks pass supported auxiliary/post recovery, replay idempotence and unresolved-content handling. A larger saved envelope produced invalid evidence and token exhaustion; validators rejected it. Actual-model acceptance is partial, and general capture compatibility is not established.
+
+## Collection recovery reliability
+
+Implemented: compatibility investigation is separate from owner attention; verified later clean same-person visits supersede associated capture alerts while preserving historical gaps. Model evidence uses generated IDs and exact source validation; optional screenshot/DOM diagnosis remains advisory. All 347 non-browser tests, 31 final focused checks and both management browser modes pass. Actual-model checks pass supported recovery, unresolved content, a representative previously rejected saved envelope and synthetic visible-post/explicit-empty screenshots. Isolated migration/provenance backfill preserves all pre-existing application fields. Deployment preservation and live HTTP checks pass; private operational evidence stays in the instance. General platform compatibility is not established by these bounded checks.

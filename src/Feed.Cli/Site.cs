@@ -8,6 +8,12 @@ public static class Site
         + (timeline ? ", [role='main'] a[href*='/posts/'], [role='main'] a[href*='/photo/?fbid='], [role='main'] a[href*='/photo.php?fbid=']" : "")
         : timeline ? "article,a[href*='/p/'],a[href*='/reel/'],a[href*='/tv/']" : "article,main article,[role='feed'],[data-testid='feed']";
     public static string Timeline(string platform, string handle) => Uri.TryCreate(handle, UriKind.Absolute, out var u) && u.Scheme is "http" or "https" ? handle : Platforms.Home(platform) + handle.Trim('/', '@') + "/";
+    public static string? Operation(string url, string? body)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
+        var field = uri.Query.TrimStart('?').Split('&').Concat((body ?? "").Split('&')).FirstOrDefault(x => x.StartsWith("fb_api_req_friendly_name=", StringComparison.Ordinal));
+        return field is null ? null : System.Net.WebUtility.UrlDecode(field[(field.IndexOf('=') + 1)..]);
+    }
     public static bool Gate(string platform, string url, string method, int status, string contentType, string? body, bool people)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;

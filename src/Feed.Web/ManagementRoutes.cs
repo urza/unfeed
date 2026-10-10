@@ -14,10 +14,14 @@ public static class ManagementRoutes
         app.MapGet("/manage", async (HttpContext ctx, Management management, Backgrounds backgrounds, IAntiforgery antiforgery) => {
             var section = ctx.Request.Query["section"].ToString(); if (!Sections.Contains(section)) section = "overview";
             try {
-                var model = await management.Read(section, ctx.Request.Query["q"].ToString(), ctx.Request.Query["platform"].ToString(), ctx.Request.Query["filter"].ToString(), int.TryParse(ctx.Request.Query["page"], out var page) ? page : 1, ctx.RequestAborted, long.TryParse(ctx.Request.Query["collection"], out var collection) ? collection : null);
+                var model = await management.Read(section, ctx.Request.Query["q"].ToString(), ctx.Request.Query["platform"].ToString(), ctx.Request.Query["filter"].ToString(), int.TryParse(ctx.Request.Query["page"], out var page) ? page : 1, ctx.RequestAborted, long.TryParse(ctx.Request.Query["collection"], out var collection) ? collection : null, ctx.Request.Query["signature"].FirstOrDefault());
                 ctx.Response.Headers.CacheControl = "no-store";
                 return (IResult)new RazorComponentResult<Manage>(new { Model = model, Stamp = stamp, Background = backgrounds.Current.Selected, RequestToken = antiforgery.GetAndStoreTokens(ctx).RequestToken!, Message = ctx.Request.Query["message"].FirstOrDefault() });
             } catch (Exception e) when (e is FormatException or System.Text.Json.JsonException or IOException) { return Problem("Instance files could not be read: " + e.Message + " Correct the files and reload. Diagnostics keeps the last valid settings.", 409, section); }
+        });
+        app.MapGet("/debug/capture-recovery/{id:long}", async (long id, Feed.Core.Infrastructure.DbFactory factory, Backgrounds backgrounds) => {
+            await using var db = factory.Open(); var attempt = await db.CaptureRecoveryAttempts.FindAsync(id);
+            return attempt is null ? (IResult)Results.NotFound() : new RazorComponentResult<RecoveryAudit>(new { Attempt = attempt, Stamp = stamp, Background = backgrounds.Current.Selected });
         });
         app.MapPost("/manage/work/process", (HttpContext ctx, Management management, IAntiforgery antiforgery) => Submit(ctx, antiforgery, _ => management.QueueProcessing(ctx.RequestAborted)));
         app.MapPost("/manage/settings/{action}", (string action, HttpContext ctx, Management management, IAntiforgery antiforgery) => Submit(ctx, antiforgery, f => management.SaveSettings(action, f, ctx.RequestAborted)));

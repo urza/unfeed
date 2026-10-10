@@ -43,24 +43,28 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
         run.RawDir = prefix + Clock.Now.ToString("yyyyMMddTHHmmss") + "-" + run.Id;
         var directory = paths.Get("raw", platform, run.RawDir); Directory.CreateDirectory(directory);
         await using (var db = factory.Open()) await db.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(u => u.SetProperty(r => r.RawDir, run.RawDir), ct);
-        var pending = new ConcurrentBag<Task>(); var hashes = new HashSet<string>(); var captured = new ConcurrentDictionary<string, Observation>(); var surfaceObservations = new ConcurrentDictionary<string, Observation>(); var seen = new HashSet<string>(); var serial = new SemaphoreSlim(1); int batches = 0, listenerErrors = 0, scrolls = 0, visited = 0, incomplete = 0, emptyVisits = 0, unrendered = 0; bool explicitEmpty = false;
+        var pending = new ConcurrentBag<Task>(); var hashes = new Dictionary<string, string>(); string? activeVisit = null; var captured = new ConcurrentDictionary<string, Observation>(); var surfaceObservations = new ConcurrentDictionary<string, Observation>(); var seen = new HashSet<string>(); var serial = new SemaphoreSlim(1); int batches = 0, listenerErrors = 0, scrolls = 0, visited = 0, incomplete = 0, emptyVisits = 0, unrendered = 0; bool explicitEmpty = false;
         await using (var db = factory.Open()) foreach (var id in await db.Posts.Where(p => p.Platform == platform).Select(p => p.PlatformPostId).ToListAsync(ct)) seen.Add(id);
-        async Task Save(string body)
+        async Task Save(string body, CaptureContext context)
         {
             await serial.WaitAsync(ct);
             try
             {
-                var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(body))); if ((platform == "instagram" || friends) && !hashes.Add(hash))
+                var hash = CaptureContext.Hash(body); if ((platform == "instagram" || friends) && hashes.TryGetValue(hash, out _))
                 {
+                    var existing = hashes[hash];
+                    var visits = File.Exists(existing + ".visits") ? JsonSerializer.Deserialize<List<CaptureContext>>(await File.ReadAllTextAsync(existing + ".visits", ct))! : [];
+                    var association = context with { BodyHash = hash };
+                    if (!visits.Contains(association)) { visits.Add(association); InstancePaths.AtomicWrite(existing + ".visits", JsonSerializer.Serialize(visits)); }
                     // The bytes already have a raw ledger entry; the visit still observed them.
-                    var replay = PayloadParser.Parse(platform, body, friends); explicitEmpty |= replay.ExplicitEmpty;
-                    foreach (var observation in replay.Posts) surfaceObservations.AddOrUpdate(observation.Post.PlatformPostId, observation, (_, existing) => existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(observation.TimelineOwnerIds).Distinct().ToArray() });
+                    var replay = PayloadParser.Parse(platform, body, friends, context); if (context.Visit == activeVisit) { explicitEmpty |= replay.ExplicitEmpty; listenerErrors += replay.Diagnostics.Count; }
+                    foreach (var observation in replay.Posts.Where(_ => context.Visit == activeVisit)) surfaceObservations.AddOrUpdate(observation.Post.PlatformPostId, observation, (_, existing) => existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(observation.TimelineOwnerIds).Distinct().ToArray() });
                     return;
                 }
-                var path = Path.Combine(directory, $"{++batches:000}{(platform == "facebook" ? ".jsonl" : ".json")}"); InstancePaths.AtomicWrite(path, body); await ingest.Register(platform, path, run.Id, ct);
-                var parsed = PayloadParser.Parse(platform, await File.ReadAllTextAsync(path, ct), friends); explicitEmpty |= parsed.ExplicitEmpty;
-                foreach (var diagnostic in parsed.Diagnostics) { listenerErrors++; Console.Error.WriteLine("parser warning: " + diagnostic); }
-                foreach (var observation in parsed.Posts) { captured.TryAdd(observation.Post.PlatformPostId, observation); surfaceObservations.AddOrUpdate(observation.Post.PlatformPostId, observation, (_, existing) => existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(observation.TimelineOwnerIds).Distinct().ToArray() }); }
+                var path = Path.Combine(directory, $"{++batches:000}{(platform == "facebook" ? ".jsonl" : ".json")}"); CaptureContext.Publish(path, body, context); hashes[hash] = path; await ingest.Register(platform, path, run.Id, ct);
+                var parsed = PayloadParser.Parse(platform, await File.ReadAllTextAsync(path, ct), friends, context); if (context.Visit == activeVisit) explicitEmpty |= parsed.ExplicitEmpty;
+                foreach (var diagnostic in parsed.Diagnostics) { if (context.Visit == activeVisit) listenerErrors++; Console.Error.WriteLine("parser warning: " + diagnostic); }
+                foreach (var observation in parsed.Posts) { captured.TryAdd(observation.Post.PlatformPostId, observation); if (context.Visit == activeVisit) surfaceObservations.AddOrUpdate(observation.Post.PlatformPostId, observation, (_, existing) => existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(observation.TimelineOwnerIds).Distinct().ToArray() }); }
             }
             catch (Exception e) when (e is not OperationCanceledException) { Interlocked.Increment(ref listenerErrors); Console.Error.WriteLine("capture warning: " + e.Message); }
             finally { serial.Release(); }
@@ -72,20 +76,27 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
             await ledger.Phase(run.Id, "browser", ct);
             await using var session = await BrowserSession.Open(paths, platform, s.Config, ct); var page = session.Page;
             await using (var db = factory.Open()) if (await db.PlatformStates.AnyAsync(p => p.Platform == platform && p.NeedsRelogin, ct)) return "refused";
+            var requestVisits = new System.Runtime.CompilerServices.ConditionalWeakTable<IRequest, CaptureContext>();
+            session.Context.Request += (_, request) => {
+                var operation = Site.Operation(request.Url, request.PostData);
+                requestVisits.AddOrUpdate(request, new(1, "network", operation, new Uri(request.Url).AbsolutePath, null, null, activeVisit, ""));
+            };
             session.Context.Response += (_, response) =>
             {
                 if (!Site.Gate(platform, response.Url, response.Request.Method, response.Status, response.Headers.GetValueOrDefault("content-type", ""), response.Request.PostData, friends)) return;
-                async Task Receive() { try { await Save(await response.TextAsync()); } catch (Exception e) when (e is not OperationCanceledException) { Interlocked.Increment(ref listenerErrors); Console.Error.WriteLine("response warning: " + e.Message); } }
+                var context = requestVisits.TryGetValue(response.Request, out var original) ? original : new CaptureContext(1, "network", Site.Operation(response.Url, response.Request.PostData), new Uri(response.Url).AbsolutePath, null, null, null, "");
+                context = context with { Status = response.Status, ContentType = response.Headers.GetValueOrDefault("content-type", "") };
+                async Task Receive() { try { await Save(await response.TextAsync(), context); } catch (Exception e) when (e is not OperationCanceledException) { Interlocked.Increment(ref listenerErrors); Console.Error.WriteLine("response warning: " + e.Message); } }
                 pending.Add(Receive());
             };
             async Task Check() { ct.ThrowIfCancellationRequested(); if (await Site.Checkpoint(page, platform)) throw new CheckpointException(); await Site.DismissNotificationPrompt(page); }
             async Task<(string Status, string Stop)> Surface(string url, bool timeline, int cap)
             {
-                await Drain(); surfaceObservations.Clear(); explicitEmpty = false; await page.GotoAsync(url, new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 60000 }); await Check();
+                await Drain(); surfaceObservations.Clear(); explicitEmpty = false; activeVisit = Guid.NewGuid().ToString("N"); await page.GotoAsync(url, new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 60000 }); await Check();
                 var end = DateTime.UtcNow.AddSeconds(60); bool rendered = false;
                 while (DateTime.UtcNow < end) { await Check(); await Drain(); if (explicitEmpty && timeline) return ("empty", "explicit_empty"); if (await page.Locator(Site.Selectors(platform, timeline)).CountAsync() > 0) { rendered = true; break; } await Task.Delay(2000, ct); }
                 if (!rendered) { await Check(); if (timeline) return ("unrendered", "timeout"); throw new IOException("feed never appeared; session stale or page blocked"); }
-                if (platform == "facebook") { int n = 0; foreach (var embedded in PayloadParser.Embedded(await page.ContentAsync())) { await Save(embedded); n++; } Console.WriteLine($"embedded: {n} preloaded batch(es)"); }
+                if (platform == "facebook") { int n = 0; foreach (var embedded in PayloadParser.EmbeddedCaptures(await page.ContentAsync())) { await Save(embedded.Body, new(1, "embedded", embedded.Operation, null, null, null, activeVisit, "")); n++; } Console.WriteLine($"embedded: {n} preloaded batch(es)"); }
                 var personVisit = options.Person is not null && options.Mode != "all_followed";
                 var progress = new CollectionProgress(personVisit);
                 for (int n = 0; n < cap; n++)
@@ -112,12 +123,13 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
                 catch (Exception e) { outcome = ("error", "error"); failure = e; }
                 visited++;
                 var observed = surfaceObservations.Values.Where(x => Site.TimelineAuthorMatches(platform, url, author, x)).Select(x => x.Post).ToArray();
-                var visit = new TimelineVisit { Platform = platform, AuthorId = author?.Id, Url = url.TrimEnd('/'), Name = author?.DisplayName ?? "", RunId = run.Id, Status = outcome.Status, CaptureStatus = outcome.Status == "empty" ? "empty" : outcome.Status == "rendered" && observed.Length > 0 && listenerErrors == errorsBefore ? "captured" : "incomplete", PostsFound = observed.Length, NewestPostedAt = observed.Select(p => p.PostedAt).Max(), OldestPostedAt = observed.Select(p => p.PostedAt).Min(), StopReason = outcome.Stop, Note = failure?.Message ?? (listenerErrors > errorsBefore ? $"{listenerErrors - errorsBefore} capture/parser error(s); inspect raw diagnostics for run #{run.Id}" : observed.Length == 0 && outcome.Status == "rendered" ? "Page rendered, but no post payload matched the target author; not evidence of an empty timeline" : null) };
-                if (outcome.Status == "unrendered")
+                var visit = new TimelineVisit { Platform = platform, AuthorId = author?.Id, Url = url.TrimEnd('/'), Name = author?.DisplayName ?? "", RunId = run.Id, CaptureToken = activeVisit, Status = outcome.Status, CaptureStatus = outcome.Status == "empty" ? "empty" : outcome.Status == "rendered" && observed.Length > 0 && listenerErrors == errorsBefore ? "captured" : "incomplete", PostsFound = observed.Length, NewestPostedAt = observed.Select(p => p.PostedAt).Max(), OldestPostedAt = observed.Select(p => p.PostedAt).Min(), StopReason = outcome.Stop, Note = failure?.Message ?? (listenerErrors > errorsBefore ? $"{listenerErrors - errorsBefore} capture/parser error(s); inspect raw diagnostics for run #{run.Id}" : observed.Length == 0 && outcome.Status == "rendered" ? "Page rendered, but no post payload matched the target author; not evidence of an empty timeline" : null) };
+                if (visit.CaptureStatus == "incomplete" && (outcome.Status == "unrendered" || s.Config.CaptureRecovery.VisualDiagnosis && outcome.Status == "rendered"))
                 {
                     try {
-                    var text = await page.Locator("body").InnerTextAsync(); visit.Note = (await page.TitleAsync()) + " | " + page.Url + " | " + text[..Math.Min(200, text.Length)];
-                    var name = "timeline-" + Identity.Safe(author?.PlatformAuthorId ?? new Uri(url).AbsolutePath.Trim('/')) + ".png"; await page.ScreenshotAsync(new() { Path = Path.Combine(directory, name) }); visit.Screenshot = $"media/diagnostics/{platform}/{run.RawDir}/{name}"; Directory.CreateDirectory(Path.GetDirectoryName(paths.Get(visit.Screenshot))!); File.Copy(Path.Combine(directory, name), paths.Get(visit.Screenshot), true);
+                    var text = await page.Locator("body").InnerTextAsync(); visit.Note ??= (await page.TitleAsync()) + " | " + page.Url + " | " + text[..Math.Min(200, text.Length)];
+                    var name = "timeline-" + activeVisit + "-" + Identity.Safe(author?.PlatformAuthorId ?? new Uri(url).AbsolutePath.Trim('/')) + ".png"; await page.ScreenshotAsync(new() { Path = Path.Combine(directory, name) }); visit.Screenshot = $"media/diagnostics/{platform}/{run.RawDir}/{name}"; Directory.CreateDirectory(Path.GetDirectoryName(paths.Get(visit.Screenshot))!); File.Copy(Path.Combine(directory, name), paths.Get(visit.Screenshot), true);
+                    InstancePaths.AtomicWrite(paths.Get(visit.Screenshot) + ".page", JsonSerializer.Serialize(new { title = await page.TitleAsync(), url = page.Url, text = text[..Math.Min(16000, text.Length)], truncated = text.Length > 16000 }));
                     } catch (Exception e) { visit.Note = "diagnostic failed: " + e.Message; }
                 }
                 if (visit.CaptureStatus == "incomplete") incomplete++; if (visit.CaptureStatus == "empty") emptyVisits++; if (visit.Status == "unrendered") unrendered++;

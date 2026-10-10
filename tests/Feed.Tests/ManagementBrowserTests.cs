@@ -23,6 +23,10 @@ public sealed class ManagementBrowserTests
             db.Add(new Post { Platform="instagram",PlatformPostId="fixture",AuthorId=id,Text="Synthetic post" });
             db.Add(new Post { Platform="instagram",PlatformPostId="retry-fixture",AuthorId=id,Text="Synthetic retry",IngestReadyAt=Clock.Now,LlmAttemptedAt=Clock.Now.AddHours(-1),LlmTokenLimit=4000,LlmFailures=1,LlmError="model token budget exhausted (max_tokens=4000)" });
             db.Add(new RawSnapshot {Platform="instagram",Path="raw/synthetic-warning.json",Parsed=true,Warning="location/profile_pic_url unavailable"});
+            db.Add(new RawSnapshot {Platform="facebook",Path="raw/synthetic-compatibility.json",Error="Unrecognized response",BlockedParserVersion=PayloadParser.Version});
+            await db.SaveChangesAsync();
+            for(int n=0;n<55;n++) { var raw=new RawSnapshot {Platform="facebook",Path=$"raw/synthetic-group-{n}.json",Parsed=true,Warning="Synthetic auxiliary warning"};db.Add(raw);await db.SaveChangesAsync();db.RawDiagnostics.Add(new(){RawSnapshotId=raw.Id,Code="upstream_error",Fingerprint="fixture-signature",Impact="auxiliary",Evidence="Synthetic auxiliary warning"});
+                if(n==0) db.CaptureRecoveryAttempts.Add(new(){RawSnapshotId=raw.Id,State="observed",Validation="accepted",Model="synthetic",Response="Synthetic decision <script>doNotExecute()</script>",RequestJson="Synthetic capture input"}); }
             await db.SaveChangesAsync();
         }
         var listener=new TcpListener(IPAddress.Loopback,0);listener.Start();var port=((IPEndPoint)listener.LocalEndpoint).Port;listener.Stop();
@@ -40,6 +44,8 @@ public sealed class ManagementBrowserTests
             await page.GetByRole(AriaRole.Link,new(){Name="Backgrounds",Exact=true}).ClickAsync();Assert.EndsWith("/manage/backgrounds",page.Url);Assert.Equal("Backgrounds",await page.Locator(".manage-nav [aria-current=page]").InnerTextAsync());await page.GetByRole(AriaRole.Link,new(){Name="Overview",Exact=true}).ClickAsync();
             await page.GetByRole(AriaRole.Link,new(){Name="View recovery progress",Exact=true}).ClickAsync();
             Assert.Contains("Recovery is paused",await page.Locator(".recovery-summary").InnerTextAsync());
+            Assert.Contains("1 compatibility groups",await page.Locator(".recovery-summary").InnerTextAsync());
+            Assert.Contains("no immediate owner action",await page.Locator(".recovery-details").InnerTextAsync());
             var notices=page.Locator(".recovery-section").Filter(new(){HasText="Informational notices"});Assert.Null(await notices.GetAttributeAsync("open"));
             await page.GetByText("Show affected items and recovery instructions",new(){Exact=true}).First.ClickAsync();
             Assert.Contains("Collection association unavailable",await page.Locator(".recovery-details").InnerTextAsync());
@@ -49,6 +55,12 @@ public sealed class ManagementBrowserTests
             await page.SetViewportSizeAsync(390,844);Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));
             Assert.Equal("rgb(20, 33, 50)",await page.Locator(".recovery-summary").EvaluateAsync<string>("e => getComputedStyle(e).backgroundColor"));
             await page.ScreenshotAsync(new(){Path=$"/tmp/feed-recovery-phone-{javascript}.png"});await page.SetViewportSizeAsync(1280,900);
+            await page.GotoAsync(url+"/manage?section=recovery&signature=fixture-signature");Assert.Equal(50,await page.Locator(".recovery-item").CountAsync());
+            await page.GetByRole(AriaRole.Link,new(){Name="Next",Exact=true}).ClickAsync();Assert.Equal(5,await page.Locator(".recovery-item").CountAsync());
+            await page.GetByRole(AriaRole.Link,new(){Name="Inspect model decision and evidence",Exact=true}).ClickAsync();Assert.Contains("Synthetic decision <script>",await page.Locator("pre").First.InnerTextAsync());
+            await page.SetViewportSizeAsync(390,844);await page.EvaluateAsync("document.querySelector('.background').style.background = 'repeating-linear-gradient(35deg,white 0 24px,#ffdf00 24px 48px,#ee4499 48px 72px)'");
+            Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));Assert.NotEqual("rgba(0, 0, 0, 0)",await page.Locator(".manage-panel").EvaluateAsync<string>("e => getComputedStyle(e).backgroundColor"));
+            await page.ScreenshotAsync(new(){Path=$"/tmp/feed-capture-audit-phone-{javascript}.png"});await page.SetViewportSizeAsync(1280,900);
             var bad=await http.PostAsync(url+"/manage/settings/scheduler",new FormUrlEncodedContent(new Dictionary<string,string>{{"enabled","true"}}));Assert.Equal(HttpStatusCode.BadRequest,bad.StatusCode);
             await page.GotoAsync(url+"/manage?section=people&q=Synthetic&platform=instagram");var stale=await context.NewPageAsync();await stale.GotoAsync(page.Url);
             await page.GetByRole(AriaRole.Button,new(){Name="Close friend: Synthetic Person",Exact=true}).ClickAsync();Assert.Contains("q=Synthetic",page.Url);
@@ -57,6 +69,8 @@ public sealed class ManagementBrowserTests
             await stale.GetByRole(AriaRole.Button,new(){Name="Always show: Synthetic Person",Exact=true}).ClickAsync();Assert.Contains("Settings changed",await stale.Locator("[role=alert]").InnerTextAsync());
             await page.GetByRole(AriaRole.Button,new(){Name="Muted: Synthetic Person",Exact=true}).ClickAsync();await using(var db=instance.Factory.Open()){Assert.Equal("mute",(await db.Posts.SingleAsync(p => p.PlatformPostId == "fixture")).HiddenBy);}
             await page.GetByRole(AriaRole.Button,new(){Name="Muted: Synthetic Person",Exact=true}).ClickAsync();await using(var db=instance.Factory.Open()){Assert.False((await db.Posts.SingleAsync(p => p.PlatformPostId == "fixture")).Hidden);}
+            await Assertions.Expect(page.GetByRole(AriaRole.Button,new(){Name="Muted: Synthetic Person",Exact=true})).ToHaveAttributeAsync("aria-pressed","false");
+            await page.Locator(".people-table").WaitForAsync();
             await page.SetViewportSizeAsync(390,844);Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));await page.Locator(".people-table").ScrollIntoViewIfNeededAsync();await page.ScreenshotAsync(new(){Path=$"/tmp/feed-manage-people-{javascript}.png"});
             await page.GotoAsync(url+"/manage?section=schedule");var form=page.Locator("form[action='/manage/settings/schedule']").First;await form.Locator("input[name=times]").FillAsync("08:00, 18:30");await form.Locator("button").ClickAsync();
             Assert.Equal<string>(["08:00","18:30"],new InstanceFiles(instance.Paths).Current.Config.Platform("facebook").Schedule["home"]);Assert.False(new InstanceFiles(instance.Paths).Current.Config.Scheduler.Enabled);

@@ -51,7 +51,7 @@ public static class Reports
             }
         }
         foreach (var group in (await db.SweepTargets.AsNoTracking().ToListAsync()).GroupBy(t => new { t.Platform, t.CycleId })) if (await db.Get($"sweep:{group.Key.Platform}:cycle") == group.Key.CycleId) b.AppendLine($"sweep {group.Key.Platform}/{group.Key.CycleId}: attempted={group.Count(t => t.State is "done" or "skipped" or "retry")}/{group.Count()}, remaining={group.Count(t => t.State is "pending" or "visiting" or "retry")}");
-        foreach (var issue in await RecoveryQuery.Read(db, s)) b.AppendLine($"recovery {issue.Platform}/{issue.Item}: {issue.Problem}; attempts={issue.Attempts}; retry={issue.RetryAfter:O}; {issue.Recovery}");
+        foreach (var issue in await RecoveryQuery.Read(db, s, grouped: true, summaryOnly: true)) b.AppendLine($"recovery {issue.Platform}/{issue.Item}: {issue.Problem}; captures={issue.CaptureCount}; signature={issue.Fingerprint}; attempts={issue.Attempts}; retry={issue.RetryAfter:O}; {issue.Recovery}");
         b.AppendLine(await db.Get("disk:summary") ?? "disk: not measured"); return b.ToString();
     }
 }
