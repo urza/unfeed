@@ -25,6 +25,9 @@ public sealed class ToolbarTests
             """);
         await using (var db = instance.Factory.Open())
         {
+            db.Runs.Add(new() { Platform = "facebook", Kind = "collect", Mode = "all_followed", Trigger = "recovery", Status = "error", FinishedAt = Clock.Now, StatsJson = "{\"visited\":5}" });
+            await db.SaveChangesAsync();
+            for (int n = 0; n < 25; n++) db.Runs.Add(new() { Kind = "process", Status = "ok", FinishedAt = Clock.Now });
             foreach (var platform in new[] { "facebook", "instagram" })
                 db.Posts.Add(new() { Platform = platform, PlatformPostId = "synthetic-toolbar", Text = "Synthetic toolbar fixture", PostedAt = Clock.Now });
             await db.SaveChangesAsync();
@@ -54,9 +57,13 @@ public sealed class ToolbarTests
             await using var context = await browser.NewContextAsync(new() { JavaScriptEnabled = javascript, ViewportSize = new() { Width = 1280, Height = 900 } });
             var page = await context.NewPageAsync();
             await page.GotoAsync(http.BaseAddress.ToString());
+            await Expect(page.Locator(".brand-sub")).ToContainTextAsync("facebook gap retry");
+            await Expect(page.Locator(".brand-sub")).ToContainTextAsync("errors");
+            await page.EvaluateAsync("document.querySelector('.background').style.background = 'repeating-linear-gradient(35deg,white 0 24px,#ffdf00 24px 48px,#ee4499 48px 72px)'");
             await Expect(page.Locator(".platforms .active")).ToHaveAttributeAsync("aria-label", "All platforms");
             Assert.Equal(4, await page.Locator(".platforms .active svg rect").CountAsync());
             Assert.Equal(0, await page.Locator(".platforms [aria-label='Instagram']").CountAsync());
+            Assert.Equal("rgb(20, 33, 50)", await page.Locator(".feed-toolbar").EvaluateAsync<string>("el => getComputedStyle(el).backgroundColor"));
             await page.ScreenshotAsync(new() { Path = $"/tmp/feed-toolbar-desktop-{javascript}.png" });
             // The switch follows the content box, even inside a wide viewport.
             await page.Locator(".page").EvaluateAsync("el => el.style.maxWidth = '737px'");
@@ -99,6 +106,7 @@ public sealed class ToolbarTests
             await page.Locator(".platform-picker > summary").ClickAsync();
             Assert.True(await page.Locator(".view-label").EvaluateAsync<bool>("el => el.scrollWidth > el.clientWidth && getComputedStyle(el).textOverflow === 'ellipsis'"));
             await page.SetViewportSizeAsync(390, 844);
+            await page.EvaluateAsync("document.querySelector('.background').style.background = 'repeating-linear-gradient(35deg,white 0 24px,#ffdf00 24px 48px,#ee4499 48px 72px)'");
             await page.ScreenshotAsync(new() { Path = $"/tmp/feed-toolbar-phone-{javascript}.png" });
             await page.Locator(".view-picker > summary").ClickAsync();
             await Expect(page.Locator("a.manage-button.mobile")).ToBeVisibleAsync();

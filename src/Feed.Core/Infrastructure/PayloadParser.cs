@@ -12,7 +12,7 @@ public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyLi
 public static class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
-    public const int Version = 12;
+    public const int Version = 13;
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
     public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
@@ -23,7 +23,7 @@ public static class PayloadParser
         else if (e.ValueKind == JsonValueKind.Array) foreach (var child in e.EnumerateArray()) foreach (var n in Walk(child, parents)) yield return n;
     }
     static bool Truth(JsonElement e) => e.ValueKind == JsonValueKind.True || e.ValueKind == JsonValueKind.Number && e.TryGetInt64(out var n) && n != 0 || e.ValueKind == JsonValueKind.String && e.GetString() is { Length: > 0 } s && s != "0";
-    static DateTime? Date(string? value) => long.TryParse(value, out var n) && n > 0 && n < 253402300800 ? DateTimeOffset.FromUnixTimeSeconds(n).UtcDateTime : null;
+    static DateTime? Date(string? value) => long.TryParse(value, out var n) && n >= -62135596800 && n < 253402300800 && n != 0 ? DateTimeOffset.FromUnixTimeSeconds(n).UtcDateTime : null;
     static string? Url(string? s, string platform) { if (s is null) return null; if (s.StartsWith('/')) s = Platforms.Home(platform).TrimEnd('/') + s; return Uri.TryCreate(s, UriKind.Absolute, out var u) && u.Scheme is "http" or "https" ? new UriBuilder(u) { Scheme = "https", Port = -1 }.Uri.ToString() : null; }
     public static string SourceKey(string url)
     {
@@ -268,7 +268,13 @@ public static class PayloadParser
     }
     static bool FacebookComposerWithPrivacy(JsonElement data)
     {
-        if (data.ValueKind != JsonValueKind.Object || data.EnumerateObject().Any(p => p.Name is not ("viewer" or "privacy_selector"))) return false;
+        if (data.ValueKind != JsonValueKind.Object || data.EnumerateObject().Any(p => p.Name is not ("user" or "viewer" or "privacy_selector"))) return false;
+        var user = At(data, "user");
+        if (user.ValueKind != JsonValueKind.Undefined && (Get(user, "id") is null
+            || user.EnumerateObject().Any(p => p.Name is not ("id" or "__isProfile" or "delegate_page" or "vcuDisableCometSfvRedirect"
+                or "has_taggable_products" or "is_product_tagging_apux_snoozed" or "profile_plus_category_display_name" or "name"
+                or "is_eligible_smcta_on_promode" or "has_professional_features_for_watch" or "has_profile_comet_mentions_tab"
+                or "is_memorialized" or "posted_item_privacy_scope" or "short_name")) || ContainsPostContent(user))) return false;
         var viewer = At(data, "viewer"); var selector = At(data, "privacy_selector"); var composer = At(viewer, "feed_comet_composer");
         return viewer.ValueKind == JsonValueKind.Object && selector.ValueKind == JsonValueKind.Object
             && Get(At(viewer, "actor"), "id") is not null && At(composer, "sprouts").ValueKind == JsonValueKind.Array
@@ -350,6 +356,17 @@ public static class PayloadParser
         var node = At(data, "node");
         if (Get(node, "__typename") == "User" && At(node, "profile_tile_sections").ValueKind == JsonValueKind.Object && node.EnumerateObject().All(p => p.Name is "__typename" or "id" or "profile_tile_sections")) return true;
         var path = Array(At(root, "path")).Select(Text).ToArray();
+        // A deferred player response can belong to a video linked in a comment.
+        // Keep the exact envelope/field boundary and reject nested post content.
+        if (path.Length == 18 && path[0] is "user" or "node" && path[1] == "timeline_list_feed_units"
+            && path[2] == "edges" && int.TryParse(path[3], out var edge) && edge >= 0
+            && path.Skip(4).Take(8).SequenceEqual(new[] { "node", "comet_sections", "feedback", "story", "story_ufi_container", "story", "feedback_context", "interesting_top_level_comments" })
+            && int.TryParse(path[12], out var comment) && comment >= 0 && path[13] == "comment"
+            && path[14] is "preferred_body" or "body_renderer" && path[15] == "ranges"
+            && int.TryParse(path[16], out var range) && range >= 0 && path[17] == "entity"
+            && Get(root, "label") == "VideoPlayerRelay_video$defer$InstreamVideoAdBreaksPlayer_video"
+            && Get(data, "id") is not null && data.EnumerateObject().All(p => p.Name is "id" or "instream_extra_config" or "instream_video_ad_breaks_comet")
+            && !ContainsPostContent(data)) return true;
         if ((path.SequenceEqual(new[] { "viewer", "news_feed" }) || path.Length == 2 && path[0] is "user" or "node" && path[1] == "timeline_list_feed_units") && At(data, "page_info").ValueKind == JsonValueKind.Object && data.EnumerateObject().All(p => p.Name == "page_info")) return true;
         foreach (var key in new[] { "user", "node" })
         {
@@ -380,6 +397,8 @@ public static class PayloadParser
             && At(n, "attached_story").ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
             && attachments.Length > 0 && attachments.All(a => Get(At(a, "styles"), "__typename") == "StoryAttachmentUnavailableStyleRenderer");
     }
+    static bool ContainsPostContent(JsonElement node) => Walk(node).Any(x => x.Node.EnumerateObject()
+        .Any(p => p.Name is "post_id" or "message" or "caption" or "attachments" or "attached_story" or "timeline_list_feed_units" or "news_feed"));
     static string? Id(JsonElement n) => Get(n, "pk", "id", "media_id", "shortcode", "code");
     static Observation? Instagram(JsonElement n, JsonElement[] parents, HashSet<string?> children)
     {
@@ -425,6 +444,14 @@ public static class PayloadParser
         var caption = Get(n, "message") ?? Get(At(n, "comet_sections", "content", "story"), "message") ?? Get(n, "text");
         var p = new Post { Platform = "facebook", PlatformPostId = id, Text = caption, PostedAt = time, IsSponsored = sponsored, ObservedAuthorName = Get(actor, "name"), ObservedAuthorUrl = authorUrl, LikeRef = Get(At(n, "feedback"), "id", "targetID"), Permalink = Url(Get(n, "wwwURL", "permalink", "permalink_url", "url"), "facebook"), SharedAuthor = Get(Array(At(shared, "actors")).FirstOrDefault(), "name"), SharedText = Get(shared, "message"), SharedUrl = Url(Get(shared, "wwwURL", "permalink_url"), "facebook") };
         p.StoryTitle = Get(At(n, "comet_sections", "context_layout", "story", "comet_sections", "title", "story"), "title");
+        // Life-event facts are Facebook's structured description, not the author's caption.
+        var facts = Array(At(n, "attachments")).Select(a => At(a, "styles"))
+            .Where(a => Get(a, "__typename") == "StoryAttachmentLifeEventStyleRenderer")
+            .SelectMany(a => Array(At(a, "attachment", "properties")))
+            .Select(a => Get(At(a, "value"), "text"))
+            .Where(t => !string.IsNullOrWhiteSpace(t) && !Uri.TryCreate(t, UriKind.Absolute, out _));
+        var description = string.Join("\n", new[] { p.StoryTitle }.Concat(facts).Where(t => !string.IsNullOrWhiteSpace(t)).Distinct());
+        p.StoryTitle = description.Length == 0 ? null : description;
         // Link shares may have captions and preview images. Their title/source belong
         // to the shared block, never to the friend's own words.
         if (shared.ValueKind == JsonValueKind.Undefined)
@@ -453,7 +480,9 @@ public static class PayloadParser
             foreach (var property in x.EnumerateObject()) { if (property.Name == "video") videoHint = true; if (!new[] { "actors", "feedback", "badge", "profile_picture", "profilePicture", "interesting_substories" }.Contains(property.Name)) MediaWalk(property.Value); }
         }
         MediaWalk(n); if (videoHint && media.All(x => x.Kind != "video") && p.Permalink is not null) media.Add(new("video", p.Permalink, "permalink:" + id));
-        if (string.IsNullOrWhiteSpace(p.Text) && string.IsNullOrWhiteSpace(p.SharedText) && media.Count == 0) return null;
+        if (string.IsNullOrWhiteSpace(p.Text) && string.IsNullOrWhiteSpace(p.SharedText) && media.Count == 0
+            && (string.IsNullOrWhiteSpace(p.StoryTitle) || Get(actor, "id") is null
+                || At(n, "comet_sections", "content", "story", "comet_sections", "aggregated_stories").ValueKind == JsonValueKind.Object)) return null;
         var tags = new List<Tag>();
         foreach (var (block, _) in Walk(n))
         {

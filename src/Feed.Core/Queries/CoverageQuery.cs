@@ -23,7 +23,8 @@ public static class CoverageQuery
             return new CoverageRow(a.Platform, a.DisplayName ?? "Unknown author", a.Url, last?.At, success?.At,
                 last is null ? "not checked" : last.CaptureStatus == "empty" ? "explicit empty response" : last.CaptureStatus == "captured" ? "captured · " + last.StopReason : last.Status == "rendered" ? last.PostsFound > 0 ? "partial capture with errors" : "rendered but no matching post payload" : last.Status,
                 failures, last?.PostsFound ?? 0, success?.OldestPostedAt, success?.NewestPostedAt, (last?.Note ?? "") + (last?.VisualDiagnosisJson is { } diagnosis ? " · Visual diagnosis (not coverage proof): " + diagnosis : last?.VisualError is { } visualError ? " · Visual diagnosis unavailable: " + visualError : ""), last?.Screenshot, success is null || success.At < cutoff, last is not null && last.CaptureStatus == "incomplete",
-                target?.State == "retry" ? $"{target.Attempts}/{TimelineCoverage.MaxAttempts} attempts; retry after {target.RetryAt:u}" + (!s.Config.Scheduler.Enabled ? "; scheduler paused" : !s.Config.Enabled(a.Platform) ? "; platform paused" : "")
+                last?.StopReason == "parser_blocked" ? "Saved response awaits parser/model recovery; no browser retry for an unsupported shape"
+                : target?.State == "retry" ? $"{target.Attempts}/{TimelineCoverage.MaxAttempts} attempts; retry after {target.RetryAt:u}" + (!s.Config.Scheduler.Enabled ? "; scheduler paused" : !s.Config.Enabled(a.Platform) ? "; platform paused" : "")
                 : target?.Attempts >= TimelineCoverage.MaxAttempts && last?.CaptureStatus == "incomplete" ? "Retry limit reached; inspect diagnostics or wait for next scheduled sweep"
                 : last?.CaptureStatus == "incomplete" ? "Next configured timeline visit; historical failure retained" : "No recovery pending");
         }).OrderBy(r => r.Platform).ThenBy(r => r.Name).ToArray();

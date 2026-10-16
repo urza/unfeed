@@ -119,6 +119,16 @@ public sealed class PartialMetadataTests
         Assert.False(Assert.Single(parsed.Posts).IsPartial); Assert.Single(parsed.Warnings); Assert.Empty(parsed.Diagnostics);
     }
     static JsonObject Composer() => JsonNode.Parse("""{"data":{"viewer":{"actor":{"id":"501"},"feed_comet_composer":{"sprouts":[]},"eligible_promotions":{"nodes":[]}},"privacy_selector":{"privacy_scope_renderer":{"__typename":"SyntheticPrivacyRenderer","privacy_row_input":{},"scope":{}}}}}""")!.AsObject();
+    [Fact] public void ProfileComposerBranchIsMetadataOnlyWithinKnownBoundary()
+    {
+        var raw = Composer(); raw["data"]!["user"] = JsonNode.Parse("""{"id":"502","__isProfile":"User","delegate_page":{"id":"503"},"posted_item_privacy_scope":{},"short_name":"Fixture"}""");
+        var p = PayloadParser.Parse("facebook", raw.ToJsonString()); Assert.Empty(p.Diagnostics); Assert.Empty(p.Posts); Assert.False(p.ExplicitEmpty);
+        raw["data"]!["user"]!["delegate_page"]!["post_id"] = "hidden-content";
+        Assert.NotEmpty(PayloadParser.Parse("facebook", raw.ToJsonString()).Diagnostics);
+        raw["data"]!["user"]!["delegate_page"]!.AsObject().Remove("post_id");
+        raw["data"]!["user"]!["unknown_content"] = new JsonObject();
+        Assert.NotEmpty(PayloadParser.Parse("facebook", raw.ToJsonString()).Diagnostics);
+    }
     [Fact] public void ExpandedComposerIsAuxiliaryWithoutClaimingAnEmptyFeed()
     {
         var parsed = PayloadParser.Parse("facebook",Composer().ToJsonString()); Assert.Empty(parsed.Posts); Assert.Empty(parsed.Diagnostics); Assert.False(parsed.ExplicitEmpty);

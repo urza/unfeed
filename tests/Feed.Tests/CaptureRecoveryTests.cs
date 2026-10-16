@@ -134,10 +134,10 @@ public sealed class CaptureRecoveryTests
         var before=await State();var report=await ParserAudit.Read(i.Factory,"facebook",5,null,null,false,default);Assert.Single(report);
         Assert.Equal(before,await State());Assert.Equal(1,handler.Calls);
     }
-    [Fact] public async Task AppliedRecoveryOverlayIsBoundToImmutableSource()
+    [Theory][InlineData(1)][InlineData(2)][InlineData(3)] public async Task AppliedRecoveryOverlayIsBoundToImmutableSource(int version)
     {
         await using var i=new TestInstance();await i.Init();var path=await Raw(i,Auxiliary);
-        File.WriteAllText(path+".recovery",JsonSerializer.Serialize(new RecoveryOverlay(CaptureRecovery.PromptVersion,CaptureContext.Hash(Auxiliary),AuxProposal)));
+        File.WriteAllText(path+".recovery",JsonSerializer.Serialize(new RecoveryOverlay(version,CaptureContext.Hash(Auxiliary),AuxProposal)));
         Assert.Empty(CaptureRecovery.ParseSaved("facebook",Auxiliary,path).Diagnostics);
         Assert.Throws<FormatException>(()=>CaptureRecovery.ParseSaved("facebook",Auxiliary+" ",path));
     }
@@ -166,6 +166,44 @@ public sealed class CaptureRecoveryTests
         const string body="""{"data":{"story":{"__typename":"Story","post_id":"1","creation_time":1700000000,"actors":[{"id":"2","name":"Synthetic"}],"message":{"text":"Hello"}},"feed_backend_data":{"qid":"synthetic","serialized_payloads":"opaque"}}}""";
         Assert.Empty(PayloadParser.Parse("facebook",body).Diagnostics);
         Assert.NotEmpty(PayloadParser.Parse("facebook",body.Replace("\"qid\":\"synthetic\"","\"new_content\":{}")).Diagnostics);
+    }
+
+    [Fact] public async Task LargeKnownSiblingDoesNotBlockSmallUnknownRootRecovery()
+    {
+        await using var i=new TestInstance(); await i.Init();
+        var known = "{\"data\":{\"viewer\":{\"feed_comet_composer\":{}}}}" + new string(' ', 50000);
+        var path=await Raw(i,known + "\n" + Auxiliary);
+        using var handler=new Handler(JsonSerializer.Serialize(AuxProposal)); using var http=new HttpClient(handler);
+        var ingest=new Ingest(i.Paths,i.Factory,new(i.Paths,http)); var s=Snapshot() with {Config=Snapshot().Config with {CaptureRecovery=new(){Mode="apply",MaxInputChars=12000}}};
+        await ingest.File("facebook",path,s,true,default);
+        Assert.Equal(1,await new CaptureRecovery(i.Paths,i.Factory,new(http),ingest).Run(s,["facebook"],2,default));
+        Assert.Equal(1,handler.Calls); Assert.DoesNotContain("feed_comet_composer",JsonDocument.Parse(handler.Body!).RootElement.GetProperty("messages")[1].GetProperty("content").GetString());
+        await using var db=i.Factory.Open(); Assert.True((await db.RawSnapshots.SingleAsync()).Parsed);
+        Assert.Equal(CaptureContext.Hash(known+"\n"+Auxiliary),(await db.CaptureRecoveryAttempts.SingleAsync()).BodyHash);
+    }
+    [Fact] public async Task ApplyingOneRootDoesNotClearAnOversizedUnknownSibling()
+    {
+        await using var i=new TestInstance(); await i.Init();
+        var body="{\"data\":{\"unknown\":true}}" + new string(' ',50000) + "\n" + Auxiliary;
+        var path=await Raw(i,body); using var handler=new Handler(JsonSerializer.Serialize(AuxProposal)); using var http=new HttpClient(handler);
+        var ingest=new Ingest(i.Paths,i.Factory,new(i.Paths,http)); var s=Snapshot() with {Config=Snapshot().Config with {CaptureRecovery=new(){Mode="apply",MaxInputChars=12000}}};
+        await ingest.File("facebook",path,s,true,default);
+        Assert.Equal(1,await new CaptureRecovery(i.Paths,i.Factory,new(http),ingest).Run(s,["facebook"],2,default));
+        Assert.True(File.Exists(path+".recovery")); Assert.Single(CaptureRecovery.ParseSaved("facebook",body,path).Diagnostics);
+        await using var db=i.Factory.Open(); var raw=await db.RawSnapshots.SingleAsync();
+        Assert.False(raw.Parsed); Assert.Equal("retry",raw.RecoveryState); Assert.Equal("unresolved",(await db.CaptureRecoveryAttempts.SingleAsync()).Validation);
+        Assert.Equal(body,await File.ReadAllTextAsync(path));
+    }
+
+    [Fact] public async Task PublishedOverlayResumesInterruptedIngestWithoutAnotherModelCall()
+    {
+        await using var i=new TestInstance(); await i.Init(); var path=await Raw(i,Auxiliary);
+        using var handler=new Handler("{}"); using var http=new HttpClient(handler); var ingest=new Ingest(i.Paths,i.Factory,new(i.Paths,http));
+        await ingest.File("facebook",path,Snapshot(),true,default);
+        File.WriteAllText(path+".recovery",JsonSerializer.Serialize(new RecoveryOverlay(2,CaptureContext.Hash(Auxiliary),AuxProposal)));
+        Assert.Equal(1,await new CaptureRecovery(i.Paths,i.Factory,new(http),ingest).Run(Snapshot(),["facebook"],2,default));
+        Assert.Equal(0,handler.Calls); await using var db=i.Factory.Open(); Assert.True((await db.RawSnapshots.SingleAsync()).Parsed);
+        Assert.Equal("applied",(await db.RawSnapshots.SingleAsync()).RecoveryState);
     }
 
 }

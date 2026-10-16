@@ -3,7 +3,7 @@
  <div class="toolbar-head">
   <div class="brand"><Mark/><strong>Feed</strong><span class="brand-sub">@Model.VisibleCount posts · @Model.Friends friends
    @if(Model.AdsDropped>0){<span> · @Model.AdsDropped ads dropped</span>}
-   @if(LastCollect is { } last){<span> · last collect @FeedQuery.Relative(last.FinishedAt) ago (+@last.PostsNew)</span>}
+   @if(LastCollect is { } last){<span title="This describes one bounded run, not freshness of every profile."> · @CollectionSummary.Describe(last)</span>}
   </span></div>
   <nav class="inspection" aria-label="Inspection">
    @if(Model.Instance.Config.Llm.Enabled){<a class="@(Model.Scope == "unsorted" ? "active" : "")" href="@Link(Model.View,Model.Platform,"unsorted")" title="Posts waiting for the model's verdict; not shown in any category view">Unsorted (@Model.UnsortedCount)</a>}

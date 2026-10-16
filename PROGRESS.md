@@ -127,6 +127,10 @@ Implemented: [implementation plan](docs/CAPTURE-RECOVERY-PLAN.md) covers durable
 
 Implemented: compatibility investigation is separate from owner attention; verified later clean same-person visits supersede associated capture alerts while preserving historical gaps. Model evidence uses generated IDs and exact source validation; optional screenshot/DOM diagnosis remains advisory. All 347 non-browser tests, 31 final focused checks and both management browser modes pass. Actual-model checks pass supported recovery, unresolved content, a representative previously rejected saved envelope and synthetic visible-post/explicit-empty screenshots. Isolated migration/provenance backfill preserves all pre-existing application fields. Deployment preservation and live HTTP checks pass; private operational evidence stays in the instance. General platform compatibility is not established by these bounded checks.
 
+## Resilient capture recovery
+
+Implemented structured life events and title-only stories, validated auxiliary variants, and bounded model recovery by independent JSONL roots with full source provenance and unresolved-sibling preservation. Parser-blocked visits avoid redundant browser retries; collection summaries report scope and outcome on an opaque surface. All 363 non-browser tests, both toolbar browser modes, and Release CLI/Web publishes pass. Saved-response audits and isolated offline replay verify existing content/media/action/coverage preservation; deployed replay repeats these checks. A bounded actual-model test recovers a small unknown root beside an oversized known root without inventing posts. Single oversized roots and unfamiliar complex content remain explicit limitations. Operational evidence and remaining instance issues stay private.
+
 ## Storage cleanup
 
 In progress: add preview and permanent hidden-post/media cleanup in Manage and CLI; coordinate workers, suppress replay with hashed identity markers, preserve visible content and shared capture archives. Verify deletion, replay, ownership and browser forms, then document retention boundaries.

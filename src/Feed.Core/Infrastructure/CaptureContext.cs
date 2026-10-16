@@ -48,7 +48,8 @@ public static class CaptureDiagnostics
         var code = message.StartsWith("parser uncertainty:", StringComparison.Ordinal) ? "unknown_response" : message.Contains("/GraphQL:", StringComparison.Ordinal) ? "upstream_error" : "invalid_json";
         var path = message.Contains("; path=", StringComparison.Ordinal) ? message.Split("; path=", 2)[1].Split(';')[0] : "";
         path = System.Text.RegularExpressions.Regex.Replace(path, @"(?<=/)[0-9]+(?=/|$)", "*");
-        var impact = warning ? message.Contains("partial metadata unavailable", StringComparison.Ordinal) ? "partial" : "auxiliary" : "unknown_or_content";
+        var impact = warning ? message.Contains("partial metadata unavailable", StringComparison.Ordinal) ? "partial" : "auxiliary"
+            : PayloadParser.Walk(root).Any(n => PayloadParser.Get(n.Node, "post_id", "shortcode") is not null) ? "content" : "unknown_or_content";
         var fingerprint = CaptureContext.Hash(string.Join('\n', "v1", platform, operation ?? "legacy", code, path, impact, Shape(root)));
         return new(code, path, impact, message, index, fingerprint);
     }

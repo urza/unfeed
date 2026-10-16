@@ -34,7 +34,7 @@ public sealed class TimelineCoverage(DbFactory factory)
             row.Attempts++; row.AttemptedAt = visit.At; row.VisitId = visit.Id;
             // Checkpoints and cancellation stop this visit; never schedule an automatic
             // browser retry of an authentication challenge or interrupted operation.
-            bool retryable = visit.CaptureStatus == "incomplete" && visit.Status is "rendered" or "unrendered" or "error";
+            bool retryable = visit.CaptureStatus == "incomplete" && visit.StopReason != "parser_blocked" && visit.Status is "rendered" or "unrendered" or "error";
             row.State = retryable && row.Attempts < MaxAttempts ? "retry" : "done";
             row.RetryAt = row.State == "retry" ? Clock.Now.AddHours(row.Attempts) : null;
             await db.SaveChangesAsync(ct);

@@ -73,6 +73,8 @@ public static class RecoveryQuery
             var recovery = modelPending ? State(r.Platform, modelRetry, true) + "; bounded model inspection"
                 : r.RecoveryState is "attention" or "observed" ? $"Model recovery {r.RecoveryState}: {r.RecoveryError ?? "validated proposal recorded; apply mode or explicit review needed"}"
                 : r.Parsed ? "Recorded upstream warning; no replay needed" : r.BlockedParserVersion == PayloadParser.Version ? "Needs parser update; saved raw will retry after parser upgrade (explicit reparse also available)" : State(r.Platform, retry);
+            if (!informational && group?.Impact == "content") recovery = "Identifiable post content may be missing. " + recovery;
+            else if (!informational && group?.Impact == "unknown_or_content") recovery = "Unrecognized response; content impact unresolved. " + recovery;
             issues.Add(new(r.Platform, $"raw #{r.Id} · run #{r.RunId}", summaryOnly ? group?.Code ?? "capture_issue" : r.Error ?? r.Warning ?? "Waiting for ingest", r.RecoveryAttempts, r.AttemptedAt, modelPending ? modelRetry : r.Parsed || r.BlockedParserVersion == PayloadParser.Version ? null : retry,
                 informational ? "Recorded upstream warning; no replay needed for this issue" : recovery, informational) { Disposition = informational ? RecoveryDisposition.Informational : modelPending ? Disposition(r.Platform, true) : r.BlockedParserVersion == PayloadParser.Version ? RecoveryDisposition.Compatibility : Disposition(r.Platform), RunId = r.RunId,
                 RawId = r.Id, CaptureCount = count, Fingerprint = group?.Fingerprint ?? fingerprint, Code = group?.Code,
