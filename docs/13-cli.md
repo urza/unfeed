@@ -73,3 +73,7 @@ In the timeline modes, `visited` counts the profiles opened, `empty` the profile
 - `capture-recover --platform X|all [--raw-ids N,N] [--mode observe|apply] [--limit N]`: invokes the bounded model queue explicitly, using the primary configured model. Defaults to configured mode/batch; mode must be observe/apply. Explicit IDs must fit the batch and limit and refer to available unparsed feed captures outside active browser runs. Explicit selection permits a deliberate new attempt or applying an observed proposal; it does not rewrite stored policy. Output reports applications; unresolved decisions remain in Recovery and the attempt audit.
 
 `status` summarizes compatibility groups with affected-capture counts and fingerprints. Inspect detailed records through paginated Recovery or a bounded parser audit. Group counts and affected-capture counts are different quantities.
+
+## Manual storage cleanup
+
+`storage clean-hidden --dry-run` previews hidden-post count and unique existing media bytes; `storage clean-hidden` permanently deletes currently hidden post records, registered media, feedback and local heart history. Hashed identity markers suppress reimport. Active processing, collection, liking or ingestion refuses cleanup. Scheduling can remain paused. Shared raw captures and diagnostic archives remain (chapter 7).

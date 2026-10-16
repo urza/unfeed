@@ -89,6 +89,7 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
         await using (var db = factory.Open())
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
+            if (await db.Get(StorageCleanup.DeletedKey(o.Post.Platform, o.Post.PlatformPostId), ct) is not null) return new(1, 0, 0, 0, 0);
             var p = await db.Posts.SingleOrDefaultAsync(p => p.Platform == o.Post.Platform && p.PlatformPostId == o.Post.PlatformPostId, ct); isNew = p is null;
             if (p is not null)
             {

@@ -23,6 +23,15 @@ public static class ManagementRoutes
             await using var db = factory.Open(); var attempt = await db.CaptureRecoveryAttempts.FindAsync(id);
             return attempt is null ? (IResult)Results.NotFound() : new RazorComponentResult<RecoveryAudit>(new { Attempt = attempt, Stamp = stamp, Background = backgrounds.Current.Selected });
         });
+        app.MapPost("/manage/storage/reset", (HttpContext ctx, DbFactory factory, InstancePaths paths, IAntiforgery antiforgery) => Submit(ctx, antiforgery, async f => {
+            if (f["confirm"] != "yes") throw new ArgumentException("Confirm permanent deletion before resetting downloads.");
+            return await new StorageCleanup(paths, factory).ResetDownloads(f["delete_posts"] == "yes", ctx.RequestAborted);
+        }));
+        app.MapPost("/manage/storage/hidden", (HttpContext ctx, DbFactory factory, InstancePaths paths, IAntiforgery antiforgery) => Submit(ctx, antiforgery, async f => {
+            var preview = f["action"] == "preview";
+            if (!preview && (f["action"] != "delete" || f["confirm"] != "yes")) throw new ArgumentException("Confirm permanent deletion before continuing.");
+            return (await new StorageCleanup(paths, factory).HiddenPosts(preview, ctx.RequestAborted)).ToString();
+        }));
         app.MapPost("/manage/work/process", (HttpContext ctx, Management management, IAntiforgery antiforgery) => Submit(ctx, antiforgery, _ => management.QueueProcessing(ctx.RequestAborted)));
         app.MapPost("/manage/settings/{action}", (string action, HttpContext ctx, Management management, IAntiforgery antiforgery) => Submit(ctx, antiforgery, f => management.SaveSettings(action, f, ctx.RequestAborted)));
         app.MapPost("/manage/people/{id:long}/{action}", (long id, string action, HttpContext ctx, Management management, IAntiforgery antiforgery) => Submit(ctx, antiforgery, f => management.Person(id, action, f["enabled"] == "true", f["version"].ToString(), ctx.RequestAborted)));

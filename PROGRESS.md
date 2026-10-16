@@ -126,3 +126,11 @@ Implemented: [implementation plan](docs/CAPTURE-RECOVERY-PLAN.md) covers durable
 ## Collection recovery reliability
 
 Implemented: compatibility investigation is separate from owner attention; verified later clean same-person visits supersede associated capture alerts while preserving historical gaps. Model evidence uses generated IDs and exact source validation; optional screenshot/DOM diagnosis remains advisory. All 347 non-browser tests, 31 final focused checks and both management browser modes pass. Actual-model checks pass supported recovery, unresolved content, a representative previously rejected saved envelope and synthetic visible-post/explicit-empty screenshots. Isolated migration/provenance backfill preserves all pre-existing application fields. Deployment preservation and live HTTP checks pass; private operational evidence stays in the instance. General platform compatibility is not established by these bounded checks.
+
+## Storage cleanup
+
+In progress: add preview and permanent hidden-post/media cleanup in Manage and CLI; coordinate workers, suppress replay with hashed identity markers, preserve visible content and shared capture archives. Verify deletion, replay, ownership and browser forms, then document retention boundaries.
+
+## Download reset
+
+Implemented a confirmed reset for both platforms with optional post deletion; preserves instance configuration, people, profiles and backgrounds. Coordinates collection/processing ownership and clears capture/sweep state. All 367 non-browser tests pass; focused reset checks and both JavaScript-enabled/disabled management browser checks pass. Reviewed desktop and phone readability against a bright busy background. Web build passes and combined specification is regenerated. Synthetic verification does not establish live platform compatibility.

@@ -81,6 +81,21 @@ else if(Model.Section == "categories") {
  @if(Model.Instance.Taxonomy.Categories.IsEmpty && Model.Instance.Taxonomy.Views.IsEmpty){<p>No categories or views are configured yet. Add their initial definitions in taxonomy.json.</p>}
 }
 else if(Model.Section == "storage") {
+ <section class="manage-panel glass"><h1>Reset downloaded content</h1>
+ <p>Delete all raw captures, downloaded post photos/videos and capture screenshots from Facebook and Instagram. Collection progress and capture recovery records are cleared.</p>
+ <p>Configuration, preferences, categories, people/following lists, avatars, login sessions and backgrounds remain. Separate logs, backups and operator diagnostics remain.</p>
+ <form method="post" action="/manage/storage/reset">@Token()
+ <label><input type="checkbox" name="delete_posts" value="yes"/> Also delete posts from the database and empty the feed</label>
+ <p>This also deletes post feedback and local heart history, and removes deleted-post markers so posts can be collected again. It does not undo hearts on the platforms. Without this option, posts stay in the feed without downloaded media; that media will not automatically download again.</p>
+ <label><input type="checkbox" name="confirm" value="yes" required/> I understand this permanently deletes downloaded content from both platforms.</label>
+ <button>Reset downloaded content</button></form>
+ <p>Wait for active workers to finish. Scheduling settings stay unchanged: enabled collection can refill the feed after reset. Pause scheduling first if you want it to stay empty. If file deletion fails, cleanup may be partial; resolve the error and retry.</p></section>
+ <section class="manage-panel glass"><h1>Free disk space</h1><p>Permanently delete all currently hidden posts and their downloaded photos and videos, including their feedback and local heart history. Visible posts stay. This works with scheduling paused.</p>
+ <p>A small hashed marker prevents collection or replay from restoring deleted posts. Shared raw captures, backups and diagnostic archives may still contain copies; this does not erase those archives or undo hearts on the original platform.</p>
+ <form method="post" action="/manage/storage/hidden">@Token()<button name="action" value="preview">Preview hidden-post cleanup</button></form>
+ <form method="post" action="/manage/storage/hidden">@Token()<label><input type="checkbox" name="confirm" value="yes" required/> I understand that deletion is permanent and covers all posts hidden when I press Delete.</label><button name="action" value="delete">Delete hidden posts and media</button></form>
+ <p>Preview reports file bytes that can be reclaimed. Database space becomes reusable internally; its file may not shrink. If collection or processing is active, retry after it finishes.</p>
+ <details><summary>What is in diagnostics?</summary><p>Capture screenshots under media/diagnostics follow raw-capture retention. The separate diagnostics folder contains private troubleshooting artifacts such as logs, reports, test instances, builds and backups. It has no automatic blanket cleanup because some artifacts may be needed for recovery.</p></details></section>
  <section class="manage-panel glass"><h1>Storage</h1><p>@Model.Disk</p><p class="muted">Last measurement: @Model.DiskAt</p><form method="post" action="/manage/settings/storage">@Token()<ManageField Label="Keep raw captures, days" Name="raw_retention_days" Type="number" Value="@Config.RawRetentionDays.ToString()"/><ManageField Label="Keep hidden media, days" Name="hidden_media_retention_days" Type="number" Value="@Config.HiddenMediaRetentionDays.ToString()"/><ManageField Label="Keep hidden videos, days" Name="hidden_video_retention_days" Type="number" Value="@Config.HiddenVideoRetentionDays.ToString()"/><ManageField Label="Keep videos, days" Name="video_retention_days" Type="number" Value="@Config.VideoRetentionDays.ToString()"/><ManageField Label="Maximum video size, MB" Name="max_video_mb" Type="number" Value="@Config.MaxVideoMb.ToString()"/><p>Zero days disables that retention rule. Shorter retention can delete eligible files during the next scheduled cleanup. This keeps post records; it does not delete posts.</p><button>Save retention settings</button></form></section>
 }
 else if(Model.Section == "processing") {

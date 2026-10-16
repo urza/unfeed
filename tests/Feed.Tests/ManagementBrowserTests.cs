@@ -77,6 +77,26 @@ public sealed class ManagementBrowserTests
             await page.Locator("[role=status]").WaitForAsync();Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));await page.ScreenshotAsync(new(){Path=$"/tmp/feed-manage-schedule-{javascript}.png"});
             await page.GotoAsync(url+"/manage?section=rules");await page.Locator("textarea[name=keywords]").FillAsync("Synthetic post");await page.GetByRole(AriaRole.Button,new(){Name="Save written rules",Exact=true}).ClickAsync();await using(var db=instance.Factory.Open()){Assert.Equal("keyword",(await db.Posts.SingleAsync(p => p.PlatformPostId == "fixture")).HiddenBy);}
             foreach(var section in new[]{"overview","categories","processing","storage"}){await page.GotoAsync(url+"/manage?section="+section);Assert.DoesNotContain("synthetic-do-not-render",await page.ContentAsync());Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));}
+            await page.GotoAsync(url+"/manage?section=storage");
+            await page.EvaluateAsync("document.querySelector('.background').style.background = 'repeating-linear-gradient(35deg,white 0 24px,#ffdf00 24px 48px,#ee4499 48px 72px)'");
+            await page.ScreenshotAsync(new(){Path=$"/tmp/feed-storage-phone-{javascript}.png"});
+            await page.SetViewportSizeAsync(1280,900);await page.ScreenshotAsync(new(){Path=$"/tmp/feed-storage-desktop-{javascript}.png"});
+            await page.GetByRole(AriaRole.Button,new(){Name="Preview hidden-post cleanup",Exact=true}).ClickAsync();
+            Assert.Contains("Preview: 1 hidden posts",await page.Locator(".manage-notice").InnerTextAsync());
+            await using(var db=instance.Factory.Open()) Assert.True(await db.Posts.AnyAsync(p=>p.Hidden));
+            await page.Locator("form[action='/manage/storage/hidden'] input[name=confirm]").CheckAsync();
+            await page.GetByRole(AriaRole.Button,new(){Name="Delete hidden posts and media",Exact=true}).ClickAsync();
+            Assert.Contains("Deleted: 1 hidden posts",await page.Locator(".manage-notice").InnerTextAsync());
+            await using(var db=instance.Factory.Open()) Assert.False(await db.Posts.AnyAsync(p=>p.Hidden));
+            var reset = page.Locator("form[action='/manage/storage/reset']");
+            Assert.False(await reset.Locator("input[name=delete_posts]").IsCheckedAsync());
+            await reset.Locator("input[name=confirm]").CheckAsync();
+            await reset.Locator("button").ClickAsync();
+            await using(var db=instance.Factory.Open()) Assert.True(await db.Posts.AnyAsync());
+            reset = page.Locator("form[action='/manage/storage/reset']");
+            await reset.Locator("input[name=delete_posts]").CheckAsync(); await reset.Locator("input[name=confirm]").CheckAsync();
+            await reset.Locator("button").ClickAsync();
+            await using(var db=instance.Factory.Open()) { Assert.False(await db.Posts.AnyAsync()); Assert.True(await db.Authors.AnyAsync()); }
             await page.GotoAsync(url+"/manage?section=categories");await page.Locator("textarea[name=definition]").FillAsync("Synthetic changed definition");await page.GetByRole(AriaRole.Button,new(){Name="Save category",Exact=true}).ClickAsync();Assert.Equal("Synthetic changed definition",new InstanceFiles(instance.Paths).Current.Taxonomy.Categories[0].Definition);
             var viewForm=page.Locator("form[action='/manage/settings/view']").First;await viewForm.Locator("input[name=label]").FillAsync("Updated view");await viewForm.Locator("button").ClickAsync();Assert.Equal("Updated view",new InstanceFiles(instance.Paths).Current.Taxonomy.Views[0].Label);
             await page.SetViewportSizeAsync(1280,900);await page.GotoAsync(url+"/manage");await page.ScreenshotAsync(new(){Path=$"/tmp/feed-manage-overview-{javascript}.png"});

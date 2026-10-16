@@ -32,6 +32,7 @@ Usage: dotnet out/Feed.Cli.dll COMMAND [--data DIR] [options]
   avatars --platform X
   feedback [--limit N] [--uncurated]
   curate [--write LINE --cites N,N [--approved] [--author REF] | --dismiss N,N]
+  storage clean-hidden [--dry-run]
   raw prune [--before DATE] [--dry-run] | media prune [--dry-run]
   browser install|install-deps
   profile import --platform X --from DIR
@@ -99,6 +100,7 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
                 else foreach (var f in rows) Console.WriteLine($"thumb #{f.Id} post=#{f.PostId} author=#{f.AuthorId} value={f.Value} view={f.ViewKey} labels={f.CategoriesAtVote} reason={f.ReasonAtVote}");
                 return 0;
             }
+            if (a.Command == "storage") { if (a.Positionals.FirstOrDefault() != "clean-hidden") throw new ArgumentException("storage clean-hidden is required"); Console.WriteLine(await new StorageCleanup(paths, factory).HiddenPosts(a.Flag("dry-run"), ct)); return 0; }
             if (a.Command is "raw" or "media") { if (a.Positionals.FirstOrDefault() != "prune") throw new ArgumentException("prune is required"); Console.WriteLine(await maintenance.Prune(s.Config, a.Command == "raw", a.Flag("dry-run"), a.Date("before"), ct)); return 0; }
             if (a.Command == "profile") { if (a.Positionals.FirstOrDefault() != "import" || a.Get("from") is not { } from || !Directory.Exists(from)) throw new ArgumentException("profile import --platform X --from <directory>"); var p = a.Platform(); if (Directory.EnumerateFileSystemEntries(from, "Singleton*").Any()) throw new ArgumentException("Close the source Chromium browser and remove only verified stale Singleton locks before importing"); using var held = ResourceLock.Try(paths, p) ?? throw new ResourceBusyException("platform busy"); BrowserSession.CopyProfile(from, paths.Get("profiles", p)); Console.WriteLine($"profile import {p}: copied profile with caches excluded"); return 0; }
             if (!ClosedValues.RunKinds.Contains(a.Command) && a.Command != "avatars") { Console.Error.WriteLine("unknown command: " + a.Command); return 1; }
