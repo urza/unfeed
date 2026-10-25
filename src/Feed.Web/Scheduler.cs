@@ -13,13 +13,22 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
         using var owner = ResourceLock.Try(paths, "scheduler") ?? throw new InvalidOperationException("Another scheduler owns this instance");
         while (!stoppingToken.IsCancellationRequested) { try { await Tick(stoppingToken); Error = null; } catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; } catch (Exception e) { Error = e.Message; log.LogError(e, "Scheduler tick failed"); } await Task.Delay(5000, stoppingToken); }
     }
+    // Launches one processing child when work is due or a process request is already queued. The startup backoff
+    // and the processing lock gate both cases; a paused scheduler passes due=false so only queued requests launch.
+    async Task DispatchProcessing(FeedDb db, bool due, CancellationToken ct)
+    {
+        if (DateTime.TryParse(await db.Get("process:not_before", ct), out var until) && until.ToUniversalTime() > Clock.Now) return;
+        if (!due && !await db.RunRequests.AnyAsync(r => r.Kind == "process" && r.Status == "pending", ct) || ResourceLock.Busy(paths, "processing")) return;
+        await Actions.EnsureRequest(db, "process", null, ct: ct);
+        var request = await db.RunRequests.AsNoTracking().FirstOrDefaultAsync(r => r.Kind == "process" && r.Status == "pending", ct);
+        if (request is not null) await Dispatch(request, "schedule", ct);
+    }
     public static int Jitter(string p, string mode, string slot, string day, int max) { if (max == 0) return 0; uint hash = 17; foreach (var c in $"{p}|{mode}|{slot}|{day}") hash = unchecked(hash * 31 + c); return (int)(hash % ((uint)max + 1)); }
     public async Task Tick(CancellationToken ct)
     {
         var snapshot = files.Refresh(); var c = snapshot.Config; LastTick = Clock.Now;
         foreach (var warning in await new RunLedger(factory).Recover(c, ct)) log.LogWarning("{Warning}", warning);
         await new Management(paths, factory, new(paths)).ResumeRefilter(ct);
-        if (!c.Scheduler.Enabled) return;
         await using var db = factory.Open();
         var states = await db.PlatformStates.AsNoTracking().ToDictionaryAsync(p => p.Platform, ct);
         bool Relogin(string p) => states.GetValueOrDefault(p)?.NeedsRelogin == true;
@@ -43,6 +52,9 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
             await Dispatch(request, request.RetryIncomplete ? "recovery" : "manual", ct);
         }
         await db.SaveChangesAsync(ct);
+        // The pause covers work the host starts on its own: slots, sweep retries, due processing and maintenance.
+        // Requests the owner queued (collect, friends, login, hearts, Process pending work) dispatch above and here regardless.
+        if (!c.Scheduler.Enabled) { await DispatchProcessing(db, false, ct); return; }
         var local = TimeZoneInfo.ConvertTimeFromUtc(Clock.Now, c.Zone); var day = local.ToString("yyyy-MM-dd");
         foreach (var p in Platforms.All.Where(c.Enabled)) foreach (var (modeKey, times) in c.Platform(p).Schedule)
         {
@@ -71,8 +83,7 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
             await db.Put($"coverage:{p}:not_before", Clock.Now.AddHours(1).ToString("O"), ct);
             await Dispatch(request, "recovery", ct);
         }
-        var enabled = Platforms.All.Where(c.Enabled).ToArray(); var retry = Clock.Now.AddMinutes(-30); var notBefore = await db.Get("process:not_before", ct);
-        bool launchDue = !DateTime.TryParse(notBefore, out var until) || until.ToUniversalTime() <= Clock.Now;
+        var enabled = Platforms.All.Where(c.Enabled).ToArray(); var retry = Clock.Now.AddMinutes(-30);
         var modelHash = Prompts.ConfigurationHash(snapshot); var judgeDelay = await db.Get($"model:{modelHash}:judge:not_before", ct); var summaryDelay = await db.Get($"model:{modelHash}:summary:not_before", ct);
         bool judgeDue = !DateTime.TryParse(judgeDelay, out var jd) || jd.ToUniversalTime() <= Clock.Now; bool summaryDue = !DateTime.TryParse(summaryDelay, out var sd) || sd.ToUniversalTime() <= Clock.Now;
         var ingestAvailable = enabled.Where(p => !ResourceLock.Busy(paths, "ingest-" + p)).ToArray();
@@ -83,7 +94,7 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
             due = await CaptureRecovery.Due(db, c, ingestAvailable).AnyAsync(ct) || c.CaptureRecovery.VisualDiagnosis && await VisitDiagnosis.Due(db, c, ingestAvailable).AnyAsync(ct);
         if (!due && enabled.Length > 0) due = await db.Media.Join(db.Posts.Where(p => enabled.Contains(p.Platform)), m => m.PostId, p => p.Id, (m, p) => new { m, p }).AnyAsync(x => x.m.Kind == "video" && x.m.IsCurrent && x.m.Path == null && x.m.PrunedAt == null && (x.m.AttemptedAt == null || x.m.AttemptedAt <= retry) && (x.p.Hidden || !c.Llm.Enabled || x.p.CategoriesJson != null && x.p.VerdictContentRevision == x.p.ContentRevision), ct);
         if (ingestAvailable.Length > 0) startup = false;
-        if ((due || await db.RunRequests.AnyAsync(r => r.Kind == "process" && r.Status == "pending", ct)) && launchDue && !ResourceLock.Busy(paths, "processing")) { await Actions.EnsureRequest(db, "process", null, ct: ct); var request = await db.RunRequests.AsNoTracking().FirstOrDefaultAsync(r => r.Kind == "process" && r.Status == "pending", ct); if (request is not null) await Dispatch(request, "schedule", ct); }
+        await DispatchProcessing(db, due, ct);
         var utcDay = Clock.Now.ToString("yyyy-MM-dd"); if (await db.Get("maintenance:last", ct) != utcDay)
         {
             await db.Put("maintenance:last", utcDay, ct); using var http = new HttpClient(); var maintenance = new Maintenance(paths, factory, http);

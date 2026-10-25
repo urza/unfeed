@@ -14,8 +14,8 @@ public sealed class PersonBrowserTests
     public async Task PersonNavigationCategoriesAndCollectionFormWorkOnDesktopAndPhone(bool javascript)
     {
         await using var i = new TestInstance(); await i.Init();
-        // Keep the synthetic host paused. The POST path is separately exercised after
-        // enabling dispatch while holding its ownership gates; no browser worker starts.
+        // The synthetic host stays paused. Owner-queued requests dispatch anyway, so the
+        // ownership locks below are held before any POST; no browser worker starts.
         await File.WriteAllTextAsync(i.Paths.Get("config.json"), """{"platforms":{"facebook":{}},"scheduler":{"enabled":false},"backgrounds":{"source":"off"}}""");
         await File.WriteAllTextAsync(i.Paths.Get("taxonomy.json"), """{"categories":[{"key":"life","label":"Life","definition":"Synthetic life updates"}],"views":[]}""");
         long id;
@@ -46,7 +46,8 @@ public sealed class PersonBrowserTests
             var link = page.Locator(".card-head .author").First; Assert.Equal($"/people/{id}", await link.GetAttributeAsync("href")); Assert.Null(await link.GetAttributeAsync("target")); await link.ClickAsync();
             Assert.Equal("Synthetic Person", await page.Locator("h1").InnerTextAsync()); Assert.Equal(2, await page.Locator(".card").CountAsync());
             Assert.Equal("https://www.facebook.com/synthetic/", await page.GetByRole(AriaRole.Link, new() { Name = "Open platform profile" }).GetAttributeAsync("href"));
-            Assert.True(await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).IsDisabledAsync());
+            // The pause alone no longer disables the button; only the gates checked further down do.
+            Assert.True(await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).IsEnabledAsync());
             await Navigate("Life"); Assert.Equal(1, await page.Locator(".card").CountAsync()); Assert.Contains("Visible synthetic", await page.Locator(".card").InnerTextAsync());
             await Navigate("Unsorted (1)"); Assert.Contains("Unsorted synthetic", await page.Locator(".card").InnerTextAsync());
             await Navigate("Hidden (1)"); Assert.Contains("Synthetic rule", await page.Locator(".hidden-tag").InnerTextAsync());
@@ -59,9 +60,8 @@ public sealed class PersonBrowserTests
             Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));
             await page.ScreenshotAsync(new() { Path = $"/tmp/feed-person-{javascript}.png", FullPage = true });
             Assert.Equal(HttpStatusCode.NotFound, (await http.GetAsync(url + "/people/99999")).StatusCode);
-            Assert.Equal(HttpStatusCode.BadRequest, (await http.PostAsync(url + $"/people/{id}/collect", new FormUrlEncodedContent([]))).StatusCode);
             using var platformLock = Feed.Core.Infrastructure.ResourceLock.Try(i.Paths, "facebook"); using var processingLock = Feed.Core.Infrastructure.ResourceLock.Try(i.Paths, "processing");
-            await File.WriteAllTextAsync(i.Paths.Get("config.json"), """{"platforms":{"facebook":{}},"scheduler":{"enabled":true},"backgrounds":{"source":"off"}}""");
+            Assert.Equal(HttpStatusCode.BadRequest, (await http.PostAsync(url + $"/people/{id}/collect", new FormUrlEncodedContent([]))).StatusCode);
             await page.ReloadAsync(); Assert.True(await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).IsEnabledAsync());
             await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).ClickAsync(); Assert.Contains("Collection queued for this person", await page.Locator("[role=status]").InnerTextAsync());
             await using (var db = i.Factory.Open()) { var request = await db.RunRequests.SingleAsync(r => r.Kind == "collect"); Assert.Equal(id, request.PersonAuthorId); Assert.Equal("https://www.facebook.com/synthetic/", request.Person); }

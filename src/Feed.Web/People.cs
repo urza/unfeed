@@ -23,7 +23,6 @@ public sealed class People(DbFactory factory)
     static async Task<string?> Blocked(FeedDb db, Author author, InstanceSnapshot s, CancellationToken ct)
     {
         if (ProfileUrl(author) is null) return "No usable platform profile is stored for this person.";
-        if (!s.Config.Scheduler.Enabled) return "Scheduling is paused. Resume it in Manage before collecting.";
         if (!s.Config.Enabled(author.Platform)) return "This platform is paused. Enable it in Manage before collecting.";
         if (await db.PlatformStates.AnyAsync(p => p.Platform == author.Platform && p.NeedsRelogin, ct)) return "This platform needs login. Open Manage to log in.";
         if (await db.Runs.AnyAsync(r => r.Platform == author.Platform && r.Kind == "collect" && r.Status == "running", ct)) return "A collection is already running on this platform.";

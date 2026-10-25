@@ -105,7 +105,6 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
     {
         var s = documents.Read().Snapshot();
         if (!Platforms.All.Contains(platform) || kind is not ("collect" or "friends" or "login")) throw new FormatException("Unknown platform action.");
-        if (!s.Config.Scheduler.Enabled) throw new FormatException("Scheduling is paused. Resume it before requesting work.");
         if (!s.Config.Enabled(platform) && kind != "login") throw new FormatException("Enable this platform before requesting work.");
         await using var db = factory.Open();
         if (kind != "login" && await db.PlatformStates.AnyAsync(p => p.Platform == platform && p.NeedsRelogin, ct)) throw new FormatException("Log in to this platform before collecting or refreshing people.");
@@ -117,8 +116,6 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
     }
     public async Task<string> QueueProcessing(CancellationToken ct)
     {
-        var s = documents.Read().Snapshot();
-        if (!s.Config.Scheduler.Enabled) throw new FormatException("Scheduling is paused. Resume it before requesting work.");
         await using var db = factory.Open();
         if (await db.Runs.AnyAsync(r => r.Kind == "process" && r.Status == "running", ct)) return "Processing is already running.";
         await Actions.EnsureRequest(db, "process", null, ct: ct);

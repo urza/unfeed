@@ -40,7 +40,7 @@ public sealed class ManagementBrowserTests
             while(true){if(server.HasExited)throw new InvalidOperationException("Web host exited: "+await stderr);try{if((await http.GetAsync(url+"/healthz",timeout.Token)).IsSuccessStatusCode)break;}catch(HttpRequestException){}await Task.Delay(100,timeout.Token);}
             using var pw=await Playwright.CreateAsync();await using var browser=await pw.Chromium.LaunchAsync(new(){Headless=true});await using var context=await browser.NewContextAsync(new(){JavaScriptEnabled=javascript,ViewportSize=new(){Width=1280,Height=900}});
             var page=await context.NewPageAsync();await page.GotoAsync(url+"/manage");Assert.Equal(2,await page.Locator(".manage-platforms > section").CountAsync());Assert.Equal(0,await page.Locator("meta[http-equiv='refresh']").CountAsync());Assert.DoesNotContain("synthetic-do-not-render",await page.ContentAsync());
-            Assert.True(await page.GetByRole(AriaRole.Button,new(){Name="Refresh following",Exact=true}).IsDisabledAsync());
+            Assert.True(await page.GetByRole(AriaRole.Button,new(){Name="Refresh following",Exact=true}).IsEnabledAsync());
             await page.GetByRole(AriaRole.Link,new(){Name="Backgrounds",Exact=true}).ClickAsync();Assert.EndsWith("/manage/backgrounds",page.Url);Assert.Equal("Backgrounds",await page.Locator(".manage-nav [aria-current=page]").InnerTextAsync());await page.GetByRole(AriaRole.Link,new(){Name="Overview",Exact=true}).ClickAsync();
             await page.GetByRole(AriaRole.Link,new(){Name="View recovery progress",Exact=true}).ClickAsync();
             Assert.Contains("Recovery is paused",await page.Locator(".recovery-summary").InnerTextAsync());

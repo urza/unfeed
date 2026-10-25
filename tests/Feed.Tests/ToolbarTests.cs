@@ -39,6 +39,8 @@ public sealed class ToolbarTests
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         { WorkingDirectory = root!.FullName, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var arg in new[] { Path.Combine(root.FullName, "src/Feed.Web/bin/Debug/net10.0/Feed.Web.dll"), "--data", instance.Paths.Root, "--urls", $"http://127.0.0.1:{port}" }) start.ArgumentList.Add(arg);
+        // The paused host still dispatches the collect queued below; the held browser lock keeps that worker from starting.
+        using var facebookLock = Feed.Core.Infrastructure.ResourceLock.Try(instance.Paths, "facebook");
         using var server = Process.Start(start)!;
         var stdout = server.StandardOutput.ReadToEndAsync(); var stderr = server.StandardError.ReadToEndAsync();
         try
@@ -119,7 +121,7 @@ public sealed class ToolbarTests
                 await Expect(page.Locator(".view-picker")).Not.ToHaveAttributeAsync("open", "");
             }
             else await page.Locator(".view-picker > summary").ClickAsync();
-            // A real plain POST queues work in this paused synthetic instance; the next render must report it.
+            // A real plain POST queues work; the held browser lock keeps it waiting, and the next render must report it.
             await page.Locator(".collect > summary").ClickAsync();
             await page.Locator(".collect form[action='/collect'] button").ClickAsync();
             await Expect(page.Locator(".collect > summary .mobile")).ToHaveTextAsync("Requested ✓");

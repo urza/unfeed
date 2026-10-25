@@ -42,13 +42,14 @@ public sealed class PersonTests
         await using var i = new TestInstance(); await i.Init(); long id;
         await using (var db = i.Factory.Open()) { var author = new Author { Platform = "facebook", Url = "https://facebook.com/profile.php?id=123", PlatformAuthorId = "123" }; db.Add(author); await db.SaveChangesAsync(); id = author.Id; }
         var people = new People(i.Factory);
-        Assert.Contains("paused", await people.Collect(id, Snapshot(scheduling: false), default));
         Assert.Contains("paused", await people.Collect(id, Snapshot(enabled: false), default));
         await using (var db = i.Factory.Open()) { db.Add(new PlatformState { Platform = "facebook", NeedsRelogin = true }); await db.SaveChangesAsync(); }
         Assert.Contains("login", await people.Collect(id, Snapshot(), default));
         await using (var db = i.Factory.Open()) await db.PlatformStates.ExecuteUpdateAsync(u => u.SetProperty(p => p.NeedsRelogin, false));
         Assert.Null(await people.Collect(id, Snapshot(), default));
         Assert.Contains("queued", await people.Collect(id, Snapshot(), default));
+        // A scheduling pause is not a gate: the paused snapshot sees the same queued request, not a pause message.
+        Assert.Contains("queued", await people.Collect(id, Snapshot(scheduling: false), default));
         long requestId; string target;
         await using (var db = i.Factory.Open()) {
             var request = await db.RunRequests.SingleAsync(); requestId = request.Id; target = request.Person!;

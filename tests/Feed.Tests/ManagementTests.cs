@@ -95,13 +95,12 @@ public sealed class ManagementTests
         Assert.Equal<string>(["New rule"],Preferences.Parse(edited).Policy);Assert.Contains("Prose",edited);Assert.Contains("- not a live rule",edited);Assert.Equal<string>(["ig:synthetic"],Preferences.Parse(edited).Mutes);
     }
     [Fact]
-    public async Task PeopleRefreshQueueDeduplicatesAndSchedulerHonorsPauseBrowserAndLoginGates()
+    public async Task PeopleRefreshQueueDeduplicatesAndPausedSchedulerStillHonorsBrowserAndLoginGates()
     {
         await using var i=new TestInstance();await i.Init();var path=i.Paths.Get("config.json");
+        // Scheduling stays paused throughout: owner-queued requests dispatch anyway, behind the browser and login gates.
         await File.WriteAllTextAsync(path,"""{"platforms":{"instagram":{}},"scheduler":{"enabled":false},"backgrounds":{"source":"off"}}""");
         var files=new ManagementFiles(i.Paths);var management=new Management(i.Paths,i.Factory,files);
-        await Assert.ThrowsAsync<FormatException>(()=>management.Queue("instagram","friends",null,default));
-        await File.WriteAllTextAsync(path,"""{"platforms":{"instagram":{}},"backgrounds":{"source":"off"}}""");
         await management.Queue("instagram","friends",null,default);await management.Queue("instagram","friends",null,default);
         using var processing=ResourceLock.Try(i.Paths,"processing");
         await using(var db=i.Factory.Open()){Assert.Single(await db.RunRequests.ToArrayAsync());await db.Put("maintenance:last",Clock.Now.ToString("yyyy-MM-dd"));}

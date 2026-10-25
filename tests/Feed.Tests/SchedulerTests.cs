@@ -1,3 +1,4 @@
+using Feed.Core.Application;
 using Feed.Core.Domain;
 using Feed.Core.Infrastructure;
 using Feed.Web;
@@ -22,9 +23,20 @@ public sealed class SchedulerTests
         await using var i=new TestInstance();await i.Init();
         var file=i.Paths.Get("config.json");await File.WriteAllTextAsync(file,"{\"platforms\":{\"instagram\":{}},\"scheduler\":{\"enabled\":false}}");
         await using(var db=i.Factory.Open()){db.RunRequests.Add(new(){Kind="process",Status="claimed",ClaimToken="stale",ClaimedAt=Clock.Now.AddMinutes(-3)});await db.SaveChangesAsync();}
-        var scheduler=new Scheduler(i.Paths,new(i.Paths),i.Factory,NullLogger<Scheduler>.Instance,()=>i.Paths.Get("missing-cli"));await scheduler.Tick(default);
+        var scheduler=new Scheduler(i.Paths,new(i.Paths),i.Factory,NullLogger<Scheduler>.Instance,()=>i.Paths.Get("missing-cli"));
+        // A paused tick still launches a queued process request, so the held processing lock keeps the recovered request waiting.
+        using(var processing=ResourceLock.Try(i.Paths,"processing")){await scheduler.Tick(default);}
         await using(var db=i.Factory.Open()){Assert.Equal("pending",(await db.RunRequests.SingleAsync()).Status);}
         await File.WriteAllTextAsync(file,"{\"platforms\":{\"instagram\":{}},\"scheduler\":{\"enabled\":true}}");await Assert.ThrowsAsync<FileNotFoundException>(()=>scheduler.Tick(default));
+    }
+    [Fact] public async Task PausedTickStillDispatchesOwnerQueuedCollect()
+    {
+        await using var i=new TestInstance();await i.Init();
+        await File.WriteAllTextAsync(i.Paths.Get("config.json"),"""{"platforms":{"facebook":{}},"scheduler":{"enabled":false},"backgrounds":{"source":"off"}}""");
+        await using(var db=i.Factory.Open()){Assert.Equal(1,await Actions.EnsureRequest(db,"collect","facebook","home"));}
+        var scheduler=new Scheduler(i.Paths,new(i.Paths),i.Factory,NullLogger<Scheduler>.Instance,()=>i.Paths.Get("missing-cli"));
+        await Assert.ThrowsAsync<FileNotFoundException>(()=>scheduler.Tick(default));
+        await using var check=i.Factory.Open();var request=await check.RunRequests.SingleAsync();Assert.Equal("refused",request.Status);Assert.Contains("startup failed",request.Note);
     }
     [Fact] public async Task ProcessExitingBeforeRegistrationDoesNotLoopOnStartupGrace()
     {
