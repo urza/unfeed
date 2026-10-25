@@ -79,8 +79,16 @@ public sealed class FeedQuery(DbFactory factory)
             if (definition.Category != null || definition.Authors != null) return query;
             if (definition.Rare is { } rare)
             {
-                var rareIds = historyRows.Where(p => authorMap[p.AuthorId!.Value].IsFriend &&
-                    Bound(histories[p.AuthorId.Value], p.PostedAt!.Value, true) - Bound(histories[p.AuthorId.Value], p.PostedAt.Value.AddDays(-rare.WindowDays), false) <= rare.MaxPosts).Select(p => p.Id).ToArray();
+                // Rare membership is decided inside SQLite, on the (AuthorId, PostedAt) index: a friend's post
+                // whose author made at most MaxPosts posts in the window ending at it, both ends inclusive, the
+                // same count that ComputeMatch explains with Bound. Passing the ids from C# would either bind
+                // thousands of parameters or make SQLite read every candidate row to check the scope.
+                var rareIds = db.Database.SqlQuery<long>($"""
+                    SELECT Id AS Value FROM (
+                        SELECT p.Id, COUNT(*) OVER (PARTITION BY p.AuthorId ORDER BY julianday(p.PostedAt) RANGE BETWEEN {rare.WindowDays} PRECEDING AND CURRENT ROW) AS n
+                        FROM Posts p JOIN Authors a ON a.Id = p.AuthorId WHERE p.PostedAt IS NOT NULL AND a.IsFriend)
+                    WHERE n <= {rare.MaxPosts}
+                    """);
                 query = query.Where(p => rareIds.Contains(p.Id));
                 return instance.Config.Llm.Enabled ? Judged(query) : query;
             }
@@ -94,10 +102,14 @@ public sealed class FeedQuery(DbFactory factory)
         var hidden = await scoped.CountAsync(p => p.Hidden, ct);
         var pending = scoped.Where(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision == null || p.VerdictContentRevision != p.ContentRevision));
         var unsorted = await pending.CountAsync(ct);
-        var selected = await (scope == "hidden" ? scoped.Where(p => p.Hidden) : scope == "unsorted" ? pending : live)
-            .OrderByDescending(p => p.PostedAt).ThenByDescending(p => p.Id).Take(instance.Config.Ui.RenderCap).ToArrayAsync(ct);
-        var ids = selected.Select(p => p.Id).ToArray();
-        var media = await db.Media.AsNoTracking().Where(m => ids.Contains(m.PostId) && m.IsCurrent).OrderBy(m => m.Position).ThenBy(m => m.Id).ToArrayAsync(ct); var likes = await db.Likes.AsNoTracking().Where(l => ids.Contains(l.PostId)).ToArrayAsync(ct); var feedback = await db.Feedback.AsNoTracking().Where(f => ids.Contains(f.PostId)).ToArrayAsync(ct);
+        // Select the ids first: that query runs on the covering index alone, and only the rows that
+        // reach the page are read. One query would make SQLite read every scoped row to sort it.
+        var ids = await (scope == "hidden" ? scoped.Where(p => p.Hidden) : scope == "unsorted" ? pending : live)
+            .OrderByDescending(p => p.PostedAt).ThenByDescending(p => p.Id).Take(instance.Config.Ui.RenderCap).Select(p => p.Id).ToArrayAsync(ct);
+        // EF.Parameter sends the id list as one JSON parameter instead of one parameter per id: these four
+        // lookups by primary key or PostId index are the one place where probing by id is the right plan.
+        var selected = (await db.Posts.AsNoTracking().Where(p => EF.Parameter(ids).Contains(p.Id)).ToArrayAsync(ct)).OrderByDescending(p => p.PostedAt).ThenByDescending(p => p.Id).ToArray();
+        var media = await db.Media.AsNoTracking().Where(m => EF.Parameter(ids).Contains(m.PostId) && m.IsCurrent).OrderBy(m => m.Position).ThenBy(m => m.Id).ToArrayAsync(ct); var likes = await db.Likes.AsNoTracking().Where(l => EF.Parameter(ids).Contains(l.PostId)).ToArrayAsync(ct); var feedback = await db.Feedback.AsNoTracking().Where(f => EF.Parameter(ids).Contains(f.PostId)).ToArrayAsync(ct);
         var mediaByPost = media.ToLookup(m => m.PostId); var likesByPost = likes.ToLookup(l => l.PostId); var feedbackByPost = feedback.ToLookup(f => f.PostId);
         var cards = selected.Select(p =>
         {
@@ -135,7 +147,17 @@ public sealed class FeedQuery(DbFactory factory)
         }
         var vdef = instance.Taxonomy.Views.FirstOrDefault(v => v.Key == view); var suffix = platform is null ? "" : " on " + platform;
         string empty = scope == "hidden" ? "No hidden posts" + suffix + "." : scope == "unsorted" ? "Nothing is waiting for the model" + suffix + "." : vdef?.Category is not null && vdef.Authors is not null ? $"No posts from the people in the {vdef.Label} view judged as {instance.Taxonomy.Categories.Single(c => c.Key == vdef.Category).Label}{suffix} yet." : vdef?.Category is not null ? $"No posts judged as {vdef.Label}{suffix} yet." : vdef?.Rare is not null ? $"No rare voices{suffix} right now." : vdef?.Authors is not null ? $"No posts from the people in the {vdef.Label} view{suffix}." : vdef is not null ? $"Nothing in the {vdef.Label} view{suffix} yet." : platform is not null ? $"No posts on {platform} in the feed." : instance.Config.Llm.Enabled && unsorted > 0 ? "Nothing judged yet." : "The feed is empty. Nothing collected yet.";
-        return new(instance, view, platform, scope, units.ToArray(), visible, hidden, unsorted, authors.Count(a => a.IsFriend && (platform is null ? instance.Config.Enabled(a.Platform) : a.Platform == platform)), known, await db.PlatformStates.AsNoTracking().ToArrayAsync(ct), await db.Runs.AsNoTracking().Where(r => r.Status == "running" || r.Kind == "collect" && r.FinishedAt != null && !db.Runs.Any(newer => newer.Kind == "collect" && newer.Platform == r.Platform && newer.FinishedAt != null && newer.Id > r.Id) || db.Runs.OrderByDescending(x => x.Id).Take(20).Select(x => x.Id).Contains(r.Id)).OrderByDescending(r => r.Id).ToArrayAsync(ct), await db.RunRequests.AsNoTracking().Where(r => r.Status == "pending" || r.Status == "claimed").ToArrayAsync(ct), await db.Get("last_visit", ct), empty, await scoped.CountAsync(p => p.Hidden && p.IsSponsored, ct), [], await db.Get($"model:{Prompts.ConfigurationHash(instance)}:judge:not_before", ct), await db.Posts.CountAsync(p => p.Hidden, ct), await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision == null || p.VerdictContentRevision != p.ContentRevision), ct), null, await RecoveryQuery.HasIssues(db, instance, platform, ct) || await CoverageQuery.HasIssues(db, instance, platform, ct));
+        return new(instance, view, platform, scope, units.ToArray(), visible, hidden, unsorted, authors.Count(a => a.IsFriend && (platform is null ? instance.Config.Enabled(a.Platform) : a.Platform == platform)), known, await db.PlatformStates.AsNoTracking().ToArrayAsync(ct), await db.Runs.AsNoTracking().Where(r => r.Status == "running" || r.Kind == "collect" && r.FinishedAt != null && !db.Runs.Any(newer => newer.Kind == "collect" && newer.Platform == r.Platform && newer.FinishedAt != null && newer.Id > r.Id) || db.Runs.OrderByDescending(x => x.Id).Take(20).Select(x => x.Id).Contains(r.Id)).OrderByDescending(r => r.Id).ToArrayAsync(ct), await db.RunRequests.AsNoTracking().Where(r => r.Status == "pending" || r.Status == "claimed").ToArrayAsync(ct), await db.Get("last_visit", ct), empty, await scoped.CountAsync(p => p.Hidden && p.IsSponsored, ct), [], await db.Get($"model:{Prompts.ConfigurationHash(instance)}:judge:not_before", ct), await db.Posts.CountAsync(p => p.Hidden, ct), await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision == null || p.VerdictContentRevision != p.ContentRevision), ct), null, await Diagnostics(db, instance, platform, ct));
+    }
+    // The Manage dot needs scans of Posts, RawSnapshots and TimelineVisits that can cost more than the
+    // rest of the feed on a slow disk. The answer per platform scope is reused for a minute: the dot is
+    // an advisory pointer, and the Manage pages compute their own current detail.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime At, bool Value)> diagnostics = new();
+    async Task<bool> Diagnostics(FeedDb db, InstanceSnapshot instance, string? platform, CancellationToken ct)
+    {
+        var key = platform ?? ""; if (diagnostics.TryGetValue(key, out var cached) && Clock.Now - cached.At < TimeSpan.FromMinutes(1)) return cached.Value;
+        var value = await RecoveryQuery.HasIssues(db, instance, platform, ct) || await CoverageQuery.HasIssues(db, instance, platform, ct);
+        diagnostics[key] = (Clock.Now, value); return value;
     }
     static string? RepeatKey(Card card)
     {

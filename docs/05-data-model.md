@@ -93,7 +93,7 @@ Index: (AuthorId). Only the identity resolver writes this table.
 | HiddenAt | datetime? | when the current hide began. Null while visible. |
 | VisibilityRevision | integer | incremented by every hide/unhide change, including bulk changes; guards against an in-flight verdict overwriting a newer decision |
 
-Indexes: unique (Platform, PlatformPostId); (PostedAt); (Hidden, PostedAt); (AuthorId).
+Indexes: unique (Platform, PlatformPostId); (PostedAt); (Hidden, PostedAt); (AuthorId, PostedAt) named `IX_Posts_AuthorHistory`; (Hidden, Platform, IsSponsored, ContentRevision, VerdictContentRevision, CategoriesJson) named `IX_Posts_FeedMembership`. The last two are covering indexes for the feed read: view membership, the toolbar counts, the ad count and rare-voice histories are answered from the index alone. Post rows are wide (captions, verdicts, manifests), so a feed read must touch rows only for the cards it renders; a query plan that scans Posts for a count is a regression.
 
 Visibility updates have two shared semantics, named `SetHidden(owner, reason)` and `ClearHidden()` here. SetHidden sets `Hidden = true`, writes the owner and reason, and stamps `HiddenAt` only when the post was visible before. A second hide keeps the first date, even under a new owner. ClearHidden sets `Hidden = false` and nulls HiddenBy, HiddenReason and HiddenAt. Both increment VisibilityRevision. Entity helpers are a reference implementation; tracked and set-based updates must preserve the same atomic date/revision rules. After a bulk update, later decisions use fresh state rather than a stale tracked entity.
 

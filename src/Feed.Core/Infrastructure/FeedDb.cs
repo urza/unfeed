@@ -16,6 +16,13 @@ public sealed class FeedDb(InstancePaths paths) : DbContext
         b.Entity<AuthorKey>().HasKey(x => x.Key); b.Entity<AuthorKey>().HasOne<Author>().WithMany().HasForeignKey(x => x.AuthorId).OnDelete(DeleteBehavior.Cascade);
         b.Entity<Post>().Ignore(x => x.Judged).Ignore(x => x.DisplayText); b.Entity<Post>().HasOne<Author>().WithMany().HasForeignKey(x => x.AuthorId).OnDelete(DeleteBehavior.SetNull);
         b.Entity<Post>().HasIndex(x => new { x.Platform, x.PlatformPostId }).IsUnique(); b.Entity<Post>().HasIndex(x => new { x.Hidden, x.PostedAt }); b.Entity<Post>().HasIndex(x => x.PostedAt);
+        // Feed reads must not touch the wide Posts rows (captions, verdicts, manifests) except for the
+        // cards they render. These two indexes cover every membership test, count, ordered id selection
+        // and rare-history scan: SQLite answers them from the index alone, so a 10,000-post table costs
+        // milliseconds even on a slow mount. Platform leads because every feed scope filters on it with
+        // an equality; a leading Hidden would not be searched (EF renders !Hidden as NOT, not = 0).
+        b.Entity<Post>().HasIndex(x => new { x.Platform, x.Hidden, x.PostedAt, x.IsSponsored, x.ContentRevision, x.VerdictContentRevision, x.CategoriesJson }).HasDatabaseName("IX_Posts_FeedMembership");
+        b.Entity<Post>().HasIndex(x => new { x.AuthorId, x.PostedAt }).HasDatabaseName("IX_Posts_AuthorHistory");
         b.Entity<Media>().HasOne<Post>().WithMany().HasForeignKey(x => x.PostId).OnDelete(DeleteBehavior.Cascade);
         b.Entity<RawDiagnostic>().HasOne<RawSnapshot>().WithMany().HasForeignKey(x => x.RawSnapshotId).OnDelete(DeleteBehavior.Cascade);
         b.Entity<RawDiagnostic>().HasIndex(x => new { x.Fingerprint, x.RawSnapshotId });

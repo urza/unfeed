@@ -56,3 +56,17 @@
 
 /* Recovery text always has an opaque surface, including on bright photographs. */
 .recovery-summary,.recovery-group{background:#142132;border:1px solid #52657b;border-radius:12px;padding:16px;margin:14px 0;overflow-wrap:anywhere}.recovery-section{border-top:1px solid #52657b;padding-top:12px}.recovery-item{border-top:1px solid #52657b;padding:14px 0}.recovery-details time{font-variant-numeric:tabular-nums}.recovery-group h3{margin-top:0}.recovery-group:target{outline:2px solid #8cbcff;scroll-margin-top:20px}
+
+/* Cards far from the viewport skip layout and paint until they come near it. A 300-card page then lays out
+   in a few milliseconds instead of hundreds, on load, on every view switch and on every resize. The 500 px
+   placeholder is this feed's average card height; masonry balances unseen cards by it and later re-layouts
+   reuse each card's last real size. The rule sits on the card, not the unit, so its shadow is not clipped. */
+.card{content-visibility:auto;contain-intrinsic-size:auto 500px}
+
+/* Navigation feedback: while a fetched page is pending, a bar runs under the toolbar and the old content dims.
+   The 120 ms delays keep both invisible when the response is already in hand (prefetched or fast). */
+.feed-toolbar::after{content:"";position:absolute;left:18px;right:18px;bottom:0;height:2px;background:linear-gradient(90deg,transparent,var(--soft) 50%,transparent) no-repeat;background-size:35% 100%;background-position:50% 0;opacity:0;transition:opacity .15s .12s;pointer-events:none}
+main[aria-busy=true] .feed-toolbar::after{opacity:1;animation:nav-progress 1.1s linear infinite}
+main[aria-busy=true] .feed-grid,main[aria-busy=true] .banner,main[aria-busy=true] .empty,main[aria-busy=true] .new-divider{opacity:.5;transition:opacity .2s .12s}
+@keyframes nav-progress{from{background-position:-50% 0}to{background-position:150% 0}}
+@media(prefers-reduced-motion:reduce){main[aria-busy=true] .feed-toolbar::after{animation:none}}

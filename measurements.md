@@ -25,6 +25,10 @@ Synthetic database: 420 chronologically ordered posts, varying text/summary pres
 
 The raised cap rendered every one of the 420 matching posts, with no hidden 300-row limit. These figures are not a claim about a 100,000-post page, large media files, a slow phone, or large retained database history. Read projections still load stored post facts for exact membership; rare windows now use sorted per-author dates and binary bounds rather than a full scan for each post.
 
+## Query design change, 2026-10-25
+
+The feed read was reworked after a private instance with several thousand posts rendered a view in more than a second on a slow mount: counts, membership tests and the ordered selection ran as scans over the wide Posts rows. Two covering indexes (`IX_Posts_FeedMembership`, `IX_Posts_AuthorHistory`), an id-first selection, rare membership computed by a SQLite window function and a one-minute cache of the diagnostics indicator made every count and membership query index-only; the render then reads only the rows it shows. The private measurements stay in that instance's notes under `data/`. The synthetic benchmark above predates this change and has not been repeated yet.
+
 ## Repeating verification
 
 The figures above are a historical synthetic benchmark, not a claim about the current build or a deployment host. Run chapter17's tests and record the revision, environment and workload when measuring again. Keep measurements involving real accounts, endpoint capacity or private datasets under data/; only publish sanitized synthetic results.

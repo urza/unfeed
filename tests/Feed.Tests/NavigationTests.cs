@@ -36,6 +36,20 @@ public sealed class NavigationTests
             await using var context = await browser.NewContextAsync(new() { ViewportSize = new() { Width = width, Height = height } });
             var page = await context.NewPageAsync(); var errors = new List<string>(); page.PageError += (_, error) => errors.Add(error);
             await page.GotoAsync(http.BaseAddress.ToString()); await page.WaitForSelectorAsync(".feed-grid.enhanced");
+            // A toolbar hover fetches the page ahead of the click. The click marks the choice and shows
+            // the pending state at once, then reuses that single response instead of a second request.
+            var hiddenFetches = 0; page.Request += (_, request) => { if (request.Url.EndsWith("/?view=all&hidden=1") && request.ResourceType == "fetch") hiddenFetches++; };
+            await page.RouteAsync("**/?view=all&hidden=1", async route => { if (route.Request.ResourceType == "fetch") await Task.Delay(300); await route.ContinueAsync(); });
+            var hidden = page.Locator(".inspection a[href$='hidden=1']");
+            var prefetch = page.WaitForRequestAsync(request => request.Url.EndsWith("/?view=all&hidden=1"));
+            await hidden.DispatchEventAsync("pointerover"); await prefetch;
+            await hidden.DispatchEventAsync("click", new { button = 0 });
+            Assert.True(await page.EvaluateAsync<bool>("document.querySelector('main').hasAttribute('aria-busy') && document.querySelector(\".inspection a[href$='hidden=1']\").classList.contains('active')"));
+            await page.WaitForFunctionAsync("location.search === '?view=all&hidden=1' && !document.querySelector('main').hasAttribute('aria-busy')");
+            Assert.Equal(1, hiddenFetches); Assert.Single(await page.Locator("article.card").AllAsync());
+            await page.UnrouteAsync("**/?view=all&hidden=1");
+            await page.GoBackAsync();
+            await page.WaitForFunctionAsync("location.search === '' && !document.querySelector('main').hasAttribute('aria-busy')");
             await page.EvaluateAsync("window.documentSentinel = 42; window.scrollTo(0, 1200)");
             await page.WaitForFunctionAsync("history.state?.feedScroll > 1000");
             var scroll = await page.EvaluateAsync<double>("window.scrollY");

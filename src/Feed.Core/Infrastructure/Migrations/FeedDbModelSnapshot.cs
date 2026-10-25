@@ -502,9 +502,10 @@ namespace Feed.Core.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("AuthorId");
-
                     b.HasIndex("PostedAt");
+
+                    b.HasIndex("AuthorId", "PostedAt")
+                        .HasDatabaseName("IX_Posts_AuthorHistory");
 
                     b.HasIndex("Hidden", "PostedAt");
 
@@ -518,6 +519,9 @@ namespace Feed.Core.Infrastructure.Migrations
                     b.HasIndex("Platform", "SummaryAttemptedAt", "CapturedAt")
                         .HasDatabaseName("IX_Posts_SummaryQueue")
                         .HasFilter("IngestReadyAt IS NOT NULL AND Hidden = 0 AND (Summary IS NULL OR SummaryContentRevision IS NULL OR SummaryContentRevision <> ContentRevision)");
+
+                    b.HasIndex("Platform", "Hidden", "PostedAt", "IsSponsored", "ContentRevision", "VerdictContentRevision", "CategoriesJson")
+                        .HasDatabaseName("IX_Posts_FeedMembership");
 
                     b.ToTable("Posts");
                 });
