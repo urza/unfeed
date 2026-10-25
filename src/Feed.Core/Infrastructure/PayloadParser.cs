@@ -12,7 +12,7 @@ public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyLi
 public static class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
-    public const int Version = 14;
+    public const int Version = 15;
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
     public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
@@ -358,6 +358,12 @@ public static class PayloadParser
         if (FacebookComposerWithPrivacy(data)) return true;
         if (data.EnumerateObject().All(p => p.Name == "viewer") && At(viewer, "feed_comet_composer").ValueKind == JsonValueKind.Object && viewer.EnumerateObject().All(p => p.Name is "actor" or "feed_comet_composer")) return true;
         if (Get(At(data, "node"), "__typename") is "GroupsYouShouldJoinFeedUnit" or "PaginatedPeopleYouMayKnowFeedUnit") return true;
+        // The first page of the home feed wraps the same suggestion units in viewer/news_feed/edges
+        // beside envelope metadata; a feed page made only of them carries no post.
+        var feed = At(viewer, "news_feed");
+        if (data.EnumerateObject().All(p => p.Name == "viewer") && viewer.ValueKind == JsonValueKind.Object && viewer.EnumerateObject().All(p => p.Name == "news_feed")
+            && feed.ValueKind == JsonValueKind.Object && feed.EnumerateObject().All(p => p.Name == "edges") && Array(At(feed, "edges")).ToArray() is { Length: > 0 } units
+            && units.All(e => Get(At(e, "node"), "__typename") is "GroupsYouShouldJoinFeedUnit" or "PaginatedPeopleYouMayKnowFeedUnit" && e.EnumerateObject().All(p => p.Name == "node" || EnvelopeMetadata("facebook", p)) && !ContainsPostContent(e))) return true;
         var node = At(data, "node");
         if (Get(node, "__typename") == "User" && At(node, "profile_tile_sections").ValueKind == JsonValueKind.Object && node.EnumerateObject().All(p => p.Name is "__typename" or "id" or "profile_tile_sections")) return true;
         var path = Array(At(root, "path")).Select(Text).ToArray();
@@ -372,13 +378,27 @@ public static class PayloadParser
             && Get(root, "label") == "VideoPlayerRelay_video$defer$InstreamVideoAdBreaksPlayer_video"
             && Get(data, "id") is not null && data.EnumerateObject().All(p => p.Name is "id" or "instream_extra_config" or "instream_video_ad_breaks_comet")
             && !ContainsPostContent(data)) return true;
+        bool TimelineEdge(string?[] p) => p.Length > 4 && (p[0] is "user" or "node" && p[1] == "timeline_list_feed_units" || p[0] == "viewer" && p[1] == "news_feed") && p[2] == "edges" && int.TryParse(p[3], out var n) && n >= 0 && p[4] == "node";
+        // The same player response also arrives for a video linked from a text range of a story's
+        // message, including shared (attached) stories nested at varying depths. The tail and the
+        // exact field set identify it; nested post content would still be diagnostic.
+        if (TimelineEdge(path) && path.Length >= 9 && path[^4] == "message" && path[^3] == "ranges" && int.TryParse(path[^2], out var linked) && linked >= 0 && path[^1] == "entity"
+            && Get(root, "label") == "VideoPlayerRelay_video$defer$InstreamVideoAdBreaksPlayer_video"
+            && Get(data, "id") is not null && data.EnumerateObject().All(p => p.Name is "id" or "instream_extra_config" or "instream_video_ad_breaks_comet")
+            && !ContainsPostContent(data)) return true;
+        // Deferred logging data for a story's "show more / show less" bumper button: scalars and
+        // id lists for Facebook's own telemetry, never post content.
+        if (TimelineEdge(path) && path.Length == 12 && path.Skip(5).SequenceEqual(new[] { "comet_sections", "call_to_action", "story", "bumpers", "persistent_bumper", "cta_renderer", "comet_action" })
+            && Get(root, "label") == "CometShowMoreShowLessCallToAction_renderer$defer$useShowMoreShowLessCallToActionLogger_logData"
+            && data.EnumerateObject().Any() && data.EnumerateObject().All(p => p.Name is "affected_display_names" or "affected_ids" or "bumper_class" or "bumper_scope" or "generator_uuid" or "ifr_show_rate_increase" or "show_rate_n" or "trigger_reason")
+            && !ContainsPostContent(data)) return true;
         if ((path.SequenceEqual(new[] { "viewer", "news_feed" }) || path.Length == 2 && path[0] is "user" or "node" && path[1] == "timeline_list_feed_units") && At(data, "page_info").ValueKind == JsonValueKind.Object && data.EnumerateObject().All(p => p.Name == "page_info")) return true;
         foreach (var key in new[] { "user", "node" })
         {
             var profile = At(data, key); var edges = Array(At(profile, "timeline_list_feed_units", "edges")).ToArray();
-            if (edges.Length > 0 && data.EnumerateObject().All(p => p.Name == key) && At(profile, "profile_pinned_post").ValueKind is JsonValueKind.Null or JsonValueKind.Undefined && edges.All(e => UnavailableFacebookStory(At(e, "node")))) return true;
+            if (edges.Length > 0 && data.EnumerateObject().All(p => p.Name == key) && At(profile, "profile_pinned_post").ValueKind is JsonValueKind.Null or JsonValueKind.Undefined && edges.All(e => UnavailableFacebookStory(At(e, "node")) || ContentlessFacebookStory(At(e, "node")))) return true;
         }
-        if (path.Length == 4 && path[0] is "user" or "node" && path[1] == "timeline_list_feed_units" && path[2] == "edges" && data.EnumerateObject().All(p => p.Name is "node" or "cursor") && UnavailableFacebookStory(node)) return true;
+        if (path.Length == 4 && path[0] is "user" or "node" && path[1] == "timeline_list_feed_units" && path[2] == "edges" && data.EnumerateObject().All(p => p.Name is "node" or "cursor") && (UnavailableFacebookStory(node) || ContentlessFacebookStory(node))) return true;
         // Deferred player controls accompany the already captured parent story; they
         // aren't independent posts or evidence that an otherwise empty timeline loaded.
         if (path.Length < 3 || !(path[0] is "user" or "node" && (path[1] == "timeline_list_feed_units" || path[1] == "profile_pinned_post" && path[2] == "pinned_post_story") || path[0] == "viewer" && path[1] == "news_feed" && path[2] == "edges") || !(path[^1] == "media" || path.TakeLast(3).SequenceEqual(new[] { "media", "video_grid_renderer", "video" })) || data.ValueKind != JsonValueKind.Object) return false;
@@ -402,6 +422,15 @@ public static class PayloadParser
             && At(n, "attached_story").ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
             && attachments.Length > 0 && attachments.All(a => Get(At(a, "styles"), "__typename") == "StoryAttachmentUnavailableStyleRenderer");
     }
+    // A dated wall post with no caption, no attachment and no media. Old "wrote on your wall"
+    // entries arrive like this; the post builder drops them, so they are neither posts nor
+    // evidence of an empty timeline. The builder call is the proof that nothing usable is inside.
+    static bool ContentlessFacebookStory(JsonElement n)
+        => Get(n, "__typename") == "Story" && Get(n, "post_id", "id") is not null && Date(Get(n, "creation_time")) is not null
+            && Get(n, "message", "text") is null && Get(At(n, "comet_sections", "content", "story"), "message") is null
+            && At(n, "attached_story").ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+            && At(n, "attachments").ValueKind == JsonValueKind.Array && !Array(At(n, "attachments")).Any()
+            && Facebook(n, []) is null;
     static bool ContainsPostContent(JsonElement node) => Walk(node).Any(x => x.Node.EnumerateObject()
         .Any(p => p.Name is "post_id" or "message" or "caption" or "attachments" or "attached_story" or "timeline_list_feed_units" or "news_feed"));
     static string? Id(JsonElement n) => Get(n, "pk", "id", "media_id", "shortcode", "code");

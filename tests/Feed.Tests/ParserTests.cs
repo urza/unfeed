@@ -133,6 +133,39 @@ public sealed class ParserTests
         Assert.NotEmpty(PayloadParser.Parse("facebook", body.Replace("{\"data\":", "{\"errors\":[{}],\"data\":")).Diagnostics);
     }
     [Fact]
+    public void FacebookContentlessWallPostsAreRecognizedWithoutCreatingPosts()
+    {
+        const string story = """{"__typename":"Story","post_id":"fixture-empty","creation_time":1300000000,"message":null,"attachments":[],"attached_story":null,"permalink_url":"https://www.facebook.com/fixture/posts/1"}""";
+        var body = "{\"data\":{\"node\":{\"__typename\":\"User\",\"id\":\"fixture\",\"timeline_list_feed_units\":{\"edges\":[{\"node\":" + story + "}]}}}}\n"
+            + "{\"path\":[\"node\",\"timeline_list_feed_units\",\"edges\",1],\"data\":{\"node\":" + story + ",\"cursor\":\"fixture\"}}";
+        var parsed = PayloadParser.Parse("facebook", body); Assert.Empty(parsed.Posts); Assert.Empty(parsed.Diagnostics); Assert.False(parsed.ExplicitEmpty);
+        var captioned = PayloadParser.Parse("facebook", body.Replace("\"message\":null", "\"message\":{\"text\":\"Hello\"}")); Assert.Equal(2, captioned.Parts.Count(p => p.Kind == "posts")); Assert.Empty(captioned.Diagnostics);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", body.Replace("\"attachments\":[]", "\"attachments\":[{\"styles\":{\"__typename\":\"UnknownRenderer\"}}]")).Diagnostics);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", body.Replace("\"creation_time\":1300000000,", "")).Diagnostics);
+    }
+    [Fact]
+    public void FacebookFirstPageSuggestionUnitsAreAuxiliary()
+    {
+        const string body = """{"data":{"viewer":{"news_feed":{"edges":[{"node":{"__typename":"PaginatedPeopleYouMayKnowFeedUnit","id":"fixture","title":{"text":"People you may know"},"all_users":[]},"cursor":"fixture","cat_sensitive":{"enc":"fixture","cat":"ENGAGEMENT_QP"}}]}}},"extensions":{"is_final":true}}""";
+        var parsed = PayloadParser.Parse("facebook", body); Assert.Empty(parsed.Posts); Assert.Empty(parsed.Diagnostics); Assert.False(parsed.ExplicitEmpty);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", body.Replace("PaginatedPeopleYouMayKnowFeedUnit", "UnknownFeedUnit")).Diagnostics);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", body.Replace("\"all_users\":[]", "\"all_users\":[],\"attachments\":[]")).Diagnostics);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", body.Replace("\"cursor\":\"fixture\"", "\"unknown_fixture_field\":{}")).Diagnostics);
+    }
+    [Fact]
+    public void FacebookShowMoreLoggingAndLinkedVideoPlayerResponsesAreAuxiliary()
+    {
+        const string logging = """{"label":"CometShowMoreShowLessCallToAction_renderer$defer$useShowMoreShowLessCallToActionLogger_logData","path":["viewer","news_feed","edges",1,"node","comet_sections","call_to_action","story","bumpers","persistent_bumper","cta_renderer","comet_action"],"data":{"affected_display_names":["Fixture"],"affected_ids":[],"bumper_class":"IFRPersistentBroadTransientPreferenceSignalBumper","bumper_scope":"broad","generator_uuid":"fixture","ifr_show_rate_increase":false,"show_rate_n":25,"trigger_reason":"persistent"}}""";
+        var parsed = PayloadParser.Parse("facebook", logging); Assert.Empty(parsed.Posts); Assert.Empty(parsed.Diagnostics); Assert.False(parsed.ExplicitEmpty);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", logging.Replace("show_rate_n", "unknown_fixture_field")).Diagnostics);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", logging.Replace("\"comet_action\"", "\"unknown_fixture_path\"")).Diagnostics);
+        const string player = """{"label":"VideoPlayerRelay_video$defer$InstreamVideoAdBreaksPlayer_video","path":["node","timeline_list_feed_units","edges",1,"node","comet_sections","content","story","attached_story","comet_sections","message","story","message","ranges",3,"entity"],"data":{"id":"fixture","instream_extra_config":{"instream_halo_delay_time_seconds":0},"instream_video_ad_breaks_comet":null}}""";
+        parsed = PayloadParser.Parse("facebook", player); Assert.Empty(parsed.Posts); Assert.Empty(parsed.Diagnostics); Assert.False(parsed.ExplicitEmpty);
+        Assert.Empty(PayloadParser.Parse("facebook", player.Replace("\"attached_story\",\"comet_sections\",", "\"comet_sections\",\"attached_story\",\"story\",\"attached_story\",\"comet_sections\",\"attached_story_layout\",\"story\",\"comet_sections\",")).Diagnostics);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", player.Replace("\"entity\"]", "\"unknown_fixture_path\"]")).Diagnostics);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", player.Replace("\"id\":\"fixture\"", "\"id\":\"fixture\",\"message\":{\"text\":\"Hello\"}")).Diagnostics);
+    }
+    [Fact]
     public void FacebookProgressiveDeliverySelectsOnePlayableHdVideoAndIgnoresManifests()
     {
         const string raw = """{"__typename":"Story","post_id":"101","creation_time":1700000000,"message":{"text":"Synthetic video"},"url":"https://facebook.com/fixture/posts/101","attachments":[{"video":{"videoDeliveryResponseFragment":{"videoDeliveryResponseResult":{"progressive_urls":[{"progressive_url":"https://cdn.example.test/sd.mp4","failure_reason":null,"metadata":{"quality":"SD"}},{"progressive_url":"https://cdn.example.test/hd.mp4","failure_reason":null,"metadata":{"quality":"HD"}}],"dash_manifest_urls":["https://cdn.example.test/dash.mpd"]}}}}]}""";
