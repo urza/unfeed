@@ -19,7 +19,7 @@ public sealed class ConfigurationTests
         if (valid) InstanceValidation.Validate(new(), taxonomy);
         else Assert.Throws<FormatException>(() => InstanceValidation.Validate(new(), taxonomy));
     }
-    [Fact] public void MissingFilesPausePlatformsAndModel() { var c = InstanceValidation.Parse<FeedConfig>(null); Assert.All(Platforms.All, p => Assert.False(c.Enabled(p))); Assert.False(c.Llm.Enabled); Assert.Equal(300, c.Ui.RenderCap); }
+    [Fact] public void MissingFilesPausePlatformsAndModel() { var c = InstanceValidation.Parse<FeedConfig>(null); Assert.All(Platforms.All, p => Assert.False(c.Enabled(p))); Assert.False(c.Llm.Enabled); Assert.Equal(100, c.Ui.RenderCap); }
     [Theory] [InlineData("{\"typo\":1}")] [InlineData("{\"llm\":{\"typo\":1}}")] [InlineData("{\"ui\":null}")] public void InvalidShapeFails(string json) => Assert.ThrowsAny<Exception>(() => InstanceValidation.Parse<FeedConfig>(json));
     [Fact] public void CommentsAndCaseInsensitiveKeysWork() { var c = InstanceValidation.Parse<FeedConfig>("{// comment\n\"UI\":{\"render_cap\":100000,},}"); Assert.Equal(100000, c.Ui.RenderCap); InstanceValidation.Validate(c, new()); }
     [Fact] public void InvalidReloadKeepsWholeSnapshot() { var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()); Directory.CreateDirectory(root); try { var f = new InstanceFiles(new(root)); var before = f.Current; File.WriteAllText(Path.Combine(root, "config.json"), "{\"ui\":{\"render_cap\":0}}"); Assert.Same(before, f.Refresh()); Assert.NotNull(f.Error); File.WriteAllText(Path.Combine(root, "config.json"), "{\"scheduler\":{\"enabled\":false}}"); Assert.False(f.Refresh().Config.Scheduler.Enabled); Assert.Null(f.Error); } finally { Directory.Delete(root, true); } }

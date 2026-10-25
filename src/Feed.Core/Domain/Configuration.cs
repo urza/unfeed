@@ -105,7 +105,7 @@ public sealed record FilterConfig
     public ImmutableArray<string> AlwaysShowBypasses { get; init; } = ["keyword", "llm"];
 }
 public sealed record SchedulerConfig { public bool Enabled { get; init; } = true; public int JitterMinutes { get; init; } = 10; public int ManualCooldownMinutes { get; init; } = 30; public int RunRequestTtlMinutes { get; init; } = 60; }
-public sealed record UiConfig { public int RenderCap { get; init; } = 300; public int CoverageStaleHours { get; init; } = 48; public string DefaultView { get; init; } = "all"; public string LogLevel { get; init; } = "info"; public StackConfig Stack { get; init; } = new(); }
+public sealed record UiConfig { public int RenderCap { get; init; } = 100; public int CoverageStaleHours { get; init; } = 48; public string DefaultView { get; init; } = "all"; public string LogLevel { get; init; } = "info"; public StackConfig Stack { get; init; } = new(); }
 public sealed record StackConfig { public int MinPosts { get; init; } = 3; public int WindowDays { get; init; } = 7; }
 public sealed record BackgroundConfig { public string Source { get; init; } = "bing"; public double BlurPx { get; init; } = 4; }
 public sealed record WebConfig { public string Host { get; init; } = "127.0.0.1"; public int Port { get; init; } = 8000; }

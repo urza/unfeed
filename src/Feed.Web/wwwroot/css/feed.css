@@ -60,8 +60,11 @@
 /* Cards far from the viewport skip layout and paint until they come near it. A 300-card page then lays out
    in a few milliseconds instead of hundreds, on load, on every view switch and on every resize. The 500 px
    placeholder is this feed's average card height; masonry balances unseen cards by it and later re-layouts
-   reuse each card's last real size. The rule sits on the card, not the unit, so its shadow is not clipped. */
-.card{content-visibility:auto;contain-intrinsic-size:auto 500px}
+   reuse each card's last real size. The rule sits on the card, not the unit, so its shadow is not clipped.
+   The first three units of a column (or of the plain grid without JavaScript) are excluded: Chromium treats a
+   newly inserted auto card as skipped until its first rendering update, so it would paint as a placeholder
+   for one frame and its innerText would read empty until then. The cards at the top are on screen anyway. */
+.feed-unit:nth-child(n+4) .card{content-visibility:auto;contain-intrinsic-size:auto 500px}
 
 /* Navigation feedback: while a fetched page is pending, a bar runs under the toolbar and the old content dims.
    The 120 ms delays keep both invisible when the response is already in hand (prefetched or fast). */

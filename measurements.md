@@ -20,7 +20,7 @@ Synthetic database: 420 chronologically ordered posts, varying text/summary pres
 
 | Workload | Server timing | HTML bytes | Browser result |
 |---|---:|---:|---|
-| Default cap 300 | warm median 15.30 ms; max of 7 samples 28.36 ms | 490,445 | 1280×900: FCP 164 ms; DOMContentLoaded 237.6 ms |
+| Cap 300 (the default at the time; 100 since 2026-10-25) | warm median 15.30 ms; max of 7 samples 28.36 ms | 490,445 | 1280×900: FCP 164 ms; DOMContentLoaded 237.6 ms |
 | Cap 1000, 420 matches | 22.24 ms (one sample) | 685,325 | 390×844: FCP 164 ms; DOMContentLoaded 201.7 ms; no horizontal overflow |
 
 The raised cap rendered every one of the 420 matching posts, with no hidden 300-row limit. These figures are not a claim about a 100,000-post page, large media files, a slow phone, or large retained database history. Read projections still load stored post facts for exact membership; rare windows now use sorted per-author dates and binary bounds rather than a full scan for each post.
