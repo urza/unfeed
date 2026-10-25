@@ -29,8 +29,14 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
         while (DateTime.UtcNow < end)
         {
             ct.ThrowIfCancellationRequested();
-            if (!await Site.Checkpoint(page, platform)) await Site.DismissNotificationPrompt(page);
-            if (Uri.TryCreate(page.Url, UriKind.Absolute, out var uri) && (uri.AbsolutePath == "/" || platform == "facebook" && uri.AbsolutePath == "/home.php") && await page.Locator(Site.Selectors(platform, false)).CountAsync() > 0 && !await Site.Checkpoint(page, platform)) { await Relogin(platform, false, ct); session.ExportCookiesOnClose(); return; }
+            // The owner drives this page by hand, so a probe can land in the middle of a navigation, where Playwright
+            // throws instead of answering. Such a probe is not a failed login; the next tick asks again.
+            try
+            {
+                if (!await Site.Checkpoint(page, platform)) await Site.DismissNotificationPrompt(page);
+                if (Uri.TryCreate(page.Url, UriKind.Absolute, out var uri) && (uri.AbsolutePath == "/" || platform == "facebook" && uri.AbsolutePath == "/home.php") && await page.Locator(Site.Selectors(platform, false)).CountAsync() > 0 && !await Site.Checkpoint(page, platform)) { await Relogin(platform, false, ct); session.ExportCookiesOnClose(); return; }
+            }
+            catch (PlaywrightException) { }
             await Task.Delay(2000, ct);
         }
         throw new TimeoutException("login timed out; inspect noVNC and selectors before retrying");

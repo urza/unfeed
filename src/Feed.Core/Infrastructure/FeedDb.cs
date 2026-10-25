@@ -37,7 +37,7 @@ public sealed class FeedDb(InstancePaths paths) : DbContext
         b.Entity<PlatformState>().HasKey(x => x.Platform); b.Entity<TimelineVisit>().HasIndex(x => new { x.Platform, x.Url, x.Id });
         b.Entity<SweepTarget>().HasKey(x => new { x.Platform, x.CycleId, x.AuthorId }); b.Entity<Kv>().HasKey(x => x.Key);
     }
-    public async Task Initialize(CancellationToken ct = default) { await Database.MigrateAsync(ct); await Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct); }
+    public async Task Initialize(CancellationToken ct = default) { await Database.MigrateAsync(ct); await Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct); await Application.MediaKeys.Normalize(this, paths, ct); }
     public async Task Put(string key, string value, CancellationToken ct = default) => await Database.ExecuteSqlInterpolatedAsync($"INSERT INTO Kv (Key,Value) VALUES ({key},{value}) ON CONFLICT(Key) DO UPDATE SET Value=excluded.Value", ct);
     public async Task<string?> Get(string key, CancellationToken ct = default) => await Kv.Where(x => x.Key == key).Select(x => x.Value).FirstOrDefaultAsync(ct);
     sealed class Pragmas : DbConnectionInterceptor

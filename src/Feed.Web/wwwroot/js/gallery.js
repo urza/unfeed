@@ -11,4 +11,5 @@ export function gallery() {
  dialog.addEventListener('cancel',e=>{e.preventDefault();close();});dialog.addEventListener('click',e=>{if(e.target===dialog||e.target===slide)close();});
  dialog.addEventListener('keydown',e=>{if(e.key==='ArrowLeft'){e.preventDefault();show(index-1);}if(e.key==='ArrowRight'){e.preventDefault();show(index+1);}if(e.code==='Space'){e.preventDefault();const v=slide.querySelector('video');if(v){if(v.paused)v.play();else v.pause();}else show(index+1);}});
  dialog.addEventListener('touchstart',e=>{touch=e.target.closest('video')?null:e.changedTouches[0].clientX;},{passive:true});dialog.addEventListener('touchend',e=>{if(touch!==null&&Math.abs(e.changedTouches[0].clientX-touch)>40)show(index+(e.changedTouches[0].clientX<touch?1:-1));touch=null;},{passive:true});
+ return () => { if (dialog.open) close(); };
 }

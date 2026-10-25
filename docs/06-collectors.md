@@ -31,7 +31,7 @@ An existing Chromium profile can be imported with `profile import`, which copies
 
 ## 6.3 Login
 
-`login --platform X` takes the platform lock, opens the headed browser on the platform's home URL, and prints that the human logs in through the noVNC window, two-factor included. It polls every 2 seconds, for up to 10 minutes, until the URL is a home URL and a feed element is present. A checkpoint during the wait does not abort: the human clears it. On success the cookies are exported and the platform's re-login flag is cleared. A timeout exits with code 1. The session then lives in the profile and every later run reuses it.
+`login --platform X` takes the platform lock, opens the headed browser on the platform's home URL, and prints that the human logs in through the noVNC window, two-factor included. It polls every 2 seconds, for up to 10 minutes, until the URL is a home URL and a feed element is present. A checkpoint during the wait does not abort: the human clears it. A probe that lands in the middle of a navigation (the redirect after the password, for example) is not a failure either: Playwright throws there instead of answering, the checkpoint check waits for the new document and reads once more, and the login loop retries any remaining probe error on its next tick. On success the cookies are exported and the platform's re-login flag is cleared. A timeout exits with code 1. The session then lives in the profile and every later run reuses it.
 
 ## 6.4 The adapter
 
@@ -152,7 +152,7 @@ The summary line: `collect <platform> <mode>: <status> run=#<id> (found=, new=, 
 - Platform context: retain the story's own `comet_sections.context_layout.story.comet_sections.title.story.title.text` in `StoryTitle`, including photo-update context. Never borrow a shared/attached story's title or insert this platform-generated text into the author caption.
 - Text: `message`, else the message under the comet content sections, else a flat `text`. An object yields its `.text`.
 - Author: the first of `actors[]`. Name from `name`. URL from `wwwURL` or `url`, made absolute. Id from `id`, `idString` or `__dr`, else the numeric id from the URL, else the URL slug.
-- Like ref: `feedback.id` or `feedback.targetID`.
+- Like ref: `feedback.id` or `feedback.targetID`. If absent, use the feedback under `comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer` only when that UFI story’s `post_id` matches the collected post. Shared-story and comment feedback are not fallback candidates.
 - Posted at: `creation_time`.
 - Permalink: `wwwURL`, `permalink`, `permalink_url` or `url`. A relative URL is prefixed with `https://www.facebook.com`. `http` becomes `https`. Anything else is dropped.
 - Shared content from the root `attached_story`, the content-section story’s `attached_story`, or the attached story within `attachments`: author is the first actor's name, text is its message, URL is its `wwwURL` or `permalink_url`. Caption and shared text come from different nodes and never mix.

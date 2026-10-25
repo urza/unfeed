@@ -12,7 +12,7 @@ public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyLi
 public static class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
-    public const int Version = 13;
+    public const int Version = 14;
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
     public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
@@ -25,12 +25,17 @@ public static class PayloadParser
     static bool Truth(JsonElement e) => e.ValueKind == JsonValueKind.True || e.ValueKind == JsonValueKind.Number && e.TryGetInt64(out var n) && n != 0 || e.ValueKind == JsonValueKind.String && e.GetString() is { Length: > 0 } s && s != "0";
     static DateTime? Date(string? value) => long.TryParse(value, out var n) && n >= -62135596800 && n < 253402300800 && n != 0 ? DateTimeOffset.FromUnixTimeSeconds(n).UtcDateTime : null;
     static string? Url(string? s, string platform) { if (s is null) return null; if (s.StartsWith('/')) s = Platforms.Home(platform).TrimEnd('/') + s; return Uri.TryCreate(s, UriKind.Absolute, out var u) && u.Scheme is "http" or "https" ? new UriBuilder(u) { Scheme = "https", Port = -1 }.Uri.ToString() : null; }
+    // Media identity, never a fetch URL. Meta CDN links rotate most query parameters per request
+    // (signatures, cache ids, delivery hints such as _nc_gid or efg), so a denylist of transient names
+    // could never be complete and every new name re-identified unchanged images: new downloads, new
+    // content revisions, new model verdicts. Keep only what selects a different picture: the rendition
+    // (stp) and the proxied origin of an external preview (url). Changing this rule needs a key version
+    // bump in MediaKeys so stored rows and content hashes are normalized once instead of churning.
     public static string SourceKey(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var u)) return url;
-        var transient = new[] { "oh", "oe", "_nc_ohc", "_nc_sid", "_nc_ht", "_nc_cat", "_nc_oc", "_nc_eui2", "ccb", "se", "sig", "signature", "expires" };
-        var query = u.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries).Where(x => !transient.Contains(x.Split('=')[0], StringComparer.OrdinalIgnoreCase));
-        return new UriBuilder(u) { Query = string.Join('&', query), Fragment = "" }.Uri.ToString();
+        var kept = u.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries).Where(x => x.Split('=')[0].ToLowerInvariant() is "stp" or "url").Order(StringComparer.Ordinal);
+        return new UriBuilder(u) { Query = string.Join('&', kept), Fragment = "" }.Uri.ToString();
     }
     public static ParsedCapture Parse(string platform, string body, bool people = false, CaptureContext? context = null)
     {
@@ -429,6 +434,16 @@ public static class PayloadParser
         if (choice.ValueKind == JsonValueKind.Undefined) choice = candidates.FirstOrDefault();
         return Get(choice, "url", "src") ?? Get(n, "thumbnail_src", "display_url");
     }
+    static string? FacebookLikeRef(JsonElement story, string postId)
+    {
+        var direct = Get(At(story, "feedback"), "id", "targetID");
+        if (!string.IsNullOrWhiteSpace(direct)) return direct;
+        // Use only the identified post's UFI, never a shared story or comment.
+        var owner = At(story, "comet_sections", "feedback", "story", "story_ufi_container", "story");
+        if (Get(owner, "post_id") != postId) return null;
+        return Get(At(owner, "feedback_context", "feedback_target_with_context",
+            "comet_ufi_summary_and_actions_renderer", "feedback"), "id", "targetID");
+    }
     static Observation? Facebook(JsonElement n, JsonElement[] parents)
     {
         var substory = parents.Length >= 4 && Get(parents[^4], "__typename") == "CometStoryAggregatedStoriesStrategy"
@@ -442,7 +457,7 @@ public static class PayloadParser
         var actor = Array(At(n, "actors")).FirstOrDefault(); var authorUrl = Url(Get(actor, "wwwURL", "url"), "facebook");
         var shared = new[] { At(n, "attached_story"), At(n, "comet_sections", "content", "story", "attached_story") }.Concat(Walk(At(n, "attachments")).Select(x => x.Node)).FirstOrDefault(x => At(x, "actors").ValueKind == JsonValueKind.Array && Get(x, "message") is not null);
         var caption = Get(n, "message") ?? Get(At(n, "comet_sections", "content", "story"), "message") ?? Get(n, "text");
-        var p = new Post { Platform = "facebook", PlatformPostId = id, Text = caption, PostedAt = time, IsSponsored = sponsored, ObservedAuthorName = Get(actor, "name"), ObservedAuthorUrl = authorUrl, LikeRef = Get(At(n, "feedback"), "id", "targetID"), Permalink = Url(Get(n, "wwwURL", "permalink", "permalink_url", "url"), "facebook"), SharedAuthor = Get(Array(At(shared, "actors")).FirstOrDefault(), "name"), SharedText = Get(shared, "message"), SharedUrl = Url(Get(shared, "wwwURL", "permalink_url"), "facebook") };
+        var p = new Post { Platform = "facebook", PlatformPostId = id, Text = caption, PostedAt = time, IsSponsored = sponsored, ObservedAuthorName = Get(actor, "name"), ObservedAuthorUrl = authorUrl, LikeRef = FacebookLikeRef(n, id), Permalink = Url(Get(n, "wwwURL", "permalink", "permalink_url", "url"), "facebook"), SharedAuthor = Get(Array(At(shared, "actors")).FirstOrDefault(), "name"), SharedText = Get(shared, "message"), SharedUrl = Url(Get(shared, "wwwURL", "permalink_url"), "facebook") };
         p.StoryTitle = Get(At(n, "comet_sections", "context_layout", "story", "comet_sections", "title", "story"), "title");
         // Life-event facts are Facebook's structured description, not the author's caption.
         var facts = Array(At(n, "attachments")).Select(a => At(a, "styles"))

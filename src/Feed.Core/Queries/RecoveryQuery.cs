@@ -21,6 +21,22 @@ public sealed record RecoveryIssue(string Platform, string Item, string Problem,
 }
 public static class RecoveryQuery
 {
+    // Feed needs only the indicator, not diagnostic text, grouping, provenance or retry descriptions.
+    public static async Task<bool> HasIssues(FeedDb db, InstanceSnapshot s, string? platform = null, CancellationToken ct = default)
+    {
+        var activeSince = Clock.Now.AddSeconds(-s.Config.Llm.TimeoutSeconds * (s.Config.Llm.FallbackBaseUrl.Length > 0 ? 2 : 1));
+        if (await db.Posts.AnyAsync(p => p.IngestReadyAt != null && (platform == null || p.Platform == platform) &&
+            ((!p.Hidden || p.HiddenBy == "llm") && (p.CategoriesJson == null || p.VerdictContentRevision == null || p.VerdictContentRevision != p.ContentRevision || p.LlmTokenLimit != null) &&
+                p.LlmAttemptedAt != null && (p.LlmError != null || p.LlmAttemptedAt <= activeSince) ||
+             !p.Hidden && (p.Summary == null || p.SummaryContentRevision == null || p.SummaryContentRevision != p.ContentRevision) &&
+                p.SummaryAttemptedAt != null && (p.SummaryError != null || p.SummaryAttemptedAt <= activeSince)), ct)) return true;
+        var superseded = CaptureHealth.Superseded(db);
+        var recent = Clock.Now.AddDays(-7);
+        return await db.RawSnapshots.AnyAsync(r => !r.Deleted && (platform == null || r.Platform == platform) &&
+            (!r.Parsed && r.Error != null || r.Parsed && r.Warning != null && r.CapturedAt > recent) &&
+            !superseded.Any(old => old.Id == r.Id), ct);
+    }
+
     sealed record RawGroup(string Fingerprint, string Code, string Impact, long Id, int Count, int Runs, DateTime First, DateTime Last);
     public static async Task<RecoveryIssue[]> Read(FeedDb db, InstanceSnapshot s, string? platform = null, CancellationToken ct = default, bool grouped = false, string? fingerprint = null, int page = 1, bool summaryOnly = false)
     {

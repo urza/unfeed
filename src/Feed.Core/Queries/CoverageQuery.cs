@@ -6,6 +6,25 @@ namespace Feed.Core.Queries;
 public sealed record CoverageRow(string Platform, string Name, string? Url, DateTime? LastAttempt, DateTime? LastCapture, string Status, int Failures, int PostsFound, DateTime? OldestPost, DateTime? NewestPost, string? Note, string? Screenshot, bool Stale, bool Incomplete, string Recovery);
 public static class CoverageQuery
 {
+    public static async Task<bool> HasIssues(FeedDb db, InstanceSnapshot s, string? platform = null, CancellationToken ct = default)
+    {
+        var enabled = Platforms.All.Where(s.Config.Enabled).ToArray();
+        var authors = await db.Authors.Where(a => a.IsFriend && (platform == null ? enabled.Contains(a.Platform) : a.Platform == platform))
+            .Select(a => new { a.Id, a.Platform, a.Url }).ToArrayAsync(ct);
+        if (authors.Length == 0) return false;
+        // URL-only legacy visits must still participate; large notes/screenshots/diagnoses do not.
+        var visits = await db.TimelineVisits.Select(v => new { v.Id, v.AuthorId, v.Platform, v.Url, v.At, v.CaptureStatus }).OrderByDescending(v => v.At).ThenByDescending(v => v.Id).ToArrayAsync(ct);
+        var byAuthor = visits.Where(v => v.AuthorId != null).ToLookup(v => v.AuthorId!.Value);
+        var byUrl = visits.Where(v => v.AuthorId == null).ToLookup(v => (v.Platform, v.Url.TrimEnd('/')));
+        var cutoff = Clock.Now.AddHours(-s.Config.Ui.CoverageStaleHours);
+        return authors.Any(a =>
+        {
+            var history = byAuthor[a.Id].Concat(a.Url == null ? [] : byUrl[(a.Platform, a.Url.TrimEnd('/'))]).OrderByDescending(v => v.At).ThenByDescending(v => v.Id).ToArray();
+            var success = history.FirstOrDefault(v => v.CaptureStatus is "captured" or "empty");
+            return success == null || success.At < cutoff || history.FirstOrDefault()?.CaptureStatus == "incomplete";
+        });
+    }
+
     public static async Task<CoverageRow[]> Read(FeedDb db, InstanceSnapshot s, string? platform = null, CancellationToken ct = default)
     {
         var authors = await db.Authors.AsNoTracking().Where(a => a.IsFriend).ToArrayAsync(ct);

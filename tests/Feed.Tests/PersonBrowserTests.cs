@@ -36,14 +36,21 @@ public sealed class PersonBrowserTests
             while (true) { if (server.HasExited) throw new InvalidOperationException(await stderr); try { if ((await http.GetAsync(url + "/healthz", timeout.Token)).IsSuccessStatusCode) break; } catch (HttpRequestException) { } await Task.Delay(100, timeout.Token); }
             using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true }); await using var context = await browser.NewContextAsync(new() { JavaScriptEnabled = javascript, ViewportSize = new() { Width = 1280, Height = 900 } });
             var page = await context.NewPageAsync(); await page.GotoAsync(url);
+            async Task Navigate(string name)
+            {
+                var target = page.GetByRole(AriaRole.Link, new() { Name = name, Exact = true });
+                var href = await target.GetAttributeAsync("href");
+                await target.ClickAsync();
+                await Assertions.Expect(page).ToHaveURLAsync(url + href);
+            }
             var link = page.Locator(".card-head .author").First; Assert.Equal($"/people/{id}", await link.GetAttributeAsync("href")); Assert.Null(await link.GetAttributeAsync("target")); await link.ClickAsync();
             Assert.Equal("Synthetic Person", await page.Locator("h1").InnerTextAsync()); Assert.Equal(2, await page.Locator(".card").CountAsync());
             Assert.Equal("https://www.facebook.com/synthetic/", await page.GetByRole(AriaRole.Link, new() { Name = "Open platform profile" }).GetAttributeAsync("href"));
             Assert.True(await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).IsDisabledAsync());
-            await page.GetByRole(AriaRole.Link, new() { Name = "Life", Exact = true }).ClickAsync(); Assert.Equal(1, await page.Locator(".card").CountAsync()); Assert.Contains("Visible synthetic", await page.Locator(".card").InnerTextAsync());
-            await page.GetByRole(AriaRole.Link, new() { Name = "Unsorted (1)", Exact = true }).ClickAsync(); Assert.Contains("Unsorted synthetic", await page.Locator(".card").InnerTextAsync());
-            await page.GetByRole(AriaRole.Link, new() { Name = "Hidden (1)", Exact = true }).ClickAsync(); Assert.Contains("Synthetic rule", await page.Locator(".hidden-tag").InnerTextAsync());
-            await page.GetByRole(AriaRole.Link, new() { Name = "All posts", Exact = true }).ClickAsync();
+            await Navigate("Life"); Assert.Equal(1, await page.Locator(".card").CountAsync()); Assert.Contains("Visible synthetic", await page.Locator(".card").InnerTextAsync());
+            await Navigate("Unsorted (1)"); Assert.Contains("Unsorted synthetic", await page.Locator(".card").InnerTextAsync());
+            await Navigate("Hidden (1)"); Assert.Contains("Synthetic rule", await page.Locator(".hidden-tag").InnerTextAsync());
+            await Navigate("All posts");
             await page.Locator("form[data-action=thumb]").First.Locator("button").ClickAsync();
             await Assertions.Expect(page.Locator("form[data-action=thumb]").First.Locator("[data-count]")).ToHaveTextAsync("1"); await using (var db = i.Factory.Open()) Assert.Equal(1, await db.Feedback.CountAsync());
             await page.SetViewportSizeAsync(390, 844);

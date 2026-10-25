@@ -283,6 +283,7 @@ Small meta state.
 | `sweep:<platform>:cycle` | active all-followed cycle id |
 | `process:not_before` | next allowed automatic processing launch after unexpected worker/startup failure; no success delay between batches |
 | `process:turn` | persisted next platform/model-task admission turn |
+| `media:key-version`, `media:key-migration` | the media identity rule the stored rows follow (7.3), and a one-line record of the last normalization (posts, removed duplicate rows, time) |
 | `coverage:<platform>:not_before` | earliest next automatic capture-recovery launch after launch/startup failure |
 | `model:<configuration hash>:<judge or summary>:not_before` | shared stage backoff after a wholly failed model batch; applies across platforms, without delaying ingest/media recovery |
 

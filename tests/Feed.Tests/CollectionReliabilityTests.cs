@@ -28,6 +28,7 @@ public sealed class CollectionReliabilityTests
         Assert.Equal(dismissed,await CaptureHealth.Superseded(db).AnyAsync(r=>r.Id==1));
         var s=new InstanceSnapshot(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("facebook",new())},new(),Preferences.Parse(""));
         Assert.Equal(!dismissed,(await RecoveryQuery.Read(db,s)).Any(r=>r.RawId==1));
+        Assert.Equal(!dismissed,await RecoveryQuery.HasIssues(db,s));
         Assert.False((await db.RawSnapshots.FindAsync(1L))!.Parsed);Assert.Equal("incomplete",(await db.TimelineVisits.FindAsync(1L))!.CaptureStatus);
         // A new recurrence is independently visible; prior historical alerts stay superseded.
         db.RawSnapshots.Add(new(){Platform="facebook",RunId=2,Path="recurrence.json",Error="new error",BlockedParserVersion=PayloadParser.Version});await db.SaveChangesAsync();

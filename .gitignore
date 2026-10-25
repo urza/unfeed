@@ -8,3 +8,4 @@ TestResults/
 # Local environment secrets (instance state belongs in data/)
 .env
 .env.*
+.claude-memory/

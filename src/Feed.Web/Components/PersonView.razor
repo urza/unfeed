@@ -1,5 +1,5 @@
 <Shell Title="@Name" Stamp="@Stamp" Background="@Background" Blur="Model.Feed.Instance.Config.Backgrounds.BlurPx">
-<header class="person-nav glass"><a href="/">← Back to feed</a><a href="/manage?section=people">Manage people</a></header>
+<header class="person-nav glass"><a class="top-nav-button" href="/">← Back to feed</a><a class="top-nav-button" href="/manage?section=people">Manage people</a></header>
 <section class="person-profile glass">
  <div class="person-heading">@if(Model.Author.AvatarPath is {} avatar){<img class="avatar" src="@("/"+avatar)" width="64" height="64" alt=""/>}<div><h1>@Name</h1><p>@Management.PlatformName(Model.Author.Platform) @if(Model.ProfileUrl is {} url){<span> · <a href="@url" target="_blank" rel="noopener noreferrer">Open platform profile ↗</a></span>}</p></div></div>
  <div class="badges"><span class="badge">@(Model.Author.IsFriend ? "In your feed list" : "Outside your feed list")</span>@if(Model.Close){<span class="badge">Close friend</span>}@if(Model.Muted){<span class="badge">Muted</span>}@if(Model.Always){<span class="badge">Always show</span>}@if(Model.HomeTimeline){<span class="badge">Included in home timeline visits</span>}</div>

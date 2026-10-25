@@ -10,6 +10,43 @@ public sealed class MediaTests
 {
     static byte[] Png(int width,int height){var b=new byte[24];new byte[]{137,80,78,71,13,10,26,10}.CopyTo(b,0);BinaryPrimitives.WriteInt32BigEndian(b.AsSpan(16,4),width);BinaryPrimitives.WriteInt32BigEndian(b.AsSpan(20,4),height);return b;}
     [Fact]public void SigningTokensDoNotChangeMediaIdentityButRenditionsDo(){Assert.Equal(PayloadParser.SourceKey("https://cdn.test/a.jpg?oh=old&oe=1"),PayloadParser.SourceKey("https://cdn.test/a.jpg?oh=new&oe=2"));Assert.NotEqual(PayloadParser.SourceKey("https://cdn.test/a.jpg?stp=small"),PayloadParser.SourceKey("https://cdn.test/a.jpg?stp=large"));}
+    [Fact]public void OnlyRenditionAndProxiedOriginSurviveInMediaIdentity()
+    {
+        // Parameters never seen before (here _nc_gid, efg, ig_cache_key) must not create a new identity; a denylist cannot know them.
+        Assert.Equal(PayloadParser.SourceKey("https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&efg=eyJ2IjoxfQ&_nc_gid=first&ig_cache_key=k1&oh=1&oe=2"),PayloadParser.SourceKey("https://cdn.test/v/a_n.jpg?_nc_gid=second&stp=dst-jpg_e35&efg=eyJ2IjoyfQ&ig_cache_key=k2&oh=3&oe=4"));
+        Assert.Equal("https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35",PayloadParser.SourceKey("https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=first"));
+        Assert.NotEqual(PayloadParser.SourceKey("https://external.test/emg1/v/t13/1?url=https%3A%2F%2Fa.example%2F1.jpg&stp=c0"),PayloadParser.SourceKey("https://external.test/emg1/v/t13/1?url=https%3A%2F%2Fa.example%2F2.jpg&stp=c0"));
+        Assert.Equal("https://cdn.test/plain.jpg",PayloadParser.SourceKey("https://cdn.test/plain.jpg?_nc_gid=x#frag"));
+    }
+    sealed class PngHandler(byte[] bytes):HttpMessageHandler{public int Calls;protected override Task<HttpResponseMessage>SendAsync(HttpRequestMessage r,CancellationToken ct){Interlocked.Increment(ref Calls);return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new ByteArrayContent(bytes)});}}
+    [Fact]public async Task RecaptureWithRotatedCdnParametersKeepsRevisionRowsAndFiles()
+    {
+        await using var i=new TestInstance();await i.Init();using var handler=new PngHandler(Png(640,480));using var http=new HttpClient(handler);var ingest=new Ingest(i.Paths,i.Factory,new(i.Paths,http));
+        var snapshot=new InstanceSnapshot(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("instagram",new())},new(),Preferences.Parse(""));
+        string Raw(string dir,string gid){var file=i.Paths.Get("raw","instagram",dir,"001.json");Directory.CreateDirectory(Path.GetDirectoryName(file)!);File.WriteAllText(file,$$$"""{"items":[{"pk":"101","code":"synthetic","user":{"pk":"501","username":"synthetic.person"},"caption":{"text":"Synthetic caption"},"image_versions2":{"candidates":[{"url":"https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid={{{gid}}}&oh=sig{{{gid}}}&oe=1","width":640}]}}]}""");return file;}
+        var first=Raw("20260101T000000","one");var second=Raw("20260102T000000","two");File.SetLastWriteTimeUtc(second,File.GetLastWriteTimeUtc(first).AddMinutes(1));
+        Assert.Equal(1,(await ingest.File("instagram",first,snapshot,false,default)).New);
+        var replay=await ingest.File("instagram",second,snapshot,false,default);Assert.Equal(0,replay.Revised);Assert.Equal(1,handler.Calls);
+        await using var db=i.Factory.Open();var post=await db.Posts.SingleAsync();Assert.Equal(1,post.ContentRevision);var media=await db.Media.SingleAsync();Assert.True(media.IsCurrent);Assert.Equal("https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35",media.SourceKey);Assert.Contains("_nc_gid=two",media.OriginalUrl);
+    }
+    [Fact]public async Task KeyVersionTwoNormalizesStoredIdentitiesWithoutAdvancingRevisions()
+    {
+        await using var i=new TestInstance();await i.Init();var kept="media/instagram/101/01.png";var duplicate="media/instagram/101/01-abcdef123456.png";
+        foreach(var rel in new[]{kept,duplicate}){Directory.CreateDirectory(Path.GetDirectoryName(i.Paths.Get(rel))!);await File.WriteAllBytesAsync(i.Paths.Get(rel),Png(128,128));}
+        const string urlA="https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=one&oh=1",urlB="https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=two&oh=2",oldKeyA="https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=one",oldKeyB="https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=two";
+        await using(var db=i.Factory.Open())
+        {
+            var p=new Post{Platform="instagram",PlatformPostId="101",Text="Synthetic",ContentRevision=7,ContentHash="stale",MediaManifestJson=System.Text.Json.JsonSerializer.Serialize(new[]{new MediaSource("image",urlB,oldKeyB)})};db.Add(p);await db.SaveChangesAsync();
+            db.Media.Add(new(){PostId=p.Id,Kind="image",Position=1,SourceKey=oldKeyA,OriginalUrl=urlA,Path=kept,ContentHash="bytes",IsCurrent=false});
+            db.Media.Add(new(){PostId=p.Id,Kind="image",Position=1,SourceKey=oldKeyB,OriginalUrl=urlB,Path=duplicate,ContentHash="bytes",IsCurrent=true});
+            await db.SaveChangesAsync();await db.Kv.Where(k=>k.Key==MediaKeys.Marker).ExecuteDeleteAsync();
+        }
+        await i.Init();
+        await using var check=i.Factory.Open();var post=await check.Posts.SingleAsync();var row=await check.Media.SingleAsync();var manifest=System.Text.Json.JsonSerializer.Deserialize<MediaSource[]>(post.MediaManifestJson)!;
+        Assert.Equal("https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35",row.SourceKey);Assert.True(row.IsCurrent);Assert.Equal(duplicate,row.Path);Assert.Equal(row.SourceKey,manifest.Single().SourceKey);
+        Assert.Equal(7,post.ContentRevision);Assert.Equal(Ingest.ContentHash(post,manifest,[row]),post.ContentHash);
+        Assert.True(File.Exists(i.Paths.Get(duplicate)));Assert.False(File.Exists(i.Paths.Get(kept)));Assert.Equal(MediaKeys.Version,await check.Get(MediaKeys.Marker));
+    }
     [Theory][InlineData(32,32,true)][InlineData(1,200,false)][InlineData(128,128,false)]public async Task GlyphGuardAppliesToExistingPostImages(int w,int h,bool dropped)
     {
         await using var i=new TestInstance();var file=i.Paths.Get("media","image.png");await File.WriteAllBytesAsync(file,Png(w,h));using var http=new HttpClient();var result=await new MediaFiles(i.Paths,http).Image("media/image.png","https://unused.test/image.png",true,false,default);Assert.Equal(dropped,result.Path is null);Assert.Equal(!dropped,File.Exists(file));

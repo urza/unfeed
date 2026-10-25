@@ -8,6 +8,29 @@ namespace Feed.Tests;
 public sealed class ParserTests
 {
     [Theory]
+    [InlineData(null, "101", "nested101")]
+    [InlineData("direct101", "101", "direct101")]
+    [InlineData(null, "other", null)]
+    [InlineData(null, null, null)]
+    public void FacebookReactionFallbackRequiresMatchingPostAndIgnoresCommentsAndShares(string? direct, string? ownerId, string? expected)
+    {
+        var raw = JsonSerializer.Serialize(new {
+            __typename = "Story", post_id = "101", creation_time = 1700000000,
+            message = new { text = "Synthetic photo caption" },
+            feedback = direct is null ? null : new { id = direct },
+            attached_story = new { feedback = new { id = "shared999" } },
+            comet_sections = new { feedback = new { story = new { story_ufi_container = new { story = new {
+                post_id = ownerId,
+                feedback_context = new {
+                    interesting_top_level_comments = new[] { new { feedback = new { id = "comment999" } } },
+                    feedback_target_with_context = new { comet_ufi_summary_and_actions_renderer = new { feedback = new { id = "nested101" } } }
+                }
+            } } } } }
+        });
+        Assert.Equal(expected, Assert.Single(PayloadParser.Parse("facebook", raw).Posts).Post.LikeRef);
+    }
+
+    [Theory]
     [InlineData("Story", "GenericAttachmentMedia")]
     [InlineData("GoodwillThrowbackCard", "GenericAttachmentMedia")]
     [InlineData("Photo", "Photo")]

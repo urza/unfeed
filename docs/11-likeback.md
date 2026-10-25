@@ -38,7 +38,7 @@ The sender writes a like-kind run with its process identity and persists request
 
 ## 11.4 The accessible-name contract
 
-The sender must identify the requested post's own reaction control, recognize its already-done state and confirm the intended reaction. The table is the reference selector strategy for the observed markup: role `button` and accessible name, case-insensitive. A more robust scoped selector may replace it when fixtures and live verification prove the same target and state transitions. Ambiguity fails visibly; it never authorizes clicking a comment, a counter or a different post.
+The sender must identify the requested post's own reaction control, recognize its already-done state and confirm the intended reaction. The table is the reference selector strategy for the observed markup: role `button` and accessible name, case-insensitive. A more robust scoped selector may replace it when fixtures and live verification prove the same target and state transitions. Ambiguity fails visibly; it never authorizes clicking a comment, a counter or a different post. The approved control is pinned: candidates are taken as one snapshot of element handles, the unique survivor is stamped with a one-time marker attribute, and the hover and click address only that marker. A node the platform replaces before the click makes the attempt fail within seconds; it is never resolved again to whatever now holds the same index or place.
 
 | | Facebook | Instagram |
 |---|---|---|

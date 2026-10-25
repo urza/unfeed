@@ -43,6 +43,33 @@ public sealed class InstagramHeartTests
     }
 
     [Fact, Trait("Category", "Browser")]
+    public async Task ApprovedControlStaysBoundWhenCommentsLoadBeforeTheClick()
+    {
+        using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true }); var page = await Page(browser);
+        await page.SetContentAsync("""
+            <main id="main" style="height:3000px">
+              <button id="post" aria-label="Like" style="position:absolute;top:100px" onclick="this.setAttribute('aria-label','Unlike')"><svg width="24" height="24"></svg></button>
+            </main>
+            """);
+        var selected = await Site.Heart(page, "instagram", false, Target);
+        Assert.Equal("post", await selected!.GetAttributeAsync("id"));
+        // Late hydration inserts a stranger's heart before the approved control. An index-based locator would now click it.
+        await page.EvaluateAsync("""
+            () => { const b = document.createElement('button'); b.id = 'late'; b.setAttribute('aria-label', 'Like'); b.style.cssText = 'position:absolute;top:40px';
+                    b.innerHTML = '<svg width="24" height="24"></svg>'; b.onclick = () => b.setAttribute('aria-label', 'Unlike'); document.getElementById('main').prepend(b); }
+            """);
+        await selected.ClickAsync(new() { Timeout = 2000 });
+        Assert.Equal("Unlike", await page.Locator("#post").GetAttributeAsync("aria-label"));
+        Assert.Equal("Like", await page.Locator("#late").GetAttributeAsync("aria-label"));
+        // A replaced node is never substituted by its successor: the pinned control is gone and the click fails.
+        await page.EvaluateAsync("() => document.getElementById('late').remove()");
+        var again = await Site.Heart(page, "instagram", true, Target);
+        await page.EvaluateAsync("() => { const old = document.getElementById('post'); const fresh = old.cloneNode(true); fresh.removeAttribute('data-feed-target'); old.replaceWith(fresh); }");
+        await Assert.ThrowsAsync<System.TimeoutException>(() => again!.ClickAsync(new() { Timeout = 500 }));
+        Assert.Equal("Unlike", await page.Locator("#post").GetAttributeAsync("aria-label"));
+    }
+
+    [Fact, Trait("Category", "Browser")]
     public async Task ObscuredAndClippedControlsCannotSupplyAReactionOrDoneState()
     {
         using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true }); var page = await Page(browser);

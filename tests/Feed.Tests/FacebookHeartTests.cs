@@ -36,6 +36,31 @@ public sealed class FacebookHeartTests
     }
 
     [Fact, Trait("Category", "Browser")]
+    public async Task ApprovedControlStaysBoundWhenTheDialogGrowsBeforeTheHover()
+    {
+        using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true }); var page = await browser.NewPageAsync();
+        await page.RouteAsync("https://www.facebook.com/**", r => r.FulfillAsync(new() { ContentType = "text/html", Body = "<main></main>" }));
+        await page.GotoAsync(Target);
+        await page.SetContentAsync("""
+            <div role="dialog" id="dialog">
+              <a href="/synthetic/posts/101">Synthetic timestamp</a>
+              <button aria-label="Like" id="post" onclick="this.setAttribute('aria-label','Remove Love')">Post reaction</button>
+            </div>
+            """);
+        var button = await Site.Heart(page, "facebook", false, Target);
+        Assert.Equal("post", await button!.GetAttributeAsync("id"));
+        // More comments render before the post control while the sender prepares the hover. The approved node must stay the target.
+        await page.EvaluateAsync("""
+            () => { const c = document.createElement('div'); c.setAttribute('role', 'article'); c.setAttribute('aria-label', 'Comment by Late Person');
+                    c.innerHTML = '<button aria-label="Like" id="late" onclick="this.setAttribute(\'aria-label\',\'Remove Love\')"><svg width="16"></svg></button>';
+                    document.getElementById('dialog').prepend(c); }
+            """);
+        await button.HoverAsync(new() { Timeout = 2000 }); await button.ClickAsync(new() { Timeout = 2000 });
+        Assert.Equal("Remove Love", await page.Locator("#post").GetAttributeAsync("aria-label"));
+        Assert.Equal("Like", await page.Locator("#late").GetAttributeAsync("aria-label"));
+    }
+
+    [Fact, Trait("Category", "Browser")]
     public async Task MissingOrForeignDialogEvidenceNeverFallsBackToAUniqueBackgroundControl()
     {
         using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true }); var page = await browser.NewPageAsync();

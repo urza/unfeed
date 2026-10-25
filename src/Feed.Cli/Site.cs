@@ -41,7 +41,16 @@ public static class Site
     {
         var urls = platform == "facebook" ? new[] { "/checkpoint", "/login", "login/identify", "two_factor" } : ["/accounts/two_factor_authentication", "/challenge", "/accounts/disabled", "/accounts/login", "/email-confirmation", "/two_factor"];
         if (urls.Any(s => page.Url.Contains(s, StringComparison.OrdinalIgnoreCase))) return true;
-        var text = (await page.ContentAsync()).ToLowerInvariant(); return (platform == "facebook" ? new[] { "unusual activity", "confirm your login", "confirm this was you", "two-factor" } : ["check your phone", "we sent you a code", "help us confirm", "account has been temporarily disabled", "this was me"]).Any(text.Contains);
+        string content;
+        try { content = await page.ContentAsync(); }
+        catch (PlaywrightException)
+        {
+            // Playwright refuses to read a document that is in the middle of a navigation (the post-login redirect,
+            // for example). Wait for the new document and read once more; a second failure stays visible.
+            try { await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded, new() { Timeout = 5000 }); } catch (TimeoutException) { }
+            content = await page.ContentAsync();
+        }
+        var text = content.ToLowerInvariant(); return (platform == "facebook" ? new[] { "unusual activity", "confirm your login", "confirm this was you", "two-factor" } : ["check your phone", "we sent you a code", "help us confirm", "account has been temporarily disabled", "this was me"]).Any(text.Contains);
     }
     public static async Task DismissNotificationPrompt(IPage page)
     {
@@ -104,11 +113,14 @@ public static class Site
         var expected = platform == "facebook" ? FacebookPostKey(permalink) : InstagramPostKey(permalink);
         if (expected is null || (platform == "facebook" ? FacebookPostKey(page.Url) : InstagramPostKey(page.Url)) != expected) return null;
         var names = platform == "facebook" ? "^(like|like post|remove like|remove love|remove care|remove haha|remove wow|remove sad|remove angry)$" : "^(like|like post|unlike|remove like|unlike post)$";
-        var matches = page.GetByRole(AriaRole.Button, new() { NameRegex = new Regex(names, RegexOptions.IgnoreCase) });
-        var candidates = new List<ILocator>();
-        for (int i = 0; i < await matches.CountAsync(); i++)
+        // Take the candidate nodes as one snapshot of element handles. A lazy index locator (Nth) is
+        // resolved again at hover/click time, so a comment heart inserted by late hydration could take
+        // the approved index after every check below had passed. Handles stay bound to their nodes.
+        var handles = await page.GetByRole(AriaRole.Button, new() { NameRegex = new Regex(names, RegexOptions.IgnoreCase) }).ElementHandlesAsync();
+        var candidates = new List<IElementHandle>();
+        foreach (var button in handles)
         {
-            var button = matches.Nth(i); if (!await button.IsVisibleAsync()) continue;
+            if (!await button.IsVisibleAsync()) continue;
             if (platform == "facebook")
             {
                 // A permalink can leave the home feed rendered behind nested post dialogs.
@@ -128,7 +140,7 @@ public static class Site
             }
             else
             {
-                if (await button.Locator("svg[width='24']").CountAsync() == 0) continue;
+                if (await button.QuerySelectorAsync("svg[width='24']") is null) continue;
                 // Instagram pre-renders more reels below the current viewport. Playwright's
                 // IsVisible includes those controls, and Click would scroll to one. Only
                 // accept the fully visible, unobscured control on the requested permalink.
@@ -144,12 +156,18 @@ public static class Site
             candidates.Add(button);
         }
         if (candidates.Count > 1) throw new IOException("ambiguous post reaction controls; no click authorized");
-        var selected = candidates.SingleOrDefault();
-        if (selected is not null && (done || platform == "instagram"))
+        var selected = candidates.SingleOrDefault(); if (selected is null) return null;
+        // Pin the approved node: stamp it with a one-time marker and address it only by that marker.
+        // If the platform replaces the node before the click, the locator finds nothing and the
+        // action times out instead of landing on whatever now occupies the same place or index.
+        var marker = Guid.NewGuid().ToString("N");
+        await selected.EvaluateAsync("(e, m) => e.setAttribute('data-feed-target', m)", marker);
+        var pinned = page.Locator($"[data-feed-target='{marker}']");
+        if (done || platform == "instagram")
         {
             var desired = platform == "facebook" ? "^remove love$" : done ? "^(unlike|remove like|unlike post)$" : "^(like|like post)$";
-            if (await selected.And(page.GetByRole(AriaRole.Button, new() { NameRegex = new Regex(desired, RegexOptions.IgnoreCase) })).CountAsync() == 0) return null;
+            if (await pinned.And(page.GetByRole(AriaRole.Button, new() { NameRegex = new Regex(desired, RegexOptions.IgnoreCase) })).CountAsync() == 0) return null;
         }
-        return selected;
+        return pinned;
     }
 }

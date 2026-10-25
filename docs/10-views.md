@@ -33,7 +33,7 @@ A friend who posts once in two years should be seen even when that post is on th
 
 ## 10.4 Resolution
 
-The resolver produces consistent membership, uncapped counts and explanations. A union admits each post once and identifies the first matching member in taxonomy order, with its label and any rare fact. Those are required outcomes. The current implementation uses one memoized in-memory membership function for counts, selected rows and explanations inside a consistent read transaction. SQL joins/subqueries, shared projections or other query plans may produce the same results without maintaining two separate predicate implementations. No pagination feature is implied.
+The resolver produces consistent membership, uncapped counts and explanations. A union admits each post once and identifies the first matching member in taxonomy order, with its label and any rare fact. Those are required outcomes. The current implementation filters and counts in SQLite inside a consistent read transaction, then loads complete post records only for the newest configured render budget. Category matching uses JSON array membership, author clauses use resolved identities, and unions combine post IDs without duplicates. Rare clauses read only IDs, author IDs and dates from full history (including hidden posts); sorted per-author dates determine their exact qualifying IDs. Explanations for selected cards retain the first matching union member. Tests compare scope, count and membership outcomes across these paths. No pagination feature is implied.
 
 The page query then applies, in order: the feed mode (chapter 5: live, hidden or unsorted), the platform scope (the chosen platform, else the enabled platforms), the view predicate in live mode, the order, the render cap.
 

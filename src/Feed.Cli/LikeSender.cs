@@ -35,9 +35,10 @@ public sealed class LikeSender(InstancePaths paths, DbFactory factory, Capture c
                     if (!done)
                     {
                         if (button is null) throw new IOException("like button not found");
-                        if (platform == "facebook") { await button.HoverAsync(); button = page.GetByRole(AriaRole.Button, new() { Name = "Love", Exact = true }); await button.WaitForAsync(new() { Timeout = 4000 }); if (await button.CountAsync() != 1) throw new IOException("ambiguous Love control"); }
+                        // Short timeouts: the control is pinned to the approved node, so a missing node means the page changed under us and the attempt must fail, not wait.
+                        if (platform == "facebook") { await button.HoverAsync(new() { Timeout = 5000 }); button = page.GetByRole(AriaRole.Button, new() { Name = "Love", Exact = true }); await button.WaitForAsync(new() { Timeout = 4000 }); if (await button.CountAsync() != 1) throw new IOException("ambiguous Love control"); }
                         if (await Site.Checkpoint(page, platform)) { await capture.Relogin(platform, true, ct); return 75; }
-                        like.AttemptedAt = Clock.Now; await db.SaveChangesAsync(ct); await button.ClickAsync();
+                        like.AttemptedAt = Clock.Now; await db.SaveChangesAsync(ct); await button.ClickAsync(new() { Timeout = 5000 });
                         for (int n = 0; n < 6; n++) { if (await Site.Checkpoint(page, platform)) { await capture.Relogin(platform, true, ct); like.State = "failed"; like.Error = "outcome unknown; inspect the original before retrying"; await db.SaveChangesAsync(ct); return 75; } await Site.DismissNotificationPrompt(page); if (await Site.Heart(page, platform, true, post.Permalink) is not null) { done = true; break; } await Task.Delay(1000, ct); }
                         if (!done) throw new IOException("intended heart not confirmed for control '" + (await button.GetAttributeAsync("aria-label") ?? await button.InnerTextAsync()) + "'");
                     }
