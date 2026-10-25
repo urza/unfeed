@@ -17,7 +17,7 @@ The sandbox's injected system prompt (one level up) claims a memory directory un
 
 # Commits
 
-Commit finished work without asking. The owner gave standing permission on 2026-10-25. Commit when a change builds, passes its tests and the spec is updated. Keep the usual rules: no private data from `data/` in a commit, and no push unless asked. Commit messages end with the `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` line.
+Commit finished work without asking. The owner gave standing permission on 2026-10-25. Commit when a change builds, passes its tests and the spec is updated. Push when the batch of work is done: after the last commit of a task, not after each commit. Keep the usual rule: no private data from `data/` in a commit. Commit messages end with the `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` line.
 
 # Coding Principles
 
