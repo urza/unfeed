@@ -12,7 +12,7 @@ namespace Feed.Web;
 public sealed record RecoveryAttemptSummary(long Id, long RawId, string State, string? Validation, string? Error, DateTime At);
 public sealed record ProcessingCompletion(long PostId, string Platform, string Task, DateTime At);
 public sealed record PersonRow(Author Author, bool Close, bool Muted, bool Always, int Posts, int Hidden, DateTime? Latest, TimelineVisit? Visit, string? Retry);
-public sealed record PlatformOverview(string Platform, int Friends, int Posts, int Hidden, PlatformState? State, Run? Collection, Run? Import, Run[] Running, RunRequest[] Requests, string Next);
+public sealed record PlatformOverview(string Platform, int Friends, int Posts, int Hidden, PlatformState? State, Run? Collection, Run? Import, Run[] Running, RunRequest[] Requests, string Next, Dictionary<string, string>? ModeNext = null);
 public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnapshot Instance, PlatformOverview[] Platforms, PersonRow[] People, int PeopleCount, int Page, string Query, string Platform, string Filter, string Section, string Disk, string? DiskAt, int Pending, int Failures)
 {
     public RecoveryAttemptSummary[] RecoveryAttempts { get; init; } = [];
@@ -59,7 +59,7 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         var requests = await db.RunRequests.AsNoTracking().Where(r => r.Status == "pending" || r.Status == "claimed").ToArrayAsync(ct);
         var postCounts = await db.Posts.GroupBy(p => p.Platform).Select(g => new { Platform = g.Key, Total = g.Count(), Hidden = g.Count(p => p.Hidden) }).ToArrayAsync(ct);
         var kv = await db.Kv.AsNoTracking().Where(k => k.Key.StartsWith("slot:")).ToDictionaryAsync(k => k.Key, k => k.Value, ct);
-        var overviews = Platforms.All.Select(p => new PlatformOverview(p, authors.Count(a => a.Platform == p && a.IsFriend), postCounts.FirstOrDefault(c => c.Platform == p)?.Total ?? 0, postCounts.FirstOrDefault(c => c.Platform == p)?.Hidden ?? 0, states.FirstOrDefault(x => x.Platform == p), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "collect"), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "friends"), runs.Where(r => r.Platform == p && r.Status == "running").ToArray(), requests.Where(r => r.Platform == p).ToArray(), NextRun(s.Config, p, Clock.Now, kv))).ToArray();
+        var overviews = Platforms.All.Select(p => new PlatformOverview(p, authors.Count(a => a.Platform == p && a.IsFriend), postCounts.FirstOrDefault(c => c.Platform == p)?.Total ?? 0, postCounts.FirstOrDefault(c => c.Platform == p)?.Hidden ?? 0, states.FirstOrDefault(x => x.Platform == p), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "collect"), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "friends"), runs.Where(r => r.Platform == p && r.Status == "running").ToArray(), requests.Where(r => r.Platform == p).ToArray(), NextRun(s.Config, p, Clock.Now, kv), Platforms.Modes.ToDictionary(m => m, m => NextRun(s.Config, p, Clock.Now, kv, m)))).ToArray();
         return new(docs, s, overviews, visiblePeople.Skip((page - 1) * 40).Take(40).ToArray(), visiblePeople.Length, page, query, platform, filter, section, await db.Get("disk:summary", ct) ?? "Not measured yet", await db.Get("disk:at", ct), await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct), await db.Posts.CountAsync(p => p.LlmError != null || p.SummaryError != null, ct)) {
             RecoveryAttempts = section == "recovery" ? await db.CaptureRecoveryAttempts.AsNoTracking().OrderByDescending(a => a.Id).Take(10).Select(a => new RecoveryAttemptSummary(a.Id, a.RawSnapshotId, a.State, a.Validation, a.Error, a.StartedAt)).ToArrayAsync(ct) : [],
             RecoverySignature = signature, RecoveryPage = Math.Max(1, page),
@@ -70,23 +70,36 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
             CollectionVisits = section == "recovery" ? await db.TimelineVisits.AsNoTracking().Where(v => db.Runs.Where(r => r.Kind == "collect").OrderByDescending(r => r.Id).Take(10).Select(r => r.Id).Contains(v.RunId) || v.RunId == collectionId).ToArrayAsync(ct) : []
         };
     }
-    public static string NextRun(FeedConfig c, string platform, DateTime now, IReadOnlyDictionary<string, string> fired)
+    // Without a mode: the platform's next slot, prefixed with its mode. With a mode: that mode's next slot only.
+    public static string NextRun(FeedConfig c, string platform, DateTime now, IReadOnlyDictionary<string, string> fired, string? mode = null)
     {
         if (!c.Scheduler.Enabled) return "Scheduling paused";
         if (!c.Enabled(platform)) return "Platform paused";
         var local = TimeZoneInfo.ConvertTimeFromUtc(now, c.Zone); var settings = c.Platform(platform);
-        if (settings.Schedule.Values.All(times => times.IsEmpty)) return "No scheduled collections";
+        var schedule = settings.Schedule.Where(x => mode is null || x.Key == mode).ToArray();
+        if (schedule.All(x => x.Value.IsEmpty)) return mode is null ? "No scheduled collections" : "Not scheduled";
         for (int day = 0; day < 3660; day++)
         {
             var date = local.Date.AddDays(day); var key = date.ToString("yyyy-MM-dd");
-            var candidates = settings.Schedule.Where(x => settings.ScheduledOn(x.Key, DateOnly.FromDateTime(date))).SelectMany(x => x.Value.Select(slot => new { Mode = x.Key, Slot = slot, Fire = date + TimeSpan.Parse(slot) + TimeSpan.FromMinutes(Scheduler.Jitter(platform, x.Key, slot, key, c.Scheduler.JitterMinutes)) })).Where(x => x.Fire >= local.AddMinutes(-30) && !(day == 0 && fired.GetValueOrDefault($"slot:{platform}:{x.Mode}:{x.Slot}") == key)).OrderBy(x => x.Fire).ToArray();
+            var candidates = schedule.Where(x => settings.ScheduledOn(x.Key, DateOnly.FromDateTime(date))).SelectMany(x => x.Value.Select(slot => new { Mode = x.Key, Slot = slot, Fire = date + TimeSpan.Parse(slot) + TimeSpan.FromMinutes(Scheduler.Jitter(platform, x.Key, slot, key, c.Scheduler.JitterMinutes)) })).Where(x => x.Fire >= local.AddMinutes(-30) && !(day == 0 && fired.GetValueOrDefault($"slot:{platform}:{x.Mode}:{x.Slot}") == key)).OrderBy(x => x.Fire).ToArray();
             if (candidates.FirstOrDefault() is { } next)
             {
                 var utc = new DateTimeOffset(DateTime.SpecifyKind(next.Fire, DateTimeKind.Unspecified), c.Zone.GetUtcOffset(next.Fire)).UtcDateTime;
-                return $"{ModeName(next.Mode)} · {next.Fire:ddd dd MMM yyyy HH:mm} ({c.Zone.Id}) · {RelativeTime(utc, now)}";
+                return (mode is null ? ModeName(next.Mode) + " · " : "") + $"{next.Fire:ddd dd MMM yyyy HH:mm} ({c.Zone.Id}) · {RelativeTime(utc, now)}";
             }
         }
         return "No run planned in the next ten years";
+    }
+    static readonly string[] WeekdayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    // One plain sentence per mode, so the owner reads the rule instead of reassembling it from three controls.
+    public static string Describe(FeedConfig c, string platform, string mode)
+    {
+        var s = c.Platform(platform); var times = s.Schedule.GetValueOrDefault(mode);
+        if (times.IsDefaultOrEmpty) return "Not scheduled.";
+        var interval = s.ScheduleIntervals.GetValueOrDefault(mode); var days = s.ScheduleDays.GetValueOrDefault(mode);
+        var cadence = interval is { Days: > 1 } ? $"Every {interval.Days} days from {interval.StartDate:dd MMM yyyy}" : "Every day";
+        var weekdays = days.IsDefaultOrEmpty || days.Length == 7 ? "" : ", only " + string.Join(", ", WeekdayOrder.Where(days.Contains).Select(d => char.ToUpperInvariant(d[0]) + d[1..]));
+        return $"{cadence}{weekdays}, at {string.Join(", ", times.Order())}.";
     }
     public async Task<string> Queue(string platform, string kind, string? mode, CancellationToken ct)
     {
@@ -141,7 +154,12 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
                 var times = form["times"].ToString().Split(new[] { ',', ' ', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct().Order().ToArray();
                 ManagementFiles.SetMode(ManagementFiles.Object(p, "schedule"), mode, Array(times));
                 ManagementFiles.SetMode(ManagementFiles.Object(p, "schedule_days"), mode, Array(form["days"].Select(x => x!)));
-                var days = Number(form, "interval", 1); var start = form["start"].ToString();
+                var days = Number(form, "interval", 1); var start = form["start"].ToString().Trim();
+                // The date input stays empty when the owner picks only a cadence. Anchor it on today in the instance
+                // timezone, so "every 3 days" starts now. A blank start_date would otherwise be written and fail as
+                // an unreadable DateOnly on the very next read of the file.
+                if (start.Length == 0 && days > 1) start = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(Clock.Now, s.Config.Zone)).ToString("yyyy-MM-dd");
+                if (start.Length > 0 && !DateOnly.TryParseExact(start, "yyyy-MM-dd", out _)) throw new FormatException("Starting date must be a calendar date in the form yyyy-MM-dd.");
                 ManagementFiles.SetMode(ManagementFiles.Object(p, "schedule_intervals"), mode, days == 1 && start.Length == 0 ? null : new JsonObject { ["days"] = days, ["start_date"] = start });
             }
             else if (action == "timing") {

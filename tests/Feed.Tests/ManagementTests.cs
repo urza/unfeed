@@ -37,6 +37,21 @@ public sealed class ManagementTests
         Assert.Throws<SettingsConflictException>(() => files.Save(Prompts.Sha("stale"), d => d));
     }
     [Fact]
+    public async Task IntervalWithoutAStartDateAnchorsOnTodayAndAMalformedDateIsRefusedBeforeWriting()
+    {
+        await using var i = new TestInstance(); await i.Init();
+        var path = i.Paths.Get("config.json");
+        await File.WriteAllTextAsync(path, """{"timezone":"UTC","platforms":{"instagram":{"schedule":{"close_friends":["04:00"]}}}}""");
+        var files = new ManagementFiles(i.Paths); var management = new Management(i.Paths, i.Factory, files);
+        // The browser sends an empty date input when the owner only changes the cadence.
+        await management.SaveSettings("schedule", Form(("version",files.Read().Version),("platform","instagram"),("mode","close_friends"),("times","04:00"),("interval","3"),("start","")), default);
+        var interval = files.Read().Snapshot().Config.Platform("instagram").ScheduleIntervals["close_friends"];
+        Assert.Equal(3, interval.Days); Assert.Equal(DateOnly.FromDateTime(DateTime.UtcNow), interval.StartDate);
+        var before = File.ReadAllText(path);
+        await Assert.ThrowsAsync<FormatException>(() => management.SaveSettings("schedule", Form(("version",files.Read().Version),("platform","instagram"),("mode","close_friends"),("times","04:00"),("interval","3"),("start","3rd of next month")), default));
+        Assert.Equal(before, File.ReadAllText(path));
+    }
+    [Fact]
     public async Task UnmutingOneNameMatchKeepsOtherPeopleMutedAndRestoresModelVisibilityGate()
     {
         await using var i = new TestInstance(); await i.Init();
@@ -136,5 +151,16 @@ public sealed class ManagementTests
         var c=InstanceValidation.Parse<FeedConfig>("""{"timezone":"UTC","platforms":{"facebook":{"schedule":{"home":["08:00"]},"schedule_intervals":{"home":{"days":2,"start_date":"2028-02-28"}}}},"scheduler":{"jitter_minutes":0}}""");
         Assert.Contains("01 Mar 2028 08:00",Management.NextRun(c,"facebook",new(2028,2,28,8,1,0,DateTimeKind.Utc),new Dictionary<string,string>{{"slot:facebook:home:08:00","2028-02-28"}}));
         Assert.Equal("Scheduling paused",Management.NextRun(c with {Scheduler=c.Scheduler with {Enabled=false}},"facebook",Clock.Now,new Dictionary<string,string>()));
+        var fired=new Dictionary<string,string>{{"slot:facebook:home:08:00","2028-02-28"}}; var now=new DateTime(2028,2,28,8,1,0,DateTimeKind.Utc);
+        Assert.StartsWith("Wed 01 Mar 2028 08:00",Management.NextRun(c,"facebook",now,fired,"home"));
+        Assert.Equal("Not scheduled",Management.NextRun(c,"facebook",now,fired,"close_friends"));
+    }
+    [Fact]
+    public void DescribeReadsAModeRuleAsOneSentence()
+    {
+        var c=InstanceValidation.Parse<FeedConfig>("""{"timezone":"UTC","platforms":{"facebook":{"schedule":{"home":["18:00","08:00"],"close_friends":["04:00"]},"schedule_days":{"close_friends":["sat","mon"]},"schedule_intervals":{"home":{"days":3,"start_date":"2028-02-28"}}}}}""");
+        Assert.Equal("Every 3 days from 28 Feb 2028, at 08:00, 18:00.",Management.Describe(c,"facebook","home"));
+        Assert.Equal("Every day, only Mon, Sat, at 04:00.",Management.Describe(c,"facebook","close_friends"));
+        Assert.Equal("Not scheduled.",Management.Describe(c,"facebook","all_followed"));
     }
 }
