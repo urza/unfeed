@@ -1,8 +1,8 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0.401 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.403 AS build
 WORKDIR /build
 COPY . .
 RUN ./build.sh && chmod -R a+rX out/.playwright && chmod a+rx out/.playwright/node/*/node
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.12-noble
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.14-noble
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify ffmpeg yt-dlp rsync sqlite3 fonts-noto fonts-noto-color-emoji && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
