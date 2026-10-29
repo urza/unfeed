@@ -148,7 +148,7 @@ An author view is a selection, not an implicit override. To guarantee inclusion 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `render_cap` | int | 100 | finite per-instance budget of posts on one page, at least 1. May be raised, for example to 100000, to show an entire matching view when it fits. No separate hard-coded cap, paging or infinite scroll. |
-| `coverage_stale_hours` | int | 48 | after this many hours without a successful timeline capture/explicit empty response, coverage is shown as not checked recently; at least 1 |
+| `coverage_stale_hours` | int | 48 | after this many hours without a successful timeline capture/explicit empty response, coverage is shown as not checked recently; at least 1. When the platform has an `all_followed` interval in `schedule_intervals`, the threshold is the larger of this value and 1.5 times that interval, so a sweep that runs every 6 days does not flag every author for 4 of those days |
 | `default_view` | string | `"all"` | the view the bare page opens. An unknown key falls back to `all`. |
 | `log_level` | string | `"info"` | `trace`, `debug`, `info`, `warn`, `error` |
 | `stack.min_posts` | int | 3 | an author's burst of this many posts folds into one card. 0 turns folding off. |

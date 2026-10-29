@@ -1,0 +1,3 @@
+@* One dot, two meanings: yellow says the scheduler is behind, red says the owner has to act. *@
+@if(Level != DiagnosticLevel.None){<span class="debug-dot @(Level == DiagnosticLevel.Alert ? "alert" : "")" role="img" aria-label="@(Level == DiagnosticLevel.Alert ? "A failure or login needs attention" : "Coverage or processing is behind schedule")"></span>}
+@code { [Parameter] public DiagnosticLevel Level {get;set;} }

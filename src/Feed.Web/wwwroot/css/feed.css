@@ -30,7 +30,8 @@
 .paused{opacity:.55}.text-toggle{position:absolute;opacity:0;width:1px;height:1px}.text-toggle:not(:checked)~.text-body{display:none}.expand-chip{display:inline-block;color:var(--soft);cursor:pointer;margin:8px 0 0}.expand-chip .show-less{display:none}.text-toggle:checked~.expand-chip .show-full{display:none}.text-toggle:checked~.expand-chip .show-less{display:inline}.text-toggle:focus-visible~.expand-chip{outline:2px solid var(--soft);outline-offset:3px}.status-checkpoint{color:#d5a561}.status-capped,.status-imported{color:#94d4cd}
 .card-footer{padding-right:42px}.why{position:relative;margin-top:0}.why>summary{position:absolute;right:0;top:-27px}.why ul{padding-top:10px;margin-bottom:0}
 
-.debug-dot{display:inline-block;width:7px;height:7px;margin-left:6px;border-radius:50%;background:#f6c453;vertical-align:middle}
+/* Yellow: the scheduler is behind (coverage lag, unsorted posts). Red: a failure or login needs the owner. */
+.debug-dot{display:inline-block;width:7px;height:7px;margin-left:6px;border-radius:50%;background:#f6c453;vertical-align:middle}.debug-dot.alert{background:#f0665a}
 
 /* Shared top-bar navigation across feed, management, diagnostics and person pages. */
 .top-nav-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:38px;padding:8px 12px;border:1px solid #8cbcff66;border-radius:10px;background:#20334e;color:var(--text);font-size:.85rem;font-weight:600;line-height:1.45;white-space:nowrap;text-decoration:none}

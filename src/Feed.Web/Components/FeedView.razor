@@ -9,7 +9,7 @@
    @if(Model.Instance.Config.Llm.Enabled){<a class="top-nav-button @(Model.Scope == "unsorted" ? "active" : "")" href="@Link(Model.View,Model.Platform,"unsorted")" title="Posts waiting for the model's verdict; not shown in any category view">Unsorted (@Model.UnsortedCount)</a>}
    <a href="@Link(Model.View,Model.Platform,"hidden")" class="top-nav-button @(Model.Scope == "hidden" ? "active" : "")" title="Debug: inspect hidden posts and why">Hidden (@Model.HiddenCount)</a>
    <a class="top-nav-button manage-button" href="/manage" title="@DebugTitle">Manage
-    @if(HasDiagnostics){<span class="debug-dot" role="img" aria-label="Diagnostics to review"></span>}
+    <DiagnosticDot Level="@Level"/>
    </a>
   </nav>
  </div>
@@ -37,7 +37,7 @@
    </div>
   </details>
   <form action="/read" method="post" class="read"><button class="ghost" title="Mark all read" aria-label="Mark all read"><span class="desktop">Mark all read</span><svg class="mobile read-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></form>
-  <a class="top-nav-button manage-button mobile" href="/manage" title="@DebugTitle" aria-label="Manage"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg>@if(HasDiagnostics){<span class="debug-dot" role="img" aria-label="Diagnostics to review"></span>}</a>
+  <a class="top-nav-button manage-button mobile" href="/manage" title="@DebugTitle" aria-label="Manage"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg><DiagnosticDot Level="@Level"/></a>
   <details class="dropdown collect">
    <summary title="Collect from every enabled platform"><span class="desktop">@CollectLabel</span><span class="mobile">@CollectLabel.Replace("Collect requested","Requested")</span><ToolbarCaret/></summary>
    <div class="menu">
@@ -65,8 +65,9 @@ else {
  Run? LastCollect => Model.Runs.FirstOrDefault(r => r.Kind == "collect" && r.FinishedAt != null && (Model.Platform is null ? Model.Instance.Config.Enabled(r.Platform ?? "") : r.Platform == Model.Platform));
  string CollectLabel => Model.Runs.Any(r => r.Kind == "collect" && r.Status == "running") ? "Collecting…" : Model.Requests.Any(r => r.Kind == "collect") ? "Collect requested ✓" : "Collect";
  bool Open(string p) => !Model.States.Any(s => s.Platform == p && s.NeedsRelogin) && !Model.Runs.Any(r => r.Platform == p && r.Kind == "collect" && r.Status == "running") && !Model.Requests.Any(r => r.Platform == p && r.Kind == "collect");
- bool HasDiagnostics => Model.HasDiagnostics || Model.Issues is { Length: > 0 } || Model.Coverage.Any(c => c.Stale || c.Incomplete) || Model.States.Any(s => s.NeedsRelogin) || Model.Instance.Config.Llm.Enabled && Model.UnsortedCount > 0;
- string DebugTitle => HasDiagnostics ? "Diagnostics to review: processing, warnings or coverage" : "Manage platforms, people, schedules and settings";
+ DiagnosticLevel Level => Model.Diagnostics == DiagnosticLevel.Alert || Model.Issues is { Length: > 0 } || Model.States.Any(s => s.NeedsRelogin) ? DiagnosticLevel.Alert
+  : Model.Diagnostics == DiagnosticLevel.Notice || Model.Coverage.Any(c => c.Stale || c.Incomplete) || Model.Instance.Config.Llm.Enabled && Model.UnsortedCount > 0 ? DiagnosticLevel.Notice : DiagnosticLevel.None;
+ string DebugTitle => Level switch { DiagnosticLevel.Alert => "Diagnostics to review: a failure or login needs you", DiagnosticLevel.Notice => "Diagnostics: coverage or model processing is behind; the scheduler catches up on its own", _ => "Manage platforms, people, schedules and settings" };
  static string PlatformName(string? p) => p switch { null => "All platforms", "facebook" => "Facebook", "instagram" => "Instagram", _ => p };
  static string ModeName(string mode) => mode switch { "home" => "Home", "close_friends" => "Close friends", "all_followed" => "All followed", _ => mode.Replace('_',' ') };
  string PlatformClass(string p) => (p == Model.Platform ? "active " : "") + (!Model.Instance.Config.Enabled(p) ? "paused" : "");

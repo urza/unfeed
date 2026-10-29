@@ -31,12 +31,16 @@ public static class RecoveryQuery
              !p.Hidden && (p.Summary == null || p.SummaryContentRevision == null || p.SummaryContentRevision != p.ContentRevision) &&
                 p.SummaryAttemptedAt != null && (p.SummaryError != null || p.SummaryAttemptedAt <= activeSince)), ct)) return true;
         var superseded = CaptureHealth.Superseded(db);
-        var recent = Clock.Now.AddDays(-7);
+        var recent = Clock.Now.AddDays(-RawIssueDays);
         return await db.RawSnapshots.AnyAsync(r => !r.Deleted && (platform == null || r.Platform == platform) &&
-            (!r.Parsed && r.Error != null || r.Parsed && r.Warning != null && r.CapturedAt > recent) &&
+            (!r.Parsed && r.Error != null || r.Parsed && r.Warning != null) && r.CapturedAt > recent &&
             !superseded.Any(old => old.Id == r.Id), ct);
     }
 
+    // Raw capture issues age out after a week, parse errors included. An unparsed snapshot that no later
+    // capture supersedes (an upstream GraphQL error, for example) would otherwise stay an "attention" row
+    // forever and keep the Manage dot lit with nothing left to do. The raw file itself is kept by retention.
+    public const int RawIssueDays = 7;
     sealed record RawGroup(string Fingerprint, string Code, string Impact, long Id, int Count, int Runs, DateTime First, DateTime Last);
     public static async Task<RecoveryIssue[]> Read(FeedDb db, InstanceSnapshot s, string? platform = null, CancellationToken ct = default, bool grouped = false, string? fingerprint = null, int page = 1, bool summaryOnly = false)
     {
@@ -61,7 +65,7 @@ public static class RecoveryQuery
             issues.Add(new(p.Platform, $"post #{p.Id} · {task}", error ?? "Attempt has no current result; worker may still be running, interrupted, or from an older build", judge ? p.LlmFailures : p.SummaryFailures, at, retry, budget is null ? "Automatic token retries exhausted or disabled; raise llm.token_retry_budgets/max_tokens or explicitly rescore" : State(p.Platform, retry, true) + (judge && p.LlmTokenLimit != null ? $"; next max_tokens={budget}" : "")) { Disposition = budget is null ? RecoveryDisposition.Attention : Disposition(p.Platform, true), PostId = p.Id, RunId = origins.FirstOrDefault(r => r.Path == (p.LatestRawRef ?? p.RawRef))?.RunId, NextTokenBudget = judge && p.LlmTokenLimit != null ? budget : null });
         }
         var superseded = CaptureHealth.Superseded(db);
-        var eligible = db.RawSnapshots.AsNoTracking().Where(r => !superseded.Any(old => old.Id == r.Id) && !r.Deleted && (platform == null || r.Platform == platform) && (!r.Parsed && r.Error != null || r.Parsed && r.Warning != null && r.CapturedAt > Clock.Now.AddDays(-7)));
+        var eligible = db.RawSnapshots.AsNoTracking().Where(r => !superseded.Any(old => old.Id == r.Id) && !r.Deleted && (platform == null || r.Platform == platform) && (!r.Parsed && r.Error != null || r.Parsed && r.Warning != null) && r.CapturedAt > Clock.Now.AddDays(-RawIssueDays));
         var groupedRows = await db.RawDiagnostics.Join(eligible, d => d.RawSnapshotId, r => r.Id, (d, r) => new { d, r })
             .GroupBy(x => new { x.r.Platform, x.d.Fingerprint, x.d.Impact, x.d.Code, x.r.Parsed, x.r.RecoveryState, x.r.BlockedParserVersion, x.r.RecoveryAttempts })
             .Select(g => new RawGroup(g.Key.Fingerprint, g.Key.Code, g.Key.Impact, g.Max(x => x.r.Id), g.Select(x => x.r.Id).Distinct().Count(), g.Select(x => x.r.RunId).Distinct().Count(), g.Min(x => x.r.CapturedAt), g.Max(x => x.r.CapturedAt))).ToArrayAsync(ct);

@@ -7,7 +7,10 @@ namespace Feed.Core.Queries;
 
 public sealed record Card(Post Post, Author? Author, Media[] Media, Like? Like, int Up, int Down, string? Why, string[] Trail);
 public sealed record FeedUnit(Card Lead, Card[] Folded, string? Badge);
-public sealed record FeedPage(InstanceSnapshot Instance, string View, string? Platform, string Scope, FeedUnit[] Items, int VisibleCount, int HiddenCount, int UnsortedCount, int Friends, string[] KnownPlatforms, PlatformState[] States, Run[] Runs, RunRequest[] Requests, string? LastVisit, string EmptyMessage, int AdsDropped, CoverageRow[] Coverage, string? ModelRetry, int TotalHidden, int TotalUnsorted, RecoveryIssue[]? Issues = null, bool HasDiagnostics = false);
+public sealed record FeedPage(InstanceSnapshot Instance, string View, string? Platform, string Scope, FeedUnit[] Items, int VisibleCount, int HiddenCount, int UnsortedCount, int Friends, string[] KnownPlatforms, PlatformState[] States, Run[] Runs, RunRequest[] Requests, string? LastVisit, string EmptyMessage, int AdsDropped, CoverageRow[] Coverage, string? ModelRetry, int TotalHidden, int TotalUnsorted, RecoveryIssue[]? Issues = null, DiagnosticLevel Diagnostics = DiagnosticLevel.None);
+// What the Manage dot says: Notice (yellow) is lag the scheduler clears on its own, such as a timeline not
+// swept recently or posts waiting for the model; Alert (red) is a failure or a login that needs the owner.
+public enum DiagnosticLevel { None, Notice, Alert }
 public sealed class FeedQuery(DbFactory factory)
 {
     public async Task<FeedPage> Read(InstanceSnapshot instance, string view, string? platform, string scope, CancellationToken ct, long? authorId = null, string? category = null)
@@ -152,11 +155,11 @@ public sealed class FeedQuery(DbFactory factory)
     // The Manage dot needs scans of Posts, RawSnapshots and TimelineVisits that can cost more than the
     // rest of the feed on a slow disk. The answer per platform scope is reused for a minute: the dot is
     // an advisory pointer, and the Manage pages compute their own current detail.
-    readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime At, bool Value)> diagnostics = new();
-    async Task<bool> Diagnostics(FeedDb db, InstanceSnapshot instance, string? platform, CancellationToken ct)
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime At, DiagnosticLevel Value)> diagnostics = new();
+    async Task<DiagnosticLevel> Diagnostics(FeedDb db, InstanceSnapshot instance, string? platform, CancellationToken ct)
     {
         var key = platform ?? ""; if (diagnostics.TryGetValue(key, out var cached) && Clock.Now - cached.At < TimeSpan.FromMinutes(1)) return cached.Value;
-        var value = await RecoveryQuery.HasIssues(db, instance, platform, ct) || await CoverageQuery.HasIssues(db, instance, platform, ct);
+        var value = await RecoveryQuery.HasIssues(db, instance, platform, ct) ? DiagnosticLevel.Alert : await CoverageQuery.HasIssues(db, instance, platform, ct) ? DiagnosticLevel.Notice : DiagnosticLevel.None;
         diagnostics[key] = (Clock.Now, value); return value;
     }
     static string? RepeatKey(Card card)

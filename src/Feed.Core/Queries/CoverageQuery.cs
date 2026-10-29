@@ -16,13 +16,23 @@ public static class CoverageQuery
         var visits = await db.TimelineVisits.Select(v => new { v.Id, v.AuthorId, v.Platform, v.Url, v.At, v.CaptureStatus }).OrderByDescending(v => v.At).ThenByDescending(v => v.Id).ToArrayAsync(ct);
         var byAuthor = visits.Where(v => v.AuthorId != null).ToLookup(v => v.AuthorId!.Value);
         var byUrl = visits.Where(v => v.AuthorId == null).ToLookup(v => (v.Platform, v.Url.TrimEnd('/')));
-        var cutoff = Clock.Now.AddHours(-s.Config.Ui.CoverageStaleHours);
         return authors.Any(a =>
         {
             var history = byAuthor[a.Id].Concat(a.Url == null ? [] : byUrl[(a.Platform, a.Url.TrimEnd('/'))]).OrderByDescending(v => v.At).ThenByDescending(v => v.Id).ToArray();
             var success = history.FirstOrDefault(v => v.CaptureStatus is "captured" or "empty");
-            return success == null || success.At < cutoff || history.FirstOrDefault()?.CaptureStatus == "incomplete";
+            return success == null || success.At < StaleCutoff(s, a.Platform) || history.FirstOrDefault()?.CaptureStatus == "incomplete";
         });
+    }
+    // A timeline is only visited by the all_followed sweep, so "not checked recently" must be measured
+    // against that sweep's own cadence: with a 6 or 11 day interval a fixed 48 hour threshold flagged
+    // every author for most of each cycle and the Manage dot never went out. Half an interval of slack
+    // absorbs jitter, skipped days and a sweep that ran while the host was down. ui.coverage_stale_hours
+    // still applies when it is the larger value or when no interval is configured.
+    public static DateTime StaleCutoff(InstanceSnapshot s, string platform)
+    {
+        var hours = s.Config.Ui.CoverageStaleHours;
+        if (s.Config.Platforms.TryGetValue(platform, out var p) && p.ScheduleIntervals.TryGetValue("all_followed", out var interval)) hours = Math.Max(hours, interval.Days * 36);
+        return Clock.Now.AddHours(-hours);
     }
 
     public static async Task<CoverageRow[]> Read(FeedDb db, InstanceSnapshot s, string? platform = null, CancellationToken ct = default)
@@ -32,7 +42,6 @@ public static class CoverageQuery
         var byAuthor = visits.Where(v => v.AuthorId != null).ToLookup(v => v.AuthorId!.Value);
         var byUrl = visits.Where(v => v.AuthorId == null).ToLookup(v => (v.Platform, v.Url.TrimEnd('/')));
         var targets = await db.SweepTargets.AsNoTracking().Where(t => db.Kv.Any(k => k.Key == "sweep:" + t.Platform + ":cycle" && k.Value == t.CycleId)).ToArrayAsync(ct);
-        var cutoff = Clock.Now.AddHours(-s.Config.Ui.CoverageStaleHours);
         return authors.Where(a => platform is null ? s.Config.Enabled(a.Platform) : a.Platform == platform).Select(a =>
         {
             var history = byAuthor[a.Id].Concat(a.Url is null ? [] : byUrl[(a.Platform, a.Url.TrimEnd('/'))]).OrderByDescending(v => v.At).ThenByDescending(v => v.Id).ToArray();
@@ -41,7 +50,7 @@ public static class CoverageQuery
             var failures = history.TakeWhile(v => v.CaptureStatus == "incomplete" && v.At >= Clock.Now.AddDays(-60)).Count();
             return new CoverageRow(a.Platform, a.DisplayName ?? "Unknown author", a.Url, last?.At, success?.At,
                 last is null ? "not checked" : last.CaptureStatus == "empty" ? "explicit empty response" : last.CaptureStatus == "captured" ? "captured · " + last.StopReason : last.Status == "rendered" ? last.PostsFound > 0 ? "partial capture with errors" : "rendered but no matching post payload" : last.Status,
-                failures, last?.PostsFound ?? 0, success?.OldestPostedAt, success?.NewestPostedAt, (last?.Note ?? "") + (last?.VisualDiagnosisJson is { } diagnosis ? " · Visual diagnosis (not coverage proof): " + diagnosis : last?.VisualError is { } visualError ? " · Visual diagnosis unavailable: " + visualError : ""), last?.Screenshot, success is null || success.At < cutoff, last is not null && last.CaptureStatus == "incomplete",
+                failures, last?.PostsFound ?? 0, success?.OldestPostedAt, success?.NewestPostedAt, (last?.Note ?? "") + (last?.VisualDiagnosisJson is { } diagnosis ? " · Visual diagnosis (not coverage proof): " + diagnosis : last?.VisualError is { } visualError ? " · Visual diagnosis unavailable: " + visualError : ""), last?.Screenshot, success is null || success.At < StaleCutoff(s, a.Platform), last is not null && last.CaptureStatus == "incomplete",
                 last?.StopReason == "parser_blocked" ? "Saved response awaits parser/model recovery; no browser retry for an unsupported shape"
                 : target?.State == "retry" ? $"{target.Attempts}/{TimelineCoverage.MaxAttempts} attempts; retry after {target.RetryAt:u}" + (!s.Config.Scheduler.Enabled ? "; scheduler paused" : !s.Config.Enabled(a.Platform) ? "; platform paused" : "")
                 : target?.Attempts >= TimelineCoverage.MaxAttempts && last?.CaptureStatus == "incomplete" ? "Retry limit reached; inspect diagnostics or wait for next scheduled sweep"
