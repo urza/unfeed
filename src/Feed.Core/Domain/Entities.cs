@@ -72,6 +72,8 @@ public sealed class RunRequest
 {
     public long? PersonAuthorId { get; set; } public string? Person { get; set; }
     public bool RetryIncomplete { get; set; }
+    // Owner override from the Manage page: this one request ignores the manual collect cooldown. Nothing else is skipped.
+    public bool SkipCooldown { get; set; }
     public long Id { get; set; } public string Kind { get; set; } = "collect"; public string? Platform { get; set; } public string? Mode { get; set; } public string Status { get; set; } = "pending";
     public DateTime RequestedAt { get; set; } = Clock.Now; public DateTime? ClaimedAt { get; set; } public DateTime? FinishedAt { get; set; } public string? ClaimToken { get; set; }
     public int? ChildPid { get; set; } public DateTime? ChildStartedAt { get; set; } public int? ExitCode { get; set; } public string? Note { get; set; }

@@ -104,6 +104,7 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
     public async Task<string> Queue(string platform, string kind, string? mode, CancellationToken ct)
     {
         var s = documents.Read().Snapshot();
+        if (kind == "now") return await StartNow(platform, ct);
         if (!Platforms.All.Contains(platform) || kind is not ("collect" or "friends" or "login")) throw new FormatException("Unknown platform action.");
         if (!s.Config.Enabled(platform) && kind != "login") throw new FormatException("Enable this platform before requesting work.");
         await using var db = factory.Open();
@@ -113,6 +114,14 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         if (await db.Runs.AnyAsync(r => r.Platform == platform && r.Kind == kind && r.Status == "running", ct)) return "This action is already running.";
         var added = await Actions.EnsureRequest(db, kind, platform, mode, ct);
         return added == 0 ? "This action is already queued." : "Action queued. It will start when the platform browser is available.";
+    }
+    // Lets one queued collect skip the manual cooldown. The next scheduler tick (within seconds) dispatches it if the browser is free.
+    async Task<string> StartNow(string platform, CancellationToken ct)
+    {
+        if (!Platforms.All.Contains(platform)) throw new FormatException("Unknown platform action.");
+        await using var db = factory.Open();
+        var changed = await db.RunRequests.Where(r => r.Platform == platform && r.Kind == "collect" && r.Status == "pending" && !r.SkipCooldown).ExecuteUpdateAsync(u => u.SetProperty(r => r.SkipCooldown, true), ct);
+        return changed == 0 ? "No queued collection is waiting for this platform." : "Cooldown skipped. The collection starts within seconds if the browser is free.";
     }
     public async Task<string> QueueProcessing(CancellationToken ct)
     {

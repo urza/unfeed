@@ -179,6 +179,7 @@ Durable requests from page actions and automatic processing, claimed by the sche
 | Platform | text? | required for collect/like/friends/login; null for an instance-wide process request |
 | Mode | text? | for collect |
 | RetryIncomplete | bool | collect request may only retry due targets in an existing sweep |
+| SkipCooldown | bool | owner override: this pending collect request ignores the manual cooldown gate |
 | PersonAuthorId, Person | integer?, text? | optional resolved person id and canonical profile URL for a bounded person collect; both supplied together, only for home mode without RetryIncomplete. Existing requests have null targets. Identity merges re-point the person id while retaining the requested URL. |
 | Status | text | `pending`, `claimed`, `done`, `expired`, `refused` |
 | RequestedAt, ClaimedAt?, FinishedAt? | datetime | |

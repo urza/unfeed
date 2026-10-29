@@ -24,6 +24,8 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
         if (request is not null) await Dispatch(request, "schedule", ct);
     }
     public static int Jitter(string p, string mode, string slot, string day, int max) { if (max == 0) return 0; uint hash = 17; foreach (var c in $"{p}|{mode}|{slot}|{day}") hash = unchecked(hash * 31 + c); return (int)(hash % ((uint)max + 1)); }
+    public const string CooldownPrefix = "cooldown: starts in ";
+    public static string CooldownNote(DateTime until, TimeZoneInfo zone) => $"{CooldownPrefix}{Math.Max(1, Math.Ceiling((until - Clock.Now).TotalMinutes))} min (at {TimeZoneInfo.ConvertTimeFromUtc(until, zone):HH:mm})";
     public async Task Tick(CancellationToken ct)
     {
         var snapshot = files.Refresh(); var c = snapshot.Config; LastTick = Clock.Now;
@@ -48,7 +50,9 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
             if (request.Kind != "login" && Relogin(p)) { request.Note = "needs re-login"; if (request.Kind == "collect") { request.Status = "refused"; request.FinishedAt = Clock.Now; } continue; }
             if ((request.Kind == "friends" || request.Person is not null) && !c.Enabled(p)) { request.Status = "refused"; request.FinishedAt = Clock.Now; request.Note = "platform disabled"; continue; }
             if (await BrowserBusy(p)) { request.Note = "platform busy"; continue; }
-            if (request.Kind == "collect" && (await db.Runs.AnyAsync(r => r.Platform == p && r.Kind == "collect" && r.Status == "running", ct) || states.GetValueOrDefault(p)?.LastRunFinishedAt > Clock.Now.AddMinutes(-c.Scheduler.ManualCooldownMinutes))) { request.Note = "waiting for collect/cooldown"; continue; }
+            if (request.Kind == "collect" && await db.Runs.AnyAsync(r => r.Platform == p && r.Kind == "collect" && r.Status == "running", ct)) { request.Note = "waiting: a collection is still running"; continue; }
+            // The note is rewritten every tick, so the page shows a live countdown. "Start now" on the Manage page sets SkipCooldown.
+            if (request.Kind == "collect" && !request.SkipCooldown && states.GetValueOrDefault(p)?.LastRunFinishedAt?.AddMinutes(c.Scheduler.ManualCooldownMinutes) is { } until && until > Clock.Now) { request.Note = CooldownNote(until, c.Zone); continue; }
             await Dispatch(request, request.RetryIncomplete ? "recovery" : "manual", ct);
         }
         await db.SaveChangesAsync(ct);

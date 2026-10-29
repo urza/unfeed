@@ -19,7 +19,7 @@ Before these steps, refresh the validated instance snapshot as in 4.5, even when
 1. Reconcile durable claims and worker outcomes, including children launched by an earlier host (12.8). Reap dead runs by process identity, not browser-lock absence.
 2. Expire pending collect, friends and login requests older than `run_request_ttl_minutes`. Like and process requests do not use this TTL. Repair state even when scheduling is disabled.
 3. Resume any management refilter intent when processing/ingest locks are available; this is local repair, not a new worker launch.
-4. Serve owner-queued collect, friends and login requests oldest first, whether or not `scheduler.enabled` is true. Refuse unknown platform/mode or a re-login requirement. Wait for collection eligibility and the platform's manual cooldown; then claim and launch.
+4. Serve owner-queued collect, friends and login requests oldest first, whether or not `scheduler.enabled` is true. Refuse unknown platform/mode or a re-login requirement. Wait for collection eligibility and the platform's manual cooldown; then claim and launch. While a request waits, rewrite its note every tick: `waiting: a collection is still running`, or `cooldown: starts in N min (at HH:mm)` in the home zone. A request with `SkipCooldown` set ignores the cooldown gate only.
 5. Reconcile pending Likes into one active like request per platform. A busy browser makes it wait. Like-back off fails pending unattempted hearts with the reason. A re-login requirement leaves the request pending. Otherwise launch the sender. No collect cooldown applies. Processing never blocks the browser gate.
 6. If `scheduler.enabled` is false, launch an already queued `process` request under the 12.9 gates, then stop. The pause covers the launches the host decides on its own: slots, sweep retries, due processing and maintenance. Existing workers may finish.
 7. Fire eligible slots (12.3).
@@ -32,7 +32,7 @@ Before these steps, refresh the validated instance snapshot as in 4.5, even when
 
 **Processing busy** means the instance processing lock is held or a process request is claimed within startup grace or has a live child. At most one automatic process worker is dispatched across the instance. Explicit model commands take the same lock.
 
-**Cooldown** is `manual_cooldown_minutes` since the last finished collect on that platform, including failed/refused collects. Only manual collect requests wait for it. Model work, repair commands and hearts do not reset it.
+**Cooldown** is `manual_cooldown_minutes` since the last finished collect on that platform, including failed/refused collects. Only manual collect requests wait for it. Model work, repair commands and hearts do not reset it. The owner can override it for one pending collect request from the Manage page (`SkipCooldown`); slots and sweep retries keep their own gates.
 
 ## 12.3 Slots
 

@@ -8,6 +8,23 @@ using Xunit;
 namespace Feed.Tests;
 public sealed class SchedulerTests
 {
+    [Fact] public async Task QueuedCollectShowsCooldownCountdownAndStartNowSkipsIt()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var i = new TestInstance(); await i.Init();
+        await File.WriteAllTextAsync(i.Paths.Get("config.json"), """{"platforms":{"facebook":{}},"scheduler":{"enabled":true,"manual_cooldown_minutes":90},"backgrounds":{"source":"off"}}""");
+        await using (var db = i.Factory.Open()) { db.Add(new RunRequest { Platform = "facebook", Mode = "home" }); db.Add(new PlatformState { Platform = "facebook", LastRunFinishedAt = Clock.Now.AddMinutes(-30) }); await db.SaveChangesAsync(); await db.Put("maintenance:last", Clock.Now.ToString("yyyy-MM-dd")); }
+        var fake = i.Paths.Get("fake-cli"); await File.WriteAllTextAsync(fake, "#!/bin/sh\nexit 0\n"); File.SetUnixFileMode(fake, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        using var processing = ResourceLock.Try(i.Paths, "processing");
+        var files = new InstanceFiles(i.Paths); var scheduler = new Scheduler(i.Paths, files, i.Factory, NullLogger<Scheduler>.Instance, () => fake);
+        await scheduler.Tick(default);
+        await using (var db = i.Factory.Open()) { var r = await db.RunRequests.SingleAsync(); Assert.Equal("pending", r.Status); Assert.StartsWith(Scheduler.CooldownPrefix + "60 min (at ", r.Note); }
+        var management = new Management(i.Paths, i.Factory, new ManagementFiles(i.Paths));
+        Assert.Contains("skipped", await management.Queue("facebook", "now", null, default));
+        Assert.Contains("No queued", await management.Queue("facebook", "now", null, default));
+        await scheduler.Tick(default);
+        await using (var db = i.Factory.Open()) { var r = await db.RunRequests.SingleAsync(); Assert.True(r.SkipCooldown); Assert.NotEqual("pending", r.Status); }
+    }
     [Fact] public async Task MissingCliFailsVisiblyAndRestartHonorsInstanceBackoff()
     {
         await using var i = new TestInstance(); await i.Init();

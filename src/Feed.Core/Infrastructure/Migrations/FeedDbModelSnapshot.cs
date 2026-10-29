@@ -15,7 +15,7 @@ namespace Feed.Core.Infrastructure.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.12");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.14");
 
             modelBuilder.Entity("Feed.Core.Domain.Author", b =>
                 {
@@ -778,6 +778,9 @@ namespace Feed.Core.Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<bool>("RetryIncomplete")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("SkipCooldown")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Status")
