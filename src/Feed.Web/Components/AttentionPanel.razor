@@ -1,0 +1,23 @@
+@* The feed's Manage dot links here, so the overview must say what the dot means before anything else.
+   Red items are listed in full; yellow ones get one line, because the scheduler clears them on its own. *@
+@if(Relogin.Length > 0 || Attention.Length > 0){
+ <section class="manage-panel glass attention-panel alert" aria-label="Needs your attention"><h2>Needs your attention</h2>
+  @foreach(var p in Relogin){<p><strong>@Management.PlatformName(p.Platform) login expired.</strong> Collection stops until you log in again below.</p>}
+  @if(Attention.Length > 0){<p><strong>@Attention.Length @(Attention.Length == 1 ? "issue group or task needs" : "issue groups or tasks need") your attention.</strong></p>
+   <ul>@foreach(var i in Attention.Take(8)){<li><PlatformGlyph Platform="@i.Platform"/> @i.Item · @i.Problem<br/><span class="muted">@i.Recovery@(i.LastAttempt is { } at ? " · last attempt " + RecoveryPresentation.At(at, Zone) : "")</span></li>}</ul>
+   @if(Attention.Length > 8){<p class="muted">@(Attention.Length - 8) more on the recovery page.</p>}
+   <a href="/manage?section=recovery">Open recovery</a>}
+ </section>}
+else if(Notices > 0 || Pending > 0){
+ <section class="manage-panel glass attention-panel notice" aria-label="Catching up"><h2>Catching up, no action needed</h2>
+  <p>@(Pending > 0 ? $"{Pending} posts wait for the model. " : "")@(Notices > 0 ? $"{Notices} capture issue groups or model tasks retry automatically. " : "")Collection coverage is reviewed on the <a href="/debug">diagnostics page</a>.</p>
+ </section>}
+@code {
+ [Parameter] public RecoveryIssue[] Issues { get; set; } = [];
+ [Parameter] public PlatformState[] States { get; set; } = [];
+ [Parameter] public int Pending { get; set; }
+ [Parameter] public TimeZoneInfo Zone { get; set; } = TimeZoneInfo.Utc;
+ PlatformState[] Relogin => States.Where(s => s.NeedsRelogin).ToArray();
+ RecoveryIssue[] Attention => Issues.Where(i => i.Disposition == RecoveryDisposition.Attention).ToArray();
+ int Notices => Issues.Count(i => i.Disposition is RecoveryDisposition.Automatic or RecoveryDisposition.Paused or RecoveryDisposition.Compatibility);
+}

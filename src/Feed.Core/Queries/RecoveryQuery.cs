@@ -21,21 +21,24 @@ public sealed record RecoveryIssue(string Platform, string Item, string Problem,
 }
 public static class RecoveryQuery
 {
-    // Feed needs only the indicator, not diagnostic text, grouping, provenance or retry descriptions.
-    public static async Task<bool> HasIssues(FeedDb db, InstanceSnapshot s, string? platform = null, CancellationToken ct = default)
+    // The Manage dot is derived from the same rows and dispositions the Manage page shows, so a red dot
+    // always has an "attention" row behind it. Cheaper existence queries were tried first and disagreed
+    // with the page: they counted parsed captures with auxiliary upstream warnings, which the page files
+    // as informational, so the dot was red while Manage reported nothing to do.
+    public static async Task<DiagnosticLevel> Level(FeedDb db, InstanceSnapshot s, string? platform = null, CancellationToken ct = default)
+        => Level(await Read(db, s, platform, ct, grouped: true, summaryOnly: true));
+    public static DiagnosticLevel Level(IEnumerable<RecoveryIssue> issues)
     {
-        var activeSince = Clock.Now.AddSeconds(-s.Config.Llm.TimeoutSeconds * (s.Config.Llm.FallbackBaseUrl.Length > 0 ? 2 : 1));
-        if (await db.Posts.AnyAsync(p => p.IngestReadyAt != null && (platform == null || p.Platform == platform) &&
-            ((!p.Hidden || p.HiddenBy == "llm") && (p.CategoriesJson == null || p.VerdictContentRevision == null || p.VerdictContentRevision != p.ContentRevision || p.LlmTokenLimit != null) &&
-                p.LlmAttemptedAt != null && (p.LlmError != null || p.LlmAttemptedAt <= activeSince) ||
-             !p.Hidden && (p.Summary == null || p.SummaryContentRevision == null || p.SummaryContentRevision != p.ContentRevision) &&
-                p.SummaryAttemptedAt != null && (p.SummaryError != null || p.SummaryAttemptedAt <= activeSince)), ct)) return true;
-        var superseded = CaptureHealth.Superseded(db);
-        var recent = Clock.Now.AddDays(-RawIssueDays);
-        return await db.RawSnapshots.AnyAsync(r => !r.Deleted && (platform == null || r.Platform == platform) &&
-            (!r.Parsed && r.Error != null || r.Parsed && r.Warning != null) && r.CapturedAt > recent &&
-            !superseded.Any(old => old.Id == r.Id), ct);
+        var level = DiagnosticLevel.None;
+        foreach (var issue in issues)
+        {
+            if (issue.Disposition == RecoveryDisposition.Attention) return DiagnosticLevel.Alert;
+            if (issue.Disposition != RecoveryDisposition.Informational) level = DiagnosticLevel.Notice;
+        }
+        return level;
     }
+    public static async Task<bool> HasIssues(FeedDb db, InstanceSnapshot s, string? platform = null, CancellationToken ct = default)
+        => await Level(db, s, platform, ct) != DiagnosticLevel.None;
 
     // Raw capture issues age out after a week, parse errors included. An unparsed snapshot that no later
     // capture supersedes (an upstream GraphQL error, for example) would otherwise stay an "attention" row

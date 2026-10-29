@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Feed.Core.Domain;
+using Feed.Core.Infrastructure;
 using Feed.Core.Queries;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -40,6 +41,28 @@ public sealed class FeedPerformanceTests
             Assert.Equal(posts.Count(p => p.Hidden), result.TotalHidden);
             Assert.Equal(posts.Count(p => !p.Hidden && !p.Judged), result.TotalUnsorted);
         }
+    }
+
+    // The dot must agree with the Manage page: an upstream warning the page files as informational cannot
+    // light it, an unparsed capture the scheduler will retry is a notice, and a failed task the owner must
+    // act on is an alert.
+    [Fact] public async Task DotLevelFollowsRecoveryDispositions()
+    {
+        await using var i = new TestInstance(); await i.Init(); await using var db = i.Factory.Open();
+        db.Runs.Add(new Run { Id = 1, Kind = "collect", Platform = "facebook", Status = "ok", FinishedAt = Clock.Now });
+        var warned = new RawSnapshot { Platform = "facebook", RunId = 1, Path = "warned.json", Parsed = true, Warning = "upstream", CapturedAt = Clock.Now };
+        db.RawSnapshots.Add(warned); await db.SaveChangesAsync();
+        db.Add(new RawDiagnostic { RawSnapshotId = warned.Id, Code = "upstream_error", Fingerprint = "f1", Impact = "auxiliary", ParserVersion = PayloadParser.Version }); await db.SaveChangesAsync();
+        Assert.Equal(DiagnosticLevel.None, await RecoveryQuery.Level(db, Snapshot));
+        db.RawSnapshots.Add(new RawSnapshot { Platform = "facebook", RunId = 1, Path = "failed.json", Error = "unknown", CapturedAt = Clock.Now, BlockedParserVersion = PayloadParser.Version }); await db.SaveChangesAsync();
+        Assert.Equal(DiagnosticLevel.Notice, await RecoveryQuery.Level(db, Snapshot));
+        var stale = new RawSnapshot { Platform = "facebook", RunId = 1, Path = "stale.json", Error = "unknown", CapturedAt = Clock.Now.AddDays(-RecoveryQuery.RawIssueDays - 1) };
+        db.RawSnapshots.Add(stale); await db.SaveChangesAsync();
+        Assert.DoesNotContain(await RecoveryQuery.Read(db, Snapshot), r => r.RawId == stale.Id);
+        var post = new Post { Platform = "facebook", PlatformPostId = "exhausted", IngestReadyAt = Clock.Now, LlmAttemptedAt = Clock.Now.AddHours(-1), LlmError = "token limit", LlmTokenLimit = 1 << 20 };
+        db.Add(post); await db.SaveChangesAsync();
+        Assert.Equal(DiagnosticLevel.Alert, await RecoveryQuery.Level(db, Snapshot));
+        Assert.Equal(DiagnosticLevel.None, await RecoveryQuery.Level(db, Snapshot, "instagram"));
     }
 
     [Fact] public async Task RecoveryIndicatorMatchesDetailedQueryForPendingAndCompletedWork()

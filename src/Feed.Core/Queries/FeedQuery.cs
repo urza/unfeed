@@ -159,7 +159,8 @@ public sealed class FeedQuery(DbFactory factory)
     async Task<DiagnosticLevel> Diagnostics(FeedDb db, InstanceSnapshot instance, string? platform, CancellationToken ct)
     {
         var key = platform ?? ""; if (diagnostics.TryGetValue(key, out var cached) && Clock.Now - cached.At < TimeSpan.FromMinutes(1)) return cached.Value;
-        var value = await RecoveryQuery.HasIssues(db, instance, platform, ct) ? DiagnosticLevel.Alert : await CoverageQuery.HasIssues(db, instance, platform, ct) ? DiagnosticLevel.Notice : DiagnosticLevel.None;
+        var value = await RecoveryQuery.Level(db, instance, platform, ct);
+        if (value == DiagnosticLevel.None && await CoverageQuery.HasIssues(db, instance, platform, ct)) value = DiagnosticLevel.Notice;
         diagnostics[key] = (Clock.Now, value); return value;
     }
     static string? RepeatKey(Card card)

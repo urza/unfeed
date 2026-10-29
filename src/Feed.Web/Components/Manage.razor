@@ -1,9 +1,10 @@
 <Shell Title="Manage" Stamp="@Stamp" Background="@Background" Blur="Model.Instance.Config.Backgrounds.BlurPx">
 <div class="management">
-<ManageNavigation Section="@Model.Section" Level="@(Model.RecoverySummary.Any(i => i.Disposition == RecoveryDisposition.Attention) ? DiagnosticLevel.Alert : DiagnosticLevel.None)"/>
+<ManageNavigation Section="@Model.Section" Level="@RecoveryQuery.Level(Model.RecoverySummary)"/>
 @if(Message is not null){<p class="manage-notice" role="status">@Message</p>}
 @if(Error is not null){<p class="banner" role="alert">@Error</p>}
 @if(Model.Section == "overview") {
+ <AttentionPanel Issues="Model.RecoverySummary" States="Model.Platforms.Select(p => p.State).OfType<PlatformState>().ToArray()" Pending="Model.Pending" Zone="Config.Zone"/>
  <section class="manage-panel glass"><div class="manage-heading"><div><h1>Your feed at a glance</h1><p>@(Config.Scheduler.Enabled ? "Automatic scheduling is on." : "Automatic scheduling is paused. The buttons on this page still start work.") Pausing does not stop work already running.</p></div><form method="post" action="/manage/settings/scheduler">@Token()<input type="hidden" name="enabled" value="@(!Config.Scheduler.Enabled ? "true" : "false")"/><button class="primary">@(Config.Scheduler.Enabled ? "Pause scheduling" : "Resume scheduling")</button></form></div><RecoverySummary Issues="Model.RecoverySummary" Pending="Model.Pending" UpdatedAt="Model.UpdatedAt" Zone="Config.Zone"/></section>
  <div class="manage-platforms">@foreach(var p in Model.Platforms){var config = Config.Platform(p.Platform);
   <section class="manage-panel glass"><h2><PlatformGlyph Platform="@p.Platform"/> @Management.PlatformName(p.Platform)</h2>
