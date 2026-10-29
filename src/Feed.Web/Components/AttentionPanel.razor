@@ -10,7 +10,7 @@
  </section>}
 else if(Notices > 0 || Pending > 0){
  <section class="manage-panel glass attention-panel notice" aria-label="Catching up"><h2>Catching up, no action needed</h2>
-  <p>@(Pending > 0 ? $"{Pending} posts wait for the model. " : "")@(Notices > 0 ? $"{Notices} capture issue groups or model tasks retry automatically. " : "")Collection coverage is reviewed on the <a href="/debug">diagnostics page</a>.</p>
+  <p>@(Pending > 0 ? $"{Pending} posts wait for the model. " : "")@(Notices > 0 ? $"{Notices} capture issue groups or model tasks retry automatically. " : "")People whose timeline is behind schedule are listed under <a href="/manage?section=coverage">Coverage</a>.</p>
  </section>}
 @code {
  [Parameter] public RecoveryIssue[] Issues { get; set; } = [];

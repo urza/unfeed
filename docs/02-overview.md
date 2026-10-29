@@ -42,7 +42,7 @@ The owner wants to read what friends post without the platform's junk and rankin
 - A scheduler with local-time slots, manual "collect now" requests, per-platform locks and cooldowns.
 - Like-back: a heart on the page becomes a like on the original post.
 - Thumbs up and down as recorded feedback that feeds the model's memory and the operator's curation.
-- A private web page with the feed, the views, the actions, and an operator debug page.
+- A private web page with the feed, the views, the actions, and a Manage page for the operator.
 - A command-line tool for every operation, with a one-line summary per command.
 - One instance directory that holds everything personal.
 

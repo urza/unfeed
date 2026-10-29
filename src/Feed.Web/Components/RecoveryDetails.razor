@@ -34,7 +34,7 @@
   </details>
  }
  @if(Issues.Length == 0){<p>No outstanding recovery or recent upstream notices.</p>}
- <p><a href="/debug#recovery">Open technical diagnostics</a> · <a href="/manage?section=recovery">Refresh recovery</a></p>
+ <p><a href="/manage?section=recovery">Refresh recovery</a> · <a href="/manage/log?file=cli">CLI log</a></p>
 </div>
 @code {
  [Parameter] public RecoveryIssue[] Issues { get; set; } = [];

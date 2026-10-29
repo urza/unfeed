@@ -21,7 +21,7 @@ public sealed class WebTests
         {
             using var http=new HttpClient{BaseAddress=new Uri($"http://127.0.0.1:{port}")};using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(60));
             while(true){if(process.HasExited)throw new InvalidOperationException("Web host exited: "+await stderr);try{if((await http.GetAsync("/healthz",timeout.Token)).IsSuccessStatusCode)break;}catch(HttpRequestException){}await Task.Delay(100,timeout.Token);}
-            Assert.Equal(HttpStatusCode.OK,(await http.GetAsync("/debug")).StatusCode);
+            Assert.Equal(HttpStatusCode.OK,(await http.GetAsync("/manage?section=coverage")).StatusCode);
             using var pw=await Playwright.CreateAsync();await using var browser=await pw.Chromium.LaunchAsync(new(){Headless=true});
             await using(var context=await browser.NewContextAsync(new(){JavaScriptEnabled=false}))
             {
@@ -32,7 +32,7 @@ public sealed class WebTests
                 await page.Locator(".expand-chip").ClickAsync();
                 Assert.Contains("Synthetic caption",await page.Locator(".caption").InnerTextAsync());Assert.Equal(0,await page.Locator(".caption script").CountAsync());
                 await page.Locator("form[data-action='thumb']").First.Locator("button").ClickAsync();await using(var db=instance.Factory.Open()){Assert.Equal(1,await db.Feedback.CountAsync());Assert.False((await db.Posts.FindAsync(id))!.Hidden);}
-                await page.GotoAsync(http.BaseAddress + "debug/backgrounds");
+                await page.GotoAsync(http.BaseAddress + "manage/backgrounds");
                 Assert.EndsWith("/manage/backgrounds",page.Url);
                 Assert.Equal("Backgrounds",await page.Locator(".manage-nav [aria-current=page]").InnerTextAsync());
                 Assert.Contains("data/backgrounds/local/", await page.ContentAsync());

@@ -29,7 +29,6 @@ app.Use(async(context,next)=>{context.Items["instance"]=files.Refresh();var watc
 InstanceSnapshot Snapshot(HttpContext c)=>(InstanceSnapshot)c.Items["instance"]!;
 IResult Back(HttpContext c){var referer=c.Request.Headers.Referer.ToString();return Results.Redirect(Uri.TryCreate(referer,UriKind.Absolute,out var u)&&u.Authority==c.Request.Host.Value?u.PathAndQuery:"/");}
 string Type(string path){new FileExtensionContentTypeProvider().TryGetContentType(path,out var type);return type??"application/octet-stream";}
-string ReadLock(string path){try{using var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete);using var reader=new StreamReader(stream);return reader.ReadToEnd();}catch(IOException){return "ownership held; metadata temporarily unavailable";}}
 string Logs(string? which,int count){var names=which is "cli" or "web"?new[]{which}:new[]{"cli","web"};return string.Join('\n',names.SelectMany(n=>File.Exists(paths.Get("logs",$"feed-{n}.log"))?File.ReadLines(paths.Get("logs",$"feed-{n}.log")).TakeLast(count):[]).Order(StringComparer.Ordinal).TakeLast(count));}
 app.MapGet("/",async(HttpContext ctx,FeedQuery query,Backgrounds backgrounds)=>{
  var s=Snapshot(ctx);var view=ctx.Request.Query["view"].ToString();if(view.Length==0)view=s.Taxonomy.Views.Any(v=>v.Key==s.Config.Ui.DefaultView)?s.Config.Ui.DefaultView:"all";
@@ -37,31 +36,7 @@ app.MapGet("/",async(HttpContext ctx,FeedQuery query,Backgrounds backgrounds)=>{
  try{var model=await query.Read(s,view,platform,scope,ctx.RequestAborted);return (IResult)new RazorComponentResult<FeedView>(new{Model=model,Stamp=stamp,Background=backgrounds.Current.Selected});}catch(ArgumentException){return Results.Redirect("/");}
 });
 app.MapGet("/healthz",async(CancellationToken ct)=>{await using var db=factory.Open();await db.Kv.AsNoTracking().Select(k=>k.Key).FirstOrDefaultAsync(ct);return Results.Text("ok\n");});
-app.MapGet("/debug",async(HttpContext ctx,Scheduler scheduler,Backgrounds backgrounds)=>{
- await using var db=factory.Open(); var config=Snapshot(ctx).Config;
- var local=TimeZoneInfo.ConvertTimeFromUtc(Clock.Now,config.Zone);var day=local.ToString("yyyy-MM-dd");var slotLines=new List<string>();
- foreach(var (platform,settings) in config.Platforms) foreach(var (mode,times) in settings.Schedule) foreach(var slot in times){var fire=local.Date+TimeSpan.Parse(slot)+TimeSpan.FromMinutes(Scheduler.Jitter(platform,mode,slot,day,config.Scheduler.JitterMinutes));slotLines.Add($"{platform}/{mode} slot={slot}, fire={fire:yyyy-MM-dd HH:mm}, eligible today={settings.ScheduledOn(mode,DateOnly.FromDateTime(local))}, fired today={await db.Get($"slot:{platform}:{mode}:{slot}")==day}");}
- var slots=string.Join("\n",slotLines);
- var safeConfig=config with {Llm=config.Llm with {ApiKey="[redacted]",FallbackApiKey="[redacted]",BaseUrl=Prompts.Endpoint(config.Llm.BaseUrl),FallbackBaseUrl=Prompts.Endpoint(config.Llm.FallbackBaseUrl)}};
- var configNode=System.Text.Json.JsonSerializer.SerializeToNode(safeConfig,InstanceValidation.Json)!.AsObject();configNode.Remove("zone");var configLines=configNode.ToJsonString(new(){WriteIndented=true});
- var coverage=await CoverageQuery.Read(db,Snapshot(ctx));
- return new RazorComponentResult<Feed.Web.Components.Debug>(new{
- Stamp=stamp,Background=backgrounds.Current.Selected,Blur=config.Backgrounds.BlurPx,Error=files.Error??scheduler.Error,
- SchedulerInfo=$"enabled={config.Scheduler.Enabled}; tick={scheduler.LastTick:O}; zone={config.Zone.Id}; CLI={scheduler.Cli??"not resolved yet"}; data={paths.Root}\n{slots}",
- Status=await Reports.Status(factory,Snapshot(ctx)),Rules=configLines+"\n"+await Reports.Rules(factory,Snapshot(ctx)),Log=string.Join('\n',Logs(null,80).Split('\n').Reverse()),
- Runs=(await db.Runs.AsNoTracking().OrderByDescending(r=>r.Id).Take(15).Select(r=>new{r.Id,r.Kind,r.Phase,r.Platform,r.Mode,r.Status,r.ProcessPid,r.ProcessStartedAt,r.StartedAt,r.FinishedAt,r.PostsFound,r.PostsNew,r.Error,r.StatsJson}).ToArrayAsync()).Cast<object>().ToArray(),
- RecoveryPage=int.TryParse(ctx.Request.Query["recoveryPage"], out var recoveryPage) ? Math.Max(1,recoveryPage) : 1,
- Issues=(await RecoveryQuery.Read(db,Snapshot(ctx), grouped: true, page: int.TryParse(ctx.Request.Query["recoveryPage"], out var rp) ? Math.Max(1,rp) : 1)).Cast<object>().ToArray(),
- Coverage=coverage.Cast<object>().ToArray(),Warnings=coverage.Where(c=>c.Failures>=2).Select(c=>$"Timeline of {c.Name} ({c.Platform}) had incomplete capture on the last {c.Failures} visits. Page said: {c.Note}").ToArray(),
- Requests=(await db.RunRequests.AsNoTracking().OrderByDescending(r=>r.Id).Take(10).Select(r=>new{r.Id,r.Kind,r.Platform,r.Status,r.RequestedAt,r.ChildPid,r.ChildStartedAt,r.ExitCode,r.Note}).ToArrayAsync()).Cast<object>().ToArray(),
- Posts=(await db.Posts.GroupBy(p=>p.Platform).Select(g=>new{Platform=g.Key,Total=g.Count(),Visible=g.Count(p=>!p.Hidden),Hidden=g.Count(p=>p.Hidden)}).ToArrayAsync()).Cast<object>().ToArray(),
- Likes=(await db.Likes.AsNoTracking().OrderByDescending(l=>l.Id).Take(10).ToArrayAsync()).Cast<object>().ToArray(),States=(await db.PlatformStates.AsNoTracking().ToArrayAsync()).Cast<object>().ToArray(),
- Locks=Directory.EnumerateFiles(paths.Get("locks")).Select(f=>(object)new{Name=Path.GetFileName(f),Content=ReadLock(f),At=File.GetLastWriteTimeUtc(f)}).ToArray(),Metadata=(await db.Kv.AsNoTracking().OrderBy(k=>k.Key).ToArrayAsync()).Cast<object>().ToArray()
- });
-});
-app.MapGet("/debug/log",(HttpContext ctx)=>Results.Text(Logs(ctx.Request.Query["file"],5000)));
-app.MapGet("/debug/backgrounds",(HttpContext ctx)=>Results.Redirect("/manage/backgrounds"+ctx.Request.QueryString));
-app.MapPost("/debug/backgrounds/{action}",(string action)=>Results.Redirect("/manage/backgrounds/"+Uri.EscapeDataString(action),preserveMethod:true));
+app.MapGet("/manage/log",(HttpContext ctx)=>Results.Text(Logs(ctx.Request.Query["file"],5000)));
 app.MapGet("/manage/backgrounds",(HttpContext ctx,Backgrounds backgrounds)=>new RazorComponentResult<Gallery>(new{Model=backgrounds.Current,Stamp=stamp,Blur=Snapshot(ctx).Config.Backgrounds.BlurPx,UploadMessage=int.TryParse(ctx.Request.Query["uploaded"],out var uploaded)&&uploaded is >0 and <=10?$"Uploaded {uploaded} picture(s). Choose Pin to keep one selected.":null}));
 app.MapPost("/manage/backgrounds/upload",async(HttpContext ctx,Backgrounds backgrounds)=>{
  string? error;

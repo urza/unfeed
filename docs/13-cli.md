@@ -63,7 +63,7 @@ In the timeline modes, `visited` counts the profiles opened, `empty` the profile
 - Never delete `raw/` or `media/` by hand. Use the prune commands; the scheduler runs both daily.
 - Never write to the database by hand. `sqlite3 -readonly` is for reading.
 - Never put a name, a handle or a policy line into the source, the tests or the docs.
-- Never answer a live question ("is X enabled", "how much data is there") from documentation. Use `status`, the debug page and the live config.
+- Never answer a live question ("is X enabled", "how much data is there") from documentation. Use `status`, the Manage page and the live config.
 
 
 ### Capture inspection and recovery commands

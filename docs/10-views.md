@@ -63,7 +63,7 @@ A close friend on a daily challenge posts 22 personal posts in a month, every on
 Every card can explain itself. The trail is a list of lines in stack order:
 
 1. The audience path under instance config: friend/following, qualifying tagged friend (with the selected tag rule), explicit audience bypass, unrestricted captured audience, or outside configured audience. Include effective type/keyword/model shields when present.
-2. The verdict: not judged yet, content changed since judgment, or score/categories/reason for the current content revision. Append judged under an older policy/model configuration when PrefsVersion differs. Debug detail includes input revision, model, serving endpoint and time; card explanations do not pretend an older answer judged the current text.
+2. The verdict: not judged yet, content changed since judgment, or score/categories/reason for the current content revision. Append judged under an older policy/model configuration when PrefsVersion differs. Technical detail includes input revision, model, serving endpoint and time; card explanations do not pretend an older answer judged the current text.
 3. The view clause, when one admitted the post with a text: `in this view as <member label[ · rare fact]>` for a union, `rare voice: <fact>` for a rare view.
 4. In hidden mode: `hidden by <owner>: <reason>`.
 

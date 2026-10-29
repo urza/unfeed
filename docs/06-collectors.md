@@ -245,7 +245,7 @@ A visit in `close_friends`, `all_followed` or a `--person` collect:
 4. Write a TimelineVisits row with author id, render status, capture status, distinct observed count, oldest/newest observed date and stop reason. `captured` requires usable saved post observations; a rendered grid with no usable payload is `incomplete`, not proof of no posts. `empty` requires the explicit empty answer. Count skipped, empty and incomplete separately. For a sweep, commit the terminal visit and target advancement together.
 5. Pause 3 to 8 seconds.
 
-One blank page is noise: Instagram serves them under fast navigation. The signal is two unrendered visits in a row on the same profile, within the last 60 days. The status command prints one `WARNING timeline:` line per such profile, with the note and the screenshot path. The debug page shows a banner and the per-profile table. A rendered or empty visit clears the streak. There are no retries inside a run: pacing stays human.
+One blank page is noise: Instagram serves them under fast navigation. The signal is two unrendered visits in a row on the same profile, within the last 60 days. The status command prints one `WARNING timeline:` line per such profile, with the note and the screenshot path. The Manage Coverage tab shows the per-profile table. A rendered or empty visit clears the streak. There are no retries inside a run: pacing stays human.
 
 ## 6.13 Session health and checkpoints
 

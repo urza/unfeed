@@ -77,10 +77,10 @@ Feed.slnx
 src/Feed.Core/      shared library, no executable
   Domain/           identity, filter rules, categories, normalization, platform registry (pure, no IO)
   Application/      operations and interfaces: ingest, process, queue likes, recover requests, retain
-  Queries/          feed, coverage, status and debug projections; no mutations
+  Queries/          feed, coverage, status, recovery and management projections; no mutations
   Infrastructure/   config, EF Core, stores, raw files, media, HTTP model client, locks, logging
 src/Feed.Web/       thin routes, rendering, scheduler and composition root
-  Components/       Razor pages, cards, toolbar, stacks and debug sections
+  Components/       Razor pages, cards, toolbar, stacks and management sections
   wwwroot/css/      plain CSS, shared design tokens and responsive layout
   wwwroot/js/       native JavaScript modules for layout, gallery and actions
 src/Feed.Cli/       thin commands, composition root, Playwright adapters and browser sessions
@@ -158,7 +158,7 @@ Everything personal lives in `data/`. The code carries no name, no handle, no ca
 | `taxonomy.json` | categories with definitions, and views | 4, 10 |
 | `preferences.md` | keyword rules, muted people, always-show list, the policy the model reads, learned lines | 4, 8, 9 |
 
-The web host observes and validates edits to the three files under the reload contract in chapter 4. An edit takes effect on the next request or scheduler tick. A load error keeps the last good files and shows on the debug page. Metadata checks, content signatures or reconciled file notifications may implement change detection.
+The web host observes and validates edits to the three files under the reload contract in chapter 4. An edit takes effect on the next request or scheduler tick. A load error keeps the last good files and shows on the Manage page. Metadata checks, content signatures or reconciled file notifications may implement change detection.
 
 ## 3.8 Chapter map
 

@@ -33,6 +33,7 @@
 /* Yellow: the scheduler is behind (coverage lag, unsorted posts). Red: a failure or login needs the owner. */
 .debug-dot{display:inline-block;width:7px;height:7px;margin-left:6px;border-radius:50%;background:#f6c453;vertical-align:middle}.debug-dot.alert{background:#f0665a}
 .attention-panel.alert{border-color:#f0665a88}.attention-panel.alert h2{color:#f6a39b}.attention-panel.notice h2{color:#f6c453}.attention-panel ul{margin:8px 0;padding-left:20px}.attention-panel li{margin:4px 0}
+.coverage-table tr.stale td:nth-child(2){color:#f6c453}.coverage-table tr.incomplete td:nth-child(2){color:#f6a39b}
 
 /* Shared top-bar navigation across feed, management, diagnostics and person pages. */
 .top-nav-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:38px;padding:8px 12px;border:1px solid #8cbcff66;border-radius:10px;background:#20334e;color:var(--text);font-size:.85rem;font-weight:600;line-height:1.45;white-space:nowrap;text-decoration:none}

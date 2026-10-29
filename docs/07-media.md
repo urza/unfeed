@@ -87,7 +87,7 @@ A value of 0 turns a policy off.
 - a post hidden at insert never gets a video slot;
 - every other video waits for the filters and the judge (7.4).
 
-**The disk line.** The daily job measures `media/` (with the video share), `raw/` and the free space of the data drive, and stores one line in `Kv`: `media X GB (videos Y GB) · raw Z GB · free W GB`. The status command and the debug page print that line, so neither walks thousands of files per request.
+**The disk line.** The daily job measures `media/` (with the video share), `raw/` and the free space of the data drive, and stores one line in `Kv`: `media X GB (videos Y GB) · raw Z GB · free W GB`. The status command and the Manage Storage tab show that line, so neither walks thousands of files per request.
 
 Retention never deletes posts, authors, media rows or runs.
 

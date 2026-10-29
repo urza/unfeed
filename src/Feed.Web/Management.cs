@@ -19,6 +19,7 @@ public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnaps
     public string? RecoverySignature { get; init; }
     public int RecoveryPage { get; init; } = 1;
     public RecoveryIssue[] RecoverySummary { get; init; } = [];
+    public CoverageRow[] Coverage { get; init; } = [];
     public RecoveryIssue[] Recovery { get; init; } = [];
     public ProcessingCompletion[] RecentCompletions { get; init; } = [];
     public Run[] Collections { get; init; } = [];
@@ -63,6 +64,7 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         return new(docs, s, overviews, visiblePeople.Skip((page - 1) * 40).Take(40).ToArray(), visiblePeople.Length, page, query, platform, filter, section, await db.Get("disk:summary", ct) ?? "Not measured yet", await db.Get("disk:at", ct), await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct), await db.Posts.CountAsync(p => p.LlmError != null || p.SummaryError != null, ct)) {
             RecoveryAttempts = section == "recovery" ? await db.CaptureRecoveryAttempts.AsNoTracking().OrderByDescending(a => a.Id).Take(10).Select(a => new RecoveryAttemptSummary(a.Id, a.RawSnapshotId, a.State, a.Validation, a.Error, a.StartedAt)).ToArrayAsync(ct) : [],
             RecoverySignature = signature, RecoveryPage = Math.Max(1, page),
+            Coverage = section == "coverage" ? await CoverageQuery.Read(db, s, ct: ct) : [],
             RecoverySummary = await RecoveryQuery.Read(db, s, ct: ct, grouped: true, summaryOnly: true),
             Recovery = await RecoveryQuery.Read(db, s, ct: ct, grouped: signature is null, fingerprint: signature, page: page),
             Collections = runs.Where(r => r.Kind == "collect").Take(10).Concat(runs.Where(r => r.Id == collectionId)).DistinctBy(r => r.Id).ToArray(),

@@ -1,12 +1,12 @@
-<header class="toolbar glass"><div class="brand"><Mark/><strong>Manage</strong><a class="top-nav-button" href="/">Back to feed</a><a class="top-nav-button" href="/debug">Diagnostics <DiagnosticDot Level="@Level"/></a></div></header>
+<header class="toolbar glass"><div class="brand"><Mark/><strong>Manage</strong><a class="top-nav-button" href="/">Back to feed</a></div></header>
 <nav class="manage-nav" aria-label="Management sections">@foreach(var item in Sections){<a href="@(item.Key == "backgrounds" ? "/manage/backgrounds" : $"/manage?section={item.Key}")" class="@(Section == item.Key ? "active" : "")" aria-current="@(Section == item.Key ? "page" : null)"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">@((MarkupString)item.Icon)</svg>@item.Label</a>}</nav>
 @code {
  [Parameter] public string Section {get;set;}="overview";
- [Parameter] public DiagnosticLevel Level {get;set;}
  // Icons are 24-box stroke paths, so they inherit the pill text color and match the toolbar's Manage glyph.
  static readonly (string Key, string Label, string Icon)[] Sections = [
   ("overview","Overview","<rect x=\"4\" y=\"4\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"13\" y=\"4\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"4\" y=\"13\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"13\" y=\"13\" width=\"7\" height=\"7\" rx=\"1.5\"/>"),
   ("recovery","Recovery","<path d=\"M4 12a8 8 0 1 0 2.4-5.7\"/><path d=\"M4 4v5h5\"/>"),
+  ("coverage","Coverage","<circle cx=\"12\" cy=\"12\" r=\"8.5\"/><path d=\"M8.5 12.5l2.5 2.5 4.5-5\"/>"),
   ("people","People","<circle cx=\"9\" cy=\"8\" r=\"3.5\"/><path d=\"M3 20a6 6 0 0 1 12 0\"/><path d=\"M16 4.5a3.5 3.5 0 0 1 0 7\"/><path d=\"M17.5 14.5A6 6 0 0 1 21 20\"/>"),
   ("schedule","Schedule","<circle cx=\"12\" cy=\"12\" r=\"8.5\"/><path d=\"M12 7.5V12l3 2\"/>"),
   ("rules","Rules","<path d=\"M5 12h14\"/><path d=\"M5 6h14\"/><path d=\"M5 18h14\"/><circle cx=\"9\" cy=\"6\" r=\"2\" fill=\"currentColor\" stroke=\"none\"/><circle cx=\"15\" cy=\"12\" r=\"2\" fill=\"currentColor\" stroke=\"none\"/><circle cx=\"10\" cy=\"18\" r=\"2\" fill=\"currentColor\" stroke=\"none\"/>"),

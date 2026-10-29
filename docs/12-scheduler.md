@@ -8,7 +8,7 @@ Source map: [Scheduler.cs](../src/Feed.Web/Scheduler.cs) · [Actions.cs](../src/
 
 - One hosted background service, one tick every 5 seconds, one scheduler host per instance.
 - Children are `collect --platform X --mode M`, `like --platform X`, `friends --platform X`, `login --platform X`, or `process --platform all`. Automatic processing has no per-batch invocation limit. Slots supply `--trigger schedule`; manual collect requests supply `--trigger manual`.
-- Children receive FEED_DATA and the web host's working directory. Resolve the CLI through FEED_CLI, then beside the host, then the development build tree up to six parents up. A DLL runs through dotnet. The resolved command appears in debug output.
+- Children receive FEED_DATA and the web host's working directory. Resolve the CLI through FEED_CLI, then beside the host, then the development build tree up to six parents up. A DLL runs through dotnet.
 - Launch errors and tick failures are recorded with their reason. A missing CLI fails a manual request visibly. Automatic processing launch failures wait 30 minutes before another attempt, not every tick.
 - The scheduler evaluates due work with indexed queries. It never reimplements the filter or model selection rules; those are shared application operations.
 
@@ -64,7 +64,7 @@ Collection times are local-time slots in the instance config, per platform and m
 - Collection eligibility and re-login are checked before the marker is set, so the slot retries on later ticks inside its window.
 - A slot whose window passed while the app was down is skipped. There are no catch-up bursts.
 - Firing sets the marker and starts the collect child with `--trigger schedule`. Slots ignore the manual cooldown.
-- The debug page lists every slot with its jittered fire time, whether its calendar restrictions allow it today, and whether it fired today.
+- The Manage Overview and Schedule tabs show the next scheduled run per platform.
 
 For an every-other-day sweep, configure `schedule_intervals.all_followed` with `days: 2` and an explicit first local date. The fixed anchor survives host restart and downtime; missed dates do not move the cadence or create catch-up runs. Each eligible slot still performs one bounded sweep invocation. Set `sweep_limit` large enough to cover the desired list, or provide enough slots to finish its batches. An interval does not automatically drain the whole cycle, and due retries from an existing cycle can still run between scheduled dates (12.10).
 
@@ -126,15 +126,15 @@ An explicit `process --platform X|all --limit N` selects at most N units per sta
 
 Failed item attempts wait 30 minutes before a later invocation. A wholly failed model batch closes admission/dispatch for that task and model configuration and writes its shared 30 minute backoff across platforms; chapter 9 defines buffered and in-flight handling. Raw/media recovery and unaffected tasks remain eligible. An unexpected worker failure not already covered by item/task retry state delays another automatic launch across the instance by 30 minutes using `process:not_before`. No eligible work means no child; if only ingest is due and its lock is held, wait instead of launching empty workers. Model-disabled invocations still recover raws, ingest/filter and process permitted media. A re-login flag does not block any of this; processing does not open a browser or export cookies.
 
-SQLite readiness and attempt columns are the durable work ledger. No generic distributed queue is required. In-memory reservation and channels only coordinate the live owner; a crash leaves unstamped work due and stamped attempts subject to retry delay, including a crash between dispatch authorization and sending HTTP. The worker reports per-platform, per-stage selected, completed, failed, superseded, selected-but-not-dispatched and remaining counts throughout the run and at completion. The debug page distinguishes waiting for a model, retry delay, processing disabled and browser re-login, and shows active HTTP requests, workers enriching video context and prepared/unapplied queue counts.
+SQLite readiness and attempt columns are the durable work ledger. No generic distributed queue is required. In-memory reservation and channels only coordinate the live owner; a crash leaves unstamped work due and stamped attempts subject to retry delay, including a crash between dispatch authorization and sending HTTP. The worker reports per-platform, per-stage selected, completed, failed, superseded, selected-but-not-dispatched and remaining counts throughout the run and at completion. The `status` command and the Manage Recovery tab distinguish waiting for a model, retry delay, processing disabled and browser re-login. The `status` command prints the processing state.
 
 ## 12.10 Bounded capture recovery
 
 After manual requests and scheduled slots, and once that cycle has no pending/visiting first-pass targets, dispatch due `retry` targets from the current all-followed cycle using a durable collect request with `RetryIncomplete=true`. A child receives `--retry-incomplete` and cannot create a new cycle. Chapter 6 defines the three-attempt budget, one/two-hour delays, first-pass precedence and stop conditions. A one-hour persisted `coverage:<platform>:not_before` launch gate also prevents loops on a missing executable or failed startup. Scheduling disabled launches none of this work. Normal configured slots remain the authority for starting new cycles.
 
-Processing due checks exclude raw snapshots blocked on the current parser version; an upgraded parser makes them eligible again subject to the existing item delay. Debug exposes blocked raws and nonfatal upstream warnings separately from timed retries.
+Processing due checks exclude raw snapshots blocked on the current parser version; an upgraded parser makes them eligible again subject to the existing item delay. The Manage Recovery tab shows blocked raws and nonfatal upstream warnings separately from timed retries.
 
-Judgment due-work selection shares the worker's token-retry predicate: respect `llm.token_retry_delay_minutes`, dispatch only when a larger permitted budget remains, and do not launch solely for exhausted token-retry rows. Debug and CLI reports use the same eligibility rules (9.9).
+Judgment due-work selection shares the worker's token-retry predicate: respect `llm.token_retry_delay_minutes`, dispatch only when a larger permitted budget remains, and do not launch solely for exhausted token-retry rows. The Manage page and the CLI reports use the same eligibility rules (9.9).
 
 ## 12.11 Person collection requests
 

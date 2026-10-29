@@ -1,6 +1,6 @@
 <Shell Title="Manage" Stamp="@Stamp" Background="@Background" Blur="Model.Instance.Config.Backgrounds.BlurPx">
 <div class="management">
-<ManageNavigation Section="@Model.Section" Level="@RecoveryQuery.Level(Model.RecoverySummary)"/>
+<ManageNavigation Section="@Model.Section"/>
 @if(Message is not null){<p class="manage-notice" role="status">@Message</p>}
 @if(Error is not null){<p class="banner" role="alert">@Error</p>}
 @if(Model.Section == "overview") {
@@ -29,7 +29,7 @@ else if(Model.Section == "recovery") {
  <section class="manage-panel glass"><h1>Recovery</h1><RecoverySummary Issues="Model.RecoverySummary" Pending="Model.Pending" UpdatedAt="Model.UpdatedAt" Zone="Config.Zone"/><p>With JavaScript, the summary refreshes automatically; the details below stay still while you read. Refresh recovery to update them.</p><RecoveryDetails Issues="Model.Recovery" Zone="Config.Zone"/></section>
  <section class="manage-panel glass"><h2>Capture model recovery</h2><p>Mode: @Config.CaptureRecovery.Mode. At most @Config.CaptureRecovery.Batch captures per processing pass, with @Config.CaptureRecovery.MaxAttempts automatic attempts per capture. Model decisions must pass source-evidence validation.</p>
  @if(Model.RecoveryAttempts.Length == 0){<p>No model inspections recorded.</p>}
- @foreach(var a in Model.RecoveryAttempts){<article class="recovery-group"><p>Capture #@a.RawId · @a.State · validation: @a.Validation · @At(a.At)</p>@if(a.Error is not null){<p>@a.Error</p>}<a href="@($"/debug/capture-recovery/{a.Id}")">Inspect model decision and evidence</a></article>}
+ @foreach(var a in Model.RecoveryAttempts){<article class="recovery-group"><p>Capture #@a.RawId · @a.State · validation: @a.Validation · @At(a.At)</p>@if(a.Error is not null){<p>@a.Error</p>}<a href="@($"/manage/capture-recovery/{a.Id}")">Inspect model decision and evidence</a></article>}
  </section>
  <section class="manage-panel glass"><h2>Recently completed classification</h2><p>Latest successful classifications in the last 24 hours, including first attempts and retries. Successfully retried tasks leave the outstanding recovery list.</p>
  @if(Model.RecentCompletions.Length == 0){<p>No recent completed classifications.</p>}
@@ -44,7 +44,17 @@ else if(Model.Section == "recovery") {
  @if(visits.Length > 0){<p>@visits.Length recorded visits · @visits.Count(v => v.CaptureStatus == "incomplete") incomplete.</p><details><summary>Visit details for this run</summary><DataTable Rows="@(visits.Select(v => (object)new {v.Name, v.CaptureStatus, v.PostsFound, v.StopReason, v.Note}).ToArray())"/></details>}
  else{<p>No profile-visit coverage recorded for this run.</p>}
  </article>}
- <p>For older run IDs, consult <a href="/debug/log?file=cli">CLI logs</a>. <a href="/debug#coverage">Current coverage and retry status</a>.</p></section>
+ <p>For older run IDs, consult <a href="/manage/log?file=cli">CLI logs</a>. <a href="/manage?section=coverage">Current coverage and retry status</a>.</p></section>
+}
+else if(Model.Section == "coverage") {
+ <section class="manage-panel glass"><h1>Coverage</h1><p>One row per person on a feed list: when their timeline was last visited and last captured with a result. "Not checked recently" means the last success is older than the platform's sweep interval plus slack. People behind schedule come first; the scheduled sweep catches up on its own.</p>
+ @foreach(var group in Model.Coverage.GroupBy(c => c.Platform)){var rows = group.OrderByDescending(c => c.Incomplete).ThenByDescending(c => c.Stale).ThenBy(c => c.LastCapture ?? DateTime.MinValue).ToArray();
+  <h2><PlatformGlyph Platform="@group.Key"/> @Management.PlatformName(group.Key) · @rows.Count(c => c.Stale || c.Incomplete) of @rows.Length behind</h2>
+  <div class="manage-table-scroll"><table class="people-table coverage-table"><thead><tr><th>Person</th><th>State</th><th>Last success</th><th>Last attempt</th><th>Posts</th><th>Failures</th><th>Detail</th></tr></thead><tbody>
+  @foreach(var c in rows){<tr class="@(c.Incomplete ? "incomplete" : c.Stale ? "stale" : "")"><td>@if(c.Url is not null){<a href="@c.Url" rel="noreferrer">@c.Name</a>}else{@c.Name}</td><td>@(c.Incomplete ? "Last visit incomplete" : c.Stale ? "Not checked recently" : "Checked")</td><td>@At(c.LastCapture)</td><td>@At(c.LastAttempt)</td><td>@c.PostsFound</td><td>@c.Failures</td><td>@c.Status@(string.IsNullOrEmpty(c.Note) ? "" : " · " + c.Note)@(c.Incomplete || c.Stale ? " · " + c.Recovery : "")</td></tr>}
+  </tbody></table></div>}
+ @if(Model.Coverage.Length == 0){<p>No people on any enabled feed list yet.</p>}
+ </section>
 }
 else if(Model.Section == "people") {
  <section class="manage-panel glass"><h1>People</h1><p>These are local records, not a live check of friendship or following on the platforms. Close friends and mute settings affect this app only.</p>

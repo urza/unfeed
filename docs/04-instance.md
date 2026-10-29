@@ -49,7 +49,7 @@ Format rules:
 - Keys are `snake_case`. Key matching ignores case.
 - An unknown key at any level is a load error, never a silent no-op.
 - A missing file gives the defaults: every platform paused, the model off. A fresh clone runs.
-- A malformed file is a load error. The CLI exits with code 2 and prints the error. The web host keeps the last good file and shows the error on the debug page.
+- A malformed file is a load error. The CLI exits with code 2 and prints the error. The web host keeps the last good file and shows the error on the Manage page.
 - Validate shape, closed enum values and operation bounds: batch, parallel, sweep_limit, render_cap and coverage_stale_hours must be at least 1; retention/cooldown/size values and backgrounds.blur_px cannot be negative; numeric values must be finite; delay minimum cannot exceed maximum; threshold is 0 to 10; schedule slots must be valid HH:mm. Unknown timezone keeps the documented fallback but is reported by `rules`, so the owner can correct it before enabling schedules.
 
 The complete key list. Every key is optional. Defaults are in the table and are required when a key is absent. An owner may override configurable values. Implementation tuning does not silently change public defaults or introduce unrecognized configuration keys.
@@ -58,7 +58,7 @@ The complete key list. Every key is optional. Defaults are in the table and are 
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `timezone` | string | unset | IANA id such as `Europe/Prague`. One clock for scheduler slots, the browser fingerprint and the debug page. Unset or unknown means the process zone. The process zone can be wrong: a POSIX `TZ` string like `CEST-2` maps to UTC in .NET. Set this key. |
+| `timezone` | string | unset | IANA id such as `Europe/Prague`. One clock for scheduler slots, the browser fingerprint and the times on the Manage page. Unset or unknown means the process zone. The process zone can be wrong: a POSIX `TZ` string like `CEST-2` maps to UTC in .NET. Set this key. |
 | `platforms` | map | `{}` | one block per platform key. A platform absent from the map is paused. |
 | `llm` | object | | the model, see below |
 | `filters` | object | | deterministic owner choices, see below |
@@ -319,7 +319,7 @@ The policy hash (chapter 9) covers the policy lines, the show lines and the lear
 
 ## 4.5 Reload
 
-The web host checks for changes before each request and each scheduler tick, including while scheduling is disabled. When any of the three files changes, load and validate the complete set, then atomically publish one immutable snapshot. Each request or tick uses one snapshot throughout; concurrent readers never see a partially published reload. Changes therefore take effect without a page visit or restart. A load error keeps the last good set and shows on the debug page. At start there is no last good set, so a malformed file stops the host with the error. The web host, port and log level are read once at start. A CLI process reads the files once at start.
+The web host checks for changes before each request and each scheduler tick, including while scheduling is disabled. When any of the three files changes, load and validate the complete set, then atomically publish one immutable snapshot. Each request or tick uses one snapshot throughout; concurrent readers never see a partially published reload. Changes therefore take effect without a page visit or restart. A load error keeps the last good set and shows on the Manage page. At start there is no last good set, so a malformed file stops the host with the error. The web host, port and log level are read once at start. A CLI process reads the files once at start.
 
 **Current implementation.** `InstanceFiles` reads the three texts and hashes their combined content, reusing the parsed snapshot when unchanged. The contract does not require this particular change-detection mechanism. Change detection must catch replacements/edits and reconcile missed notifications, then publish only a fully validated snapshot. A long-running CLI keeps its startup snapshot; chapter 12 documents cancellation and restart so applying an edit never requires waiting for an entire processing backlog.
 
