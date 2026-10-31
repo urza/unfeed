@@ -3358,12 +3358,12 @@ Some prose the human wrote.
 <tbody>
 <tr>
 <td>the control, any state</td>
-<td><code>like</code>, <code>like post</code>, <code>remove like</code>, <code>remove love</code>, <code>remove care</code>, <code>remove haha</code>, <code>remove wow</code>, <code>remove sad</code>, <code>remove angry</code></td>
+<td><code>react with like to &lt;author&gt;'s post</code>, <code>remove &lt;reaction&gt; from &lt;author&gt;'s post</code>; older layouts: <code>like</code>, <code>like post</code>, <code>remove like</code>, <code>remove love</code>, <code>remove care</code>, <code>remove haha</code>, <code>remove wow</code>, <code>remove sad</code>, <code>remove angry</code></td>
 <td><code>like</code>, <code>like post</code>, <code>unlike</code>, <code>remove like</code>, <code>unlike post</code></td>
 </tr>
 <tr>
 <td>done</td>
-<td><code>remove love</code></td>
+<td><code>remove love from &lt;author&gt;'s post</code>; older layouts: <code>remove love</code></td>
 <td><code>unlike</code>, <code>remove like</code>, <code>unlike post</code></td>
 </tr>
 <tr>
@@ -3373,12 +3373,12 @@ Some prose the human wrote.
 </tr>
 <tr>
 <td>the press</td>
-<td>hover the control, wait up to 4 seconds for the picker option named <code>love</code>, click it</td>
+<td>hover the control and wait up to 4 seconds for the picker option named <code>love</code>; when it does not appear, press the unique visible picker opener <code>react to &lt;author&gt;'s post</code> in the control's own dialog and wait again; click <code>love</code></td>
 <td>click the control</td>
 </tr>
 </tbody>
 </table>
-<p>On Facebook the heart is the Love reaction, one level down in the picker that opens on hover. A thumbs-up or any other reaction already on the post counts as likeable and is switched: the owner's heart is the newest word. On Instagram the like is the heart. On a photo post every comment has a 16 px heart with the same name, and they come before the post's own 24 px control in the page, so the size filter is what keeps a stranger's comment safe. Any remaining ambiguity fails without clicking; DOM order alone is not proof of the requested post's control.</p>
+<p>On Facebook the heart is the Love reaction, one level down in the picker. Around 2026-10-30 Facebook renamed the post control from <code>Like</code> to <code>React with Like to &lt;author&gt;'s post</code> and added a separate picker opener <code>React to &lt;author&gt;'s post</code> beside it; every heart failed with <code>like button not found</code> until the names above were extended. Comment controls kept the short <code>Like</code>, so the scope rules below still separate them. The picker opener shows the picker and reacts to nothing, so pressing it is not the platform write. The reacted-state name <code>Remove &lt;reaction&gt; from &lt;author&gt;'s post</code> follows the same pattern and is confirmed by the live heart of the go-live checklist. A thumbs-up or any other reaction already on the post counts as likeable and is switched: the owner's heart is the newest word. On Instagram the like is the heart. On a photo post every comment has a 16 px heart with the same name, and they come before the post's own 24 px control in the page, so the size filter is what keeps a stranger's comment safe. Any remaining ambiguity fails without clicking; DOM order alone is not proof of the requested post's control.</p>
 <p>Facebook permalink navigation may retain an unrelated feed behind nested post dialogs. The sender verifies that the current URL identifies the requested post and requires a matching post link in the candidate control's nearest dialog. Tracking query parameters and fragments are ignored for <code>/posts/&lt;id&gt;</code> links; <code>story_fbid</code> identifies posts in <code>permalink.php</code> and <code>story.php</code> links. Links inside named article containers (comments/replies) or nested dialogs cannot establish ownership of the surrounding dialog. Controls inside named articles and controls containing a 16 px SVG are excluded. More than one remaining control fails even if their reaction states differ; the same scope is used to confirm Love. There is no fallback to a unique background control while the dialog is loading.</p>
 <p>Instagram navigation must retain the requested shortcode on an Instagram host; <code>/p/</code>, <code>/reel/</code> and <code>/reels/</code> paths are recognized. Reel pages can pre-render many offscreen reels whose controls Playwright still considers visible. A candidate's entire bounding box must fit inside the viewport and a hit test at its center must reach that control or a descendant. The sender never scrolls to resolve those prefetched hearts. Uniqueness includes both actionable and done states, so a second eligible Unlike control cannot silently confirm a different reel. The same scope confirms the reaction after clicking.</p>
 <p><strong>Observed navigation limitation:</strong> the Instagram reel viewer can redirect a stored reel permalink to a different shortcode. Redirects are followed normally, but the sender rejects that target for both clicking and confirmation. Manual read-only verification can try <code>/p/&lt;original-shortcode&gt;/</code>; confirm the final shortcode and the original post's own Unlike control without another click. This alternate URL format has worked in live inspection, but is not a guaranteed platform contract or an automatic sender fallback. The sender still navigates to the stored permalink. See the <a href="RUNBOOK.md#editing-and-repairing">runbook</a> for the verification procedure. A redirect alone does not establish that liking caused it.</p>

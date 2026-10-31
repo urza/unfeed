@@ -84,6 +84,37 @@ public sealed class FacebookHeartTests
     }
 
     [Fact, Trait("Category", "Browser")]
+    public async Task RenamedPostControlIsFoundAndThePickerOpenerIsUsedWhenHoverDoesNotShowLove()
+    {
+        // Shape taken from the 2026-10-31 live DOM: the post control is "React with Like to <Author>'s post",
+        // a sibling "React to <Author>'s post" (16 px icon) opens the picker, comments keep the short "Like".
+        using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true }); var page = await browser.NewPageAsync();
+        await page.RouteAsync("https://www.facebook.com/**", r => r.FulfillAsync(new() { ContentType = "text/html", Body = "<main></main>" }));
+        await page.GotoAsync(Target);
+        await page.SetContentAsync("""
+            <button aria-label="React with Like to Other Person's post" id="background">Background feed</button>
+            <div role="dialog"><div role="dialog" id="dialog">
+              <a href="/synthetic/posts/101?__cft__[0]=x">Synthetic timestamp</a>
+              <div role="article" aria-label="Comment by Synthetic Person">
+                <button aria-label="Like" id="comment"><svg width="16"></svg></button>
+              </div>
+              <button aria-label="React with Like to Synthetic Author's post" id="post">40</button>
+              <button aria-label="React to Synthetic Author's post" id="opener" onclick="document.getElementById('picker').hidden=false"><svg width="16"></svg></button>
+              <div id="picker" hidden><button aria-label="Love" id="love" onclick="document.getElementById('post').setAttribute('aria-label','Remove Love from Synthetic Author\'s post')">Love</button></div>
+              <button aria-label="React with Like to Synthetic Author's post" id="hidden-copy" style="display:none">40</button>
+            </div></div>
+            """);
+        Assert.Null(await Site.Heart(page, "facebook", true, Target));
+        var control = await Site.Heart(page, "facebook", false, Target);
+        Assert.Equal("post", await control!.GetAttributeAsync("id"));
+        var love = await Site.FacebookLoveOption(page, control);
+        Assert.Equal("love", await love.GetAttributeAsync("id"));
+        await love.ClickAsync(); // Synthetic fixture only; verifies the renamed done state.
+        Assert.Equal("post", await (await Site.Heart(page, "facebook", true, Target))!.GetAttributeAsync("id"));
+        Assert.Equal("Like", await page.Locator("#comment").GetAttributeAsync("aria-label"));
+    }
+
+    [Fact, Trait("Category", "Browser")]
     public async Task MultipleScopedControlsRemainAmbiguousIncludingMixedReactionStates()
     {
         using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true }); var page = await browser.NewPageAsync();

@@ -108,11 +108,35 @@ public static class Site
         var match = Regex.Match(uri.AbsolutePath, @"^/(?:p|reels?)/([A-Za-z0-9_-]+)/?$");
         return match.Success ? match.Groups[1].Value : null;
     }
+    /// <summary>
+    /// Opens the Facebook reaction picker for the approved post control and returns the single option named Love.
+    /// The hover on the control used to open the picker. Since the 2026-10-30 markup a separate button named
+    /// "React to &lt;Author&gt;'s post" next to the control opens it; that button only shows the picker and reacts to
+    /// nothing, so pressing it is not the platform write. Only the opener inside the control's own dialog is used.
+    /// </summary>
+    public static async Task<ILocator> FacebookLoveOption(IPage page, ILocator control)
+    {
+        await control.HoverAsync(new() { Timeout = 5000 });
+        var love = page.GetByRole(AriaRole.Button, new() { Name = "Love", Exact = true });
+        try { await love.WaitForAsync(new() { Timeout = 4000 }); }
+        catch (TimeoutException)
+        {
+            var opener = control.Locator("xpath=ancestor::*[@role='dialog'][1]").GetByRole(AriaRole.Button, new() { NameRegex = new Regex("^react to .+'s post$", RegexOptions.IgnoreCase) }).Locator("visible=true");
+            if (await opener.CountAsync() != 1) throw new IOException("reaction picker did not open and no unique picker opener was found");
+            await opener.ClickAsync(new() { Timeout = 5000 });
+            await love.WaitForAsync(new() { Timeout = 4000 });
+        }
+        if (await love.CountAsync() != 1) throw new IOException("ambiguous Love control");
+        return love;
+    }
     public static async Task<ILocator?> Heart(IPage page, string platform, bool done, string? permalink = null)
     {
         var expected = platform == "facebook" ? FacebookPostKey(permalink) : InstagramPostKey(permalink);
         if (expected is null || (platform == "facebook" ? FacebookPostKey(page.Url) : InstagramPostKey(page.Url)) != expected) return null;
-        var names = platform == "facebook" ? "^(like|like post|remove like|remove love|remove care|remove haha|remove wow|remove sad|remove angry)$" : "^(like|like post|unlike|remove like|unlike post)$";
+        // Facebook renamed the post control around 2026-10-30: "Like" became "React with Like to <Author>'s post",
+        // and the reacted state is expected as "Remove <Reaction> from <Author>'s post". The old short names stay
+        // for layouts that still use them. Comment controls keep the short "Like" and are excluded by scope below.
+        var names = platform == "facebook" ? "^(like|like post|remove (like|love|care|haha|wow|sad|angry)|react with like to .+'s post|remove (like|love|care|haha|wow|sad|angry) from .+'s post)$" : "^(like|like post|unlike|remove like|unlike post)$";
         // Take the candidate nodes as one snapshot of element handles. A lazy index locator (Nth) is
         // resolved again at hover/click time, so a comment heart inserted by late hydration could take
         // the approved index after every check below had passed. Handles stay bound to their nodes.
@@ -165,7 +189,7 @@ public static class Site
         var pinned = page.Locator($"[data-feed-target='{marker}']");
         if (done || platform == "instagram")
         {
-            var desired = platform == "facebook" ? "^remove love$" : done ? "^(unlike|remove like|unlike post)$" : "^(like|like post)$";
+            var desired = platform == "facebook" ? "^(remove love|remove love from .+'s post)$" : done ? "^(unlike|remove like|unlike post)$" : "^(like|like post)$";
             if (await pinned.And(page.GetByRole(AriaRole.Button, new() { NameRegex = new Regex(desired, RegexOptions.IgnoreCase) })).CountAsync() == 0) return null;
         }
         return pinned;

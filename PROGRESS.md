@@ -138,3 +138,7 @@ In progress: add preview and permanent hidden-post/media cleanup in Manage and C
 ## Download reset
 
 Implemented a confirmed reset for both platforms with optional post deletion; preserves instance configuration, people, profiles and backgrounds. Coordinates collection/processing ownership and clears capture/sweep state. All 367 non-browser tests pass; focused reset checks and both JavaScript-enabled/disabled management browser checks pass. Reviewed desktop and phone readability against a bright busy background. Web build passes and combined specification is regenerated. Synthetic verification does not establish live platform compatibility.
+
+## Facebook like-back after the 2026-10-30 rename
+
+Facebook renamed the post reaction control from `Like` to `React with Like to <author>'s post` and added a separate picker opener `React to <author>'s post`. Every Facebook heart from 2026-10-30 failed with `like button not found`; Instagram was unaffected. Extended the accessible-name contract, added the opener fallback for the Love picker, and a fixture test built from the saved live DOM. All 385 non-browser tests and 5 Facebook heart browser tests pass. One deliberate live heart on an owner-pressed post was sent and confirmed as `Remove Love from <author>'s post`, which verifies the reacted-state name. Read-only inspection evidence stays private under the instance diagnostics.
