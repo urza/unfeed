@@ -102,4 +102,34 @@ public sealed class ManagementBrowserTests
             await page.SetViewportSizeAsync(1280,900);await page.GotoAsync(url+"/manage");await page.ScreenshotAsync(new(){Path=$"/tmp/feed-manage-overview-{javascript}.png"});
         } finally {if(!server.HasExited)server.Kill(true);await server.WaitForExitAsync();await stdout;await stderr;}
     }
+
+    // A saved capture that the current parser cannot read is a Compatibility row: the overview panel must
+    // say it waits for a parser update instead of folding it into "no action needed".
+    [Fact, Trait("Category","Browser")]
+    public async Task OverviewPanelNamesCompatibilityRowsAsWaitingForParserUpdate()
+    {
+        await using var instance=new TestInstance();await instance.Init();
+        await File.WriteAllTextAsync(instance.Paths.Get("config.json"),"""{"timezone":"UTC","platforms":{"facebook":{},"instagram":{}},"scheduler":{"enabled":false},"backgrounds":{"source":"off"}}""");
+        await using(var db=instance.Factory.Open()) {
+            db.Runs.Add(new Run { Id=1,Kind="collect",Platform="facebook",Status="ok",FinishedAt=Clock.Now });
+            var raw=new RawSnapshot { Platform="facebook",RunId=1,Path="raw/synthetic-blocked.json",Error="unknown",CapturedAt=Clock.Now,BlockedParserVersion=PayloadParser.Version };
+            db.RawSnapshots.Add(raw);await db.SaveChangesAsync();
+            db.Add(new RawDiagnostic { RawSnapshotId=raw.Id,Code="unknown",Fingerprint="synthetic-blocked",Impact="content",ParserVersion=PayloadParser.Version });await db.SaveChangesAsync();
+        }
+        var listener=new TcpListener(IPAddress.Loopback,0);listener.Start();var port=((IPEndPoint)listener.LocalEndpoint).Port;listener.Stop();
+        var root=new DirectoryInfo(AppContext.BaseDirectory);while(root is not null&&!File.Exists(Path.Combine(root.FullName,"Feed.slnx")))root=root.Parent;
+        var start=new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")??"dotnet") {WorkingDirectory=root!.FullName,UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true};
+        foreach(var arg in new[]{Path.Combine(root.FullName,"src/Feed.Web/bin/Debug/net10.0/Feed.Web.dll"),"--data",instance.Paths.Root,"--urls",$"http://127.0.0.1:{port}"})start.ArgumentList.Add(arg);
+        start.Environment["FEED_CLI"]=instance.Paths.Get("missing-cli");
+        using var server=Process.Start(start)!;var stdout=server.StandardOutput.ReadToEndAsync();var stderr=server.StandardError.ReadToEndAsync();
+        try {
+            var url=$"http://127.0.0.1:{port}";using var http=new HttpClient();using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            while(true){if(server.HasExited)throw new InvalidOperationException("Web host exited: "+await stderr);try{if((await http.GetAsync(url+"/healthz",timeout.Token)).IsSuccessStatusCode)break;}catch(HttpRequestException){}await Task.Delay(100,timeout.Token);}
+            using var pw=await Playwright.CreateAsync();await using var browser=await pw.Chromium.LaunchAsync(new(){Headless=true});var page=await browser.NewPageAsync();
+            await page.GotoAsync(url+"/manage");
+            var panel=page.Locator(".attention-panel.notice");Assert.Equal(1,await panel.CountAsync());
+            var text=await panel.InnerTextAsync();Console.WriteLine("Catching up panel:\n"+text);
+            Assert.True(text.Contains("parser update"),"Panel text was:\n"+text);
+        } finally {if(!server.HasExited)server.Kill(true);await server.WaitForExitAsync();await stdout;await stderr;}
+    }
 }

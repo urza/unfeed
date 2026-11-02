@@ -1,16 +1,22 @@
 @* The feed's Manage dot links here, so the overview must say what the dot means before anything else.
-   Red items are listed in full; yellow ones get one line, because the scheduler clears them on its own. *@
+   Red items are listed in full. Yellow items are split by disposition, because only "automatic" rows clear
+   on their own: a paused row waits for a config change and a compatibility row waits for a parser update,
+   so one "no action needed" line for all three sent the owner away from work that was theirs. *@
 @if(Relogin.Length > 0 || Attention.Length > 0){
  <section class="manage-panel glass attention-panel alert" aria-label="Needs your attention"><h2>Needs your attention</h2>
   @foreach(var p in Relogin){<p><strong>@Management.PlatformName(p.Platform) login expired.</strong> Collection stops until you log in again below.</p>}
   @if(Attention.Length > 0){<p><strong>@Attention.Length @(Attention.Length == 1 ? "issue group or task needs" : "issue groups or tasks need") your attention.</strong></p>
-   <ul>@foreach(var i in Attention.Take(8)){<li><PlatformGlyph Platform="@i.Platform"/> @i.Item · @i.Problem<br/><span class="muted">@i.Recovery@(i.LastAttempt is { } at ? " · last attempt " + RecoveryPresentation.At(at, Zone) : "")</span></li>}</ul>
-   @if(Attention.Length > 8){<p class="muted">@(Attention.Length - 8) more on the recovery page.</p>}
+   @Rows(Attention)
    <a href="/manage?section=recovery">Open recovery</a>}
  </section>}
-else if(Notices > 0 || Pending > 0){
- <section class="manage-panel glass attention-panel notice" aria-label="Catching up"><h2>Catching up, no action needed</h2>
-  <p>@(Pending > 0 ? $"{Pending} posts wait for the model. " : "")@(Notices > 0 ? $"{Notices} capture issue groups or model tasks retry automatically. " : "")People whose timeline is behind schedule are listed under <a href="/manage?section=coverage">Coverage</a>.</p>
+else if(Notices.Length > 0 || Pending > 0){
+ <section class="manage-panel glass attention-panel notice" aria-label="Catching up"><h2>@(Paused.Length + Compatibility.Length > 0 ? "Catching up, some items wait for you" : "Catching up, no action needed")</h2>
+  @if(Pending > 0){<p>@Pending @(Pending == 1 ? "post waits" : "posts wait") for the model. The scheduler processes them in order.</p>}
+  @if(Automatic.Length > 0){<p><strong>@Automatic.Length @(Automatic.Length == 1 ? "item retries" : "items retry") automatically.</strong> @NextRetry</p>@Rows(Automatic)}
+  @if(Paused.Length > 0){<p><strong>@Paused.Length @(Paused.Length == 1 ? "item waits" : "items wait") because recovery is paused.</strong> Nothing retries until you enable the disabled part in the config.</p>@Rows(Paused)}
+  @if(Compatibility.Length > 0){<p><strong>@Compatibility.Length saved @(Compatibility.Length == 1 ? "capture needs" : "captures need") a parser update.</strong> The raw file stays until then, and you can reparse it from the recovery page.</p>@Rows(Compatibility)}
+  <p class="muted">People whose timeline is behind schedule are listed under <a href="/manage?section=coverage">Coverage</a>.</p>
+  @if(Notices.Length > 0){<a href="/manage?section=recovery">Open recovery</a>}
  </section>}
 @code {
  [Parameter] public RecoveryIssue[] Issues { get; set; } = [];
@@ -18,6 +24,22 @@ else if(Notices > 0 || Pending > 0){
  [Parameter] public int Pending { get; set; }
  [Parameter] public TimeZoneInfo Zone { get; set; } = TimeZoneInfo.Utc;
  PlatformState[] Relogin => States.Where(s => s.NeedsRelogin).ToArray();
- RecoveryIssue[] Attention => Issues.Where(i => i.Disposition == RecoveryDisposition.Attention).ToArray();
- int Notices => Issues.Count(i => i.Disposition is RecoveryDisposition.Automatic or RecoveryDisposition.Paused or RecoveryDisposition.Compatibility);
+ RecoveryIssue[] Attention => Of(RecoveryDisposition.Attention);
+ RecoveryIssue[] Automatic => Of(RecoveryDisposition.Automatic);
+ RecoveryIssue[] Paused => Of(RecoveryDisposition.Paused);
+ RecoveryIssue[] Compatibility => Of(RecoveryDisposition.Compatibility);
+ RecoveryIssue[] Notices => Issues.Where(i => i.Disposition is RecoveryDisposition.Automatic or RecoveryDisposition.Paused or RecoveryDisposition.Compatibility).ToArray();
+ RecoveryIssue[] Of(RecoveryDisposition d) => Issues.Where(i => i.Disposition == d).ToArray();
+ // The earliest retry time among the automatic rows. A row without one, or one already in the past, is due
+ // at the next scheduler pass, which the panel cannot predict beyond "soon".
+ string NextRetry { get {
+  var due = Automatic.Select(i => i.RetryAfter).ToArray();
+  if(due.Any(d => d is null || d <= Clock.Now)) return "The next attempt runs at the next scheduler pass.";
+  return $"The next attempt is eligible {Management.RelativeTime(due.Min()!.Value, Clock.Now)}, at {RecoveryPresentation.At(due.Min()!.Value, Zone)}.";
+ } }
+ // One list shape for every disposition: item, problem, then the recovery text and the last attempt in grey.
+ RenderFragment Rows(RecoveryIssue[] items) => @<text>
+   <ul>@foreach(var i in items.Take(8)){<li><PlatformGlyph Platform="@i.Platform"/> @i.Item · @i.Problem<br/><span class="muted">@RecoveryPresentation.Timing(i, Clock.Now)@(i.LastAttempt is { } at ? " · last attempt " + RecoveryPresentation.At(at, Zone) : "")</span></li>}</ul>
+   @if(items.Length > 8){<p class="muted">@(items.Length - 8) more on the recovery page.</p>}
+  </text>;
 }
