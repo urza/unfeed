@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 using Feed.Core.Domain;
 using Feed.Core.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -7,6 +9,39 @@ namespace Feed.Core.Application;
 public sealed record MediaTurn(int Selected, int Completed, int Failed);
 public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClient http)
 {
+    // Images are fetched at ingest, but a network, CDN or proxy outage must not lose the slot for good. The failed row keeps
+    // its retry state and this pass completes it with the video rules: 30 minutes between attempts, pruned after three failures.
+    public async Task<MediaTurn> Images(string[] platforms, int? limit, CancellationToken ct)
+    {
+        int completed = 0, failed = 0; await using var db = factory.Open(); var retry = Clock.Now.AddMinutes(-30); var files = new MediaFiles(paths, http);
+        var rows = await db.Media.Where(m => m.Kind == "image" && m.IsCurrent && m.Path == null && m.PrunedAt == null && (m.AttemptedAt == null || m.AttemptedAt <= retry)).Join(db.Posts.Where(p => platforms.Contains(p.Platform)), m => m.PostId, p => p.Id, (m, p) => new { Media = m, Post = p }).OrderBy(x => x.Media.AttemptedAt ?? x.Media.CreatedAt).ThenBy(x => x.Media.Id).Take(limit ?? int.MaxValue).ToListAsync(ct);
+        foreach (var item in rows)
+        {
+            var m = item.Media; var p = item.Post;
+            m.AttemptedAt = Clock.Now; m.DownloadAttempts++; await db.SaveChangesAsync(ct);
+            // Same file name ingest would have chosen: a retired row at this slot forces the keyed suffix.
+            var shared = await db.Media.AnyAsync(x => x.PostId == p.Id && x.Position == m.Position && x.Id != m.Id, ct);
+            var rel = $"media/{p.Platform}/{Identity.Safe(p.PlatformPostId)}/{m.Position:00}{(shared ? "-" + MediaFiles.Hash(Encoding.UTF8.GetBytes(m.SourceKey))[..12] : "")}{MediaFiles.Extension(m.OriginalUrl ?? "")}";
+            var result = m.OriginalUrl is null ? (null, null, null, "no source url") : await files.Image(rel, m.OriginalUrl, false, false, ct);
+            await db.Entry(m).ReloadAsync(ct); await db.Entry(p).ReloadAsync(ct);
+            if (!m.IsCurrent || m.Path is not null) continue; // a concurrent ingest settled the slot meanwhile
+            if (result.Path is null)
+            {
+                failed++; m.Error = result.Error;
+                if (result.Error == MediaFiles.Glyph) db.Remove(m); else if (m.DownloadAttempts >= 3) m.PrunedAt = Clock.Now;
+            }
+            else
+            {
+                m.Path = result.Path; m.ContentHash = result.Hash; m.Width = result.Info?.Width; m.Height = result.Info?.Height; m.Error = null; completed++;
+                // The judge reads pictures, so a late file is new content for the model.
+                MediaSource[] manifest; try { manifest = JsonSerializer.Deserialize<MediaSource[]>(p.MediaManifestJson) ?? []; } catch (JsonException) { manifest = []; }
+                var hash = Ingest.ContentHash(p, manifest, await db.Media.Where(x => x.PostId == p.Id).ToListAsync(ct));
+                if (hash != p.ContentHash) { p.ContentRevision++; Ingest.InvalidateModel(p); p.ContentHash = hash; }
+            }
+            await db.SaveChangesAsync(ct);
+        }
+        return new(rows.Count, completed, failed);
+    }
     public async Task<MediaTurn> Videos(InstanceSnapshot s, string[] platforms, int? limit, CancellationToken ct)
     {
         int completed = 0, failed = 0; await using var db = factory.Open(); var retry = Clock.Now.AddMinutes(-30);

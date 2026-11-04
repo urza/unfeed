@@ -73,4 +73,28 @@ public sealed class MediaTests
         using var http=new HttpClient(new NoNetwork());var turn=await new Maintenance(i.Paths,i.Factory,http).Videos(new(new(),new(),Preferences.Parse("")),["facebook"],1,default);Assert.Equal(1,turn.Completed);Assert.Equal(0,turn.Failed);await using var check=i.Factory.Open();var row=await check.Media.SingleAsync();Assert.EndsWith("01.webm",row.Path);Assert.NotNull(row.ContentHash);
     }
     sealed class NoNetwork:HttpMessageHandler{protected override Task<HttpResponseMessage>SendAsync(HttpRequestMessage r,CancellationToken ct)=>throw new InvalidOperationException("Recovery must not fetch an already published video");}
+    sealed class FlakyHandler(byte[] bytes):HttpMessageHandler{public bool Fail=true;public int Calls;protected override Task<HttpResponseMessage>SendAsync(HttpRequestMessage r,CancellationToken ct){Interlocked.Increment(ref Calls);if(Fail)throw new HttpRequestException("proxy tunnel 502");return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new ByteArrayContent(bytes)});}}
+    static InstanceSnapshot Instagram()=>new(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("instagram",new())},new(),Preferences.Parse(""));
+    static string InstagramRaw(TestInstance i){var file=i.Paths.Get("raw","instagram","20260101T000000","001.json");Directory.CreateDirectory(Path.GetDirectoryName(file)!);File.WriteAllText(file,"""{"items":[{"pk":"101","code":"synthetic","user":{"pk":"501","username":"synthetic.person"},"caption":{"text":"Synthetic caption"},"image_versions2":{"candidates":[{"url":"https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=one&oh=1&oe=1","width":640}]}}]}""");return file;}
+    [Fact]public async Task FailedImageDownloadKeepsRetryStateAndProcessingCompletesIt()
+    {
+        await using var i=new TestInstance();await i.Init();using var handler=new FlakyHandler(Png(640,480));using var http=new HttpClient(handler);var ingest=new Ingest(i.Paths,i.Factory,new(i.Paths,http));var maintenance=new Maintenance(i.Paths,i.Factory,http);
+        Assert.Equal(1,(await ingest.File("instagram",InstagramRaw(i),Instagram(),false,default)).New);
+        string? hash;int revision;
+        await using(var db=i.Factory.Open()){var post=await db.Posts.SingleAsync();hash=post.ContentHash;revision=post.ContentRevision;Assert.NotNull(post.IngestReadyAt);var row=await db.Media.SingleAsync();Assert.Null(row.Path);Assert.Null(row.PrunedAt);Assert.Equal(1,row.DownloadAttempts);Assert.Contains("502",row.Error);}
+        Assert.Equal(0,(await maintenance.Images(["instagram"],null,default)).Selected);
+        await using(var db=i.Factory.Open())await db.Media.ExecuteUpdateAsync(u=>u.SetProperty(m=>m.AttemptedAt,Clock.Now.AddMinutes(-31)));
+        handler.Fail=false;Assert.Equal(new MediaTurn(1,1,0),await maintenance.Images(["instagram"],null,default));
+        await using(var check=i.Factory.Open()){var post=await check.Posts.SingleAsync();var row=await check.Media.SingleAsync();Assert.EndsWith("/01.jpg",row.Path);Assert.True(File.Exists(i.Paths.Get(row.Path!)));Assert.Equal(640,row.Width);Assert.Null(row.Error);Assert.Equal(2,row.DownloadAttempts);
+            Assert.Equal(revision+1,post.ContentRevision);Assert.NotEqual(hash,post.ContentHash);Assert.Null(post.LlmAttemptedAt);Assert.Equal(Ingest.ContentHash(post,System.Text.Json.JsonSerializer.Deserialize<MediaSource[]>(post.MediaManifestJson)!,[row]),post.ContentHash);}
+        Assert.Equal(2,handler.Calls);
+    }
+    [Fact]public async Task ImageRetryStopsAfterThreeFailures()
+    {
+        await using var i=new TestInstance();await i.Init();using var handler=new FlakyHandler(Png(640,480));using var http=new HttpClient(handler);var ingest=new Ingest(i.Paths,i.Factory,new(i.Paths,http));var maintenance=new Maintenance(i.Paths,i.Factory,http);
+        await ingest.File("instagram",InstagramRaw(i),Instagram(),false,default);int revision;await using(var db=i.Factory.Open())revision=(await db.Posts.SingleAsync()).ContentRevision;
+        for(var attempt=2;attempt<=3;attempt++){await using(var db=i.Factory.Open())await db.Media.ExecuteUpdateAsync(u=>u.SetProperty(m=>m.AttemptedAt,Clock.Now.AddMinutes(-31)));Assert.Equal(new MediaTurn(1,0,1),await maintenance.Images(["instagram"],null,default));}
+        await using var check=i.Factory.Open();var row=await check.Media.SingleAsync();Assert.Equal(3,row.DownloadAttempts);Assert.NotNull(row.PrunedAt);Assert.Contains("502",row.Error);Assert.Equal(revision,(await check.Posts.SingleAsync()).ContentRevision);
+        Assert.Equal(new MediaTurn(0,0,0),await maintenance.Images(["instagram"],null,default));
+    }
 }

@@ -33,6 +33,8 @@ public static class ImageHeaders
 }
 public sealed class MediaFiles(InstancePaths paths, HttpClient http)
 {
+    // The one download failure that is a verdict on the file, not on the network. Ingest and the retry pass treat it as final.
+    public const string Glyph = "glyph below 64px";
     public static string Hash(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
     public async Task<(string? Path, string? Hash, ImageInfo? Info, string? Error)> Image(string relative, string url, bool offline, bool avatar, CancellationToken ct)
     {
@@ -51,7 +53,7 @@ public sealed class MediaFiles(InstancePaths paths, HttpClient http)
                 await Task.Delay(Random.Shared.Next(500, 1501), ct);
             }
             var bytes = await File.ReadAllBytesAsync(full, ct); var info = ImageHeaders.Read(bytes);
-            if (!avatar && info is { Width: < 64, Height: < 64 }) { File.Delete(full); return (null, null, null, "glyph below 64px"); }
+            if (!avatar && info is { Width: < 64, Height: < 64 }) { File.Delete(full); return (null, null, null, Glyph); }
             return (relative, Hash(bytes), info, null);
         }
         catch (Exception e) when (e is HttpRequestException or IOException or TaskCanceledException) { if (ct.IsCancellationRequested) throw; return (null, null, null, e.Message); }

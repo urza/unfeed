@@ -28,7 +28,7 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
         var counts = new WorkCounts();
         await using var reporting = new WorkReporter(counts, report);
         string[] platforms = scope.Platform == "all" ? Platforms.All.Where(instance.Config.Enabled).ToArray() : [scope.Platform];
-        foreach (var platform in platforms) foreach (var task in new[] { "raw", "judge", "summary", "video" }) counts.Stage(platform, task);
+        foreach (var platform in platforms) foreach (var task in new[] { "raw", "judge", "summary", "image", "video" }) counts.Stage(platform, task);
         using var recoveryProgress = new SemaphoreSlim(0);
         using var recoveryCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
         async Task Recover()
@@ -73,7 +73,10 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                 foreach (var platform in platforms)
                 {
                     if (admitted >= (scope.Limit ?? int.MaxValue)) return;
-                    var n = await maintenance.Videos(instance, [platform], Math.Min(instance.Config.Llm.Batch, (scope.Limit ?? int.MaxValue) - admitted), recoveryCancellation.Token); admitted += n.Selected; found |= n.Selected > 0; var stage = counts.Stage(platform, "video"); Interlocked.Add(ref stage.Selected, n.Selected); Interlocked.Add(ref stage.Completed, n.Completed); Interlocked.Add(ref stage.Failed, n.Failed); Interlocked.Add(ref counts.Failed, n.Failed);
+                    void Count(string task, MediaTurn n) { admitted += n.Selected; found |= n.Selected > 0; var stage = counts.Stage(platform, task); Interlocked.Add(ref stage.Selected, n.Selected); Interlocked.Add(ref stage.Completed, n.Completed); Interlocked.Add(ref stage.Failed, n.Failed); Interlocked.Add(ref counts.Failed, n.Failed); }
+                    Count("image", await maintenance.Images([platform], Math.Min(instance.Config.Llm.Batch, (scope.Limit ?? int.MaxValue) - admitted), recoveryCancellation.Token));
+                    if (admitted >= (scope.Limit ?? int.MaxValue)) return;
+                    Count("video", await maintenance.Videos(instance, [platform], Math.Min(instance.Config.Llm.Batch, (scope.Limit ?? int.MaxValue) - admitted), recoveryCancellation.Token));
                 }
                 if (!found) { if (Volatile.Read(ref modelFinished) && recovery.IsCompleted) break; await Task.Delay(200, recoveryCancellation.Token); }
             }
@@ -275,6 +278,7 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
             counts.Stage(platform, "judge").Remaining = await db.Posts.CountAsync(p => p.Platform == platform && (!p.Hidden || p.HiddenBy == "llm") && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision || p.LlmTokenLimit != null), ct);
             counts.Stage(platform, "summary").Remaining = await db.Posts.CountAsync(p => p.Platform == platform && !p.Hidden && (p.Summary == null || p.SummaryContentRevision != p.ContentRevision), ct);
             counts.Stage(platform, "raw").Remaining = await db.RawSnapshots.CountAsync(r => r.Platform == platform && !r.Deleted && !r.Parsed, ct);
+            counts.Stage(platform, "image").Remaining = await db.Media.Join(db.Posts.Where(p => p.Platform == platform), m => m.PostId, p => p.Id, (m, p) => m).CountAsync(m => m.IsCurrent && m.Kind == "image" && m.Path == null && m.PrunedAt == null, ct);
             counts.Stage(platform, "video").Remaining = await db.Media.Join(db.Posts.Where(p => p.Platform == platform), m => m.PostId, p => p.Id, (m, p) => m).CountAsync(m => m.IsCurrent && m.Kind == "video" && m.Path == null && m.PrunedAt == null, ct);
         }
         }

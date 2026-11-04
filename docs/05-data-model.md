@@ -110,7 +110,7 @@ Visibility updates have two shared semantics, named `SetHidden(owner, reason)` a
 | Position | integer | the slot number, from 1. It equals the number in the file name. |
 | SourceKey, ContentHash | text, text? | stable adapter media identity and SHA-256 of downloaded bytes; URL expiry tokens alone do not change identity |
 | IsCurrent | bool | whether this row belongs to the current source manifest; retired slots remain for provenance but are not rendered or judged |
-| AttemptedAt, DownloadAttempts, Error | datetime?, integer, text? | pending-video retry state; failed automatic attempts wait 30 minutes and stop after three failures |
+| AttemptedAt, DownloadAttempts, Error | datetime?, integer, text? | pending image or video retry state; failed automatic attempts wait 30 minutes and stop after three failures |
 | CreatedAt | datetime | |
 | PrunedAt | datetime? | |
 
@@ -119,9 +119,9 @@ Index: (PostId).
 Row states:
 
 - `Path` set: the file exists.
-- `Path` null and `PrunedAt` null: a pending video that waits for the verdict (chapter 7).
+- `Path` null and `PrunedAt` null: a pending video that waits for the verdict, or an image whose download failed and waits for a retry (chapter 7).
 - `Path` null and `PrunedAt` set: retention deleted the file, or the video was never stored because the post was hidden. The row stays so that ingest never fetches it again.
-- A failed image download leaves no row; the manifest and unfinished snapshot permit recovery of missing slots. A failed video keeps its pending row and retry state; after three failures, or a permanent size/tool limitation, stamp PrunedAt and keep the reason. It is not silently retried forever.
+- A failed image download keeps its row and retry state unless the file is a glyph or the ingest ran offline (7.3); the manifest and unfinished snapshot still permit recovery of missing slots. A failed video keeps its pending row and retry state; after three failures, or a permanent size/tool limitation, stamp PrunedAt and keep the reason. It is not silently retried forever.
 
 ### RawSnapshots
 
@@ -321,7 +321,7 @@ The run statuses mean:
 
 ## 5.4 Post lifecycle
 
-Capture and prompt ingest run in the collect process. Model processing and pending videos run in an independent `process` child. That child can also recover unfinished ingest. Render runs in the web host and never writes.
+Capture and prompt ingest run in the collect process. Model processing, image retries and pending videos run in an independent `process` child. That child can also recover unfinished ingest. Render runs in the web host and never writes.
 
 | Stage | Writes | Re-run by |
 |---|---|---|

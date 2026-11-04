@@ -1708,7 +1708,7 @@ Some prose the human wrote.
 <tr>
 <td>AttemptedAt, DownloadAttempts, Error</td>
 <td>datetime?, integer, text?</td>
-<td>pending-video retry state; failed automatic attempts wait 30 minutes and stop after three failures</td>
+<td>pending image or video retry state; failed automatic attempts wait 30 minutes and stop after three failures</td>
 </tr>
 <tr>
 <td>CreatedAt</td>
@@ -1726,9 +1726,9 @@ Some prose the human wrote.
 <p>Row states:</p>
 <ul>
 <li><code>Path</code> set: the file exists.</li>
-<li><code>Path</code> null and <code>PrunedAt</code> null: a pending video that waits for the verdict (chapter 7).</li>
+<li><code>Path</code> null and <code>PrunedAt</code> null: a pending video that waits for the verdict, or an image whose download failed and waits for a retry (chapter 7).</li>
 <li><code>Path</code> null and <code>PrunedAt</code> set: retention deleted the file, or the video was never stored because the post was hidden. The row stays so that ingest never fetches it again.</li>
-<li>A failed image download leaves no row; the manifest and unfinished snapshot permit recovery of missing slots. A failed video keeps its pending row and retry state; after three failures, or a permanent size/tool limitation, stamp PrunedAt and keep the reason. It is not silently retried forever.</li>
+<li>A failed image download keeps its row and retry state unless the file is a glyph or the ingest ran offline (7.3); the manifest and unfinished snapshot still permit recovery of missing slots. A failed video keeps its pending row and retry state; after three failures, or a permanent size/tool limitation, stamp PrunedAt and keep the reason. It is not silently retried forever.</li>
 </ul>
 <h3>RawSnapshots</h3>
 <p>One bookkeeping row per saved raw file.</p>
@@ -2365,7 +2365,7 @@ Some prose the human wrote.
 <li><code>refused</code>: a lock or a re-login flag stopped it before the browser opened.</li>
 <li><code>imported</code>: a reparse of a foreign directory.</li>
 </ul></div></details>
-<details class="section" id="05-data-model-5-4-post-lifecycle" open><summary>5.4 Post lifecycle</summary><div class="body"><p>Capture and prompt ingest run in the collect process. Model processing and pending videos run in an independent <code>process</code> child. That child can also recover unfinished ingest. Render runs in the web host and never writes.</p>
+<details class="section" id="05-data-model-5-4-post-lifecycle" open><summary>5.4 Post lifecycle</summary><div class="body"><p>Capture and prompt ingest run in the collect process. Model processing, image retries and pending videos run in an independent <code>process</code> child. That child can also recover unfinished ingest. Render runs in the web host and never writes.</p>
 <table>
 <thead>
 <tr>
@@ -2817,7 +2817,7 @@ Some prose the human wrote.
 <li>Register any complete file missing a snapshot. Stamp AttemptedAt. A failed automatic attempt waits 30 minutes; an explicit reparse can bypass the delay.</li>
 <li>Parse into observations plus diagnostics. A malformed candidate is reported, never silently treated as proof of an empty feed. Keep the raw. An unrecoverable file failure records Error and leaves Parsed false. Within one file, the first occurrence of a post id wins.</li>
 <li>Resolve identity and insert/refresh facts. Each insert and content revision change commits deterministic filtering atomically. No media/model call occurs in the transaction. Set readiness null while this content's media inputs are being finalized; keep first-capture provenance and update current-observation provenance (5.12).</li>
-<li>Reconcile current media slots and fetch missing images promptly. Missing/failed images are reported but do not prevent textual processing forever. Register pending videos without downloading them. Finalize ContentHash, ContentRevision and IngestReadyAt after the image attempts. A crash before readiness leaves this post recoverable from the unparsed snapshot.</li>
+<li>Reconcile current media slots and fetch missing images promptly. Missing/failed images are reported and keep a retry row (7.3) but do not prevent textual processing forever. Register pending videos without downloading them. Finalize ContentHash, ContentRevision and IngestReadyAt after the image attempts. A crash before readiness leaves this post recoverable from the unparsed snapshot.</li>
 <li>Mark Parsed true and ParsedAt only after all observations complete; clear Error. Replaying partial work is idempotent. The recovery run reports its own inserted/revised counts and references the original capture run, rather than adding counts repeatedly to a historical run.</li>
 </ol>
 <p>The independent process worker recovers due unparsed snapshots and unfinished ingest in bounded file batches, without browser access. It scans complete unregistered raws on a startup recovery pass. Friends snapshots may be replayed only as add-only imports; recovered/offline data never authorizes an unfriend prune. If no recognized posts and no recognized empty answer are found where post data was expected, report parser uncertainty and incomplete coverage; do not claim the author posted nothing.</p>
@@ -2926,7 +2926,7 @@ Some prose the human wrote.
 <li>Download each with a 60 second timeout, following redirects. Pause 500 to 1500 ms after each download.</li>
 <li>Read and store width and height from the actual file for JPEG, PNG, GIF and WebP. A small header reader is the reference implementation; a maintained image-inspection library is also allowed. Inspection is bounded, handles malformed inputs, and needs no browser/network access. Dimensions support layout without shifts. A file that cannot be sized is kept unsized.</li>
 <li>The glyph guard: a file whose both sides are under 64 px is deleted and gets no row. A one-pixel placeholder from a link gateway or a page avatar would otherwise fill a card. A wide banner passes, because one side is large. The guard runs at download and again when an existing file is registered. It applies to post images only, never to avatars.</li>
-<li>A failed download deletes the partial file and leaves no row. A dropped slot leaves a gap in the positions.</li>
+<li>A failed download deletes the partial file. A glyph leaves no row, and an offline ingest creates no new row. Any other failure (network, CDN, proxy) keeps the row without a file and records Error, AttemptedAt and DownloadAttempts. The <code>process</code> child retries due rows in its <code>image</code> stage with the video rules: 30 minutes between attempts, PrunedAt with the reason after the third failure. A completed retry stores the file fields, recomputes ContentHash and advances ContentRevision, because the judge reads the picture. A dropped slot leaves a gap in the positions.</li>
 <li>The download never throws. Ingest continues with the next post.</li>
 </ul></div></details>
 <details class="section" id="07-media-7-4-videos-wait-for-the-verdict" open><summary>7.4 Videos wait for the verdict</summary><div class="body"><p>The judge reads text and images, plus optional metadata and available captions (7.8). It does not inspect the video frames or audio. Deferring full video downloads saves bandwidth but leaves that content outside the verdict. Deterministic filters run in the insert transaction. The judge normally follows a few minutes after capture, inside the CDN URL's life; delayed recovery may encounter an expired URL and follows the ordinary download failure rules.</p>
@@ -3515,7 +3515,7 @@ Some prose the human wrote.
 </tr>
 <tr>
 <td><code>process --platform X&#124;all [--limit N]</code></td>
-<td>independently drains due unfinished ingest, current-content verdicts, summaries and pending videos through successive batches of at most llm.batch. One rolling model pool spans batches. No default total limit; optional N (at least 1) caps selected units per stage across the requested platforms. <code>all</code> covers enabled platforms fairly; an explicit named platform may be paused. No browser; works during re-login or with the model off.</td>
+<td>independently drains due unfinished ingest, current-content verdicts, summaries, image retries and pending videos through successive batches of at most llm.batch. One rolling model pool spans batches. No default total limit; optional N (at least 1) caps selected units per stage across the requested platforms. <code>all</code> covers enabled platforms fairly; an explicit named platform may be paused. No browser; works during re-login or with the model off.</td>
 <td>0; 1 stage failure; 2 bad arguments; 75 lock busy</td>
 </tr>
 <tr>
@@ -3656,7 +3656,7 @@ login facebook: ok
 <li>Plain CSS files use custom properties for the chapter 15 design tokens, media queries for responsive behavior, and ordinary selectors. Assets are local; there is no CDN dependency for frontend code or styles.</li>
 <li>Every stylesheet/script URL and transitive module import identifies compatible deployed content, so a deploy cannot mix old modules with a new entry script. The implementation hashes the asset tree at startup and serves it under a stamped URL prefix, so relative module imports carry the same version. Content-fingerprinted assets with correctly rewritten imports, or an equivalent coherent versioning scheme, are allowed without adding a JavaScript toolchain. Versioning only the entry script is insufficient.</li>
 </ul>
-<p>Feed requests compute the diagnostics dot from the recovery summary (the same grouped, summary-only rows the Manage page shows, mapped by disposition) plus a lightweight coverage projection. The answer is kept per platform scope for one minute and reused by the following feed and person renders, because those queries scan Posts, RawSnapshots and TimelineVisits and would otherwise dominate the render on a slow disk. The dot may therefore lag a change by up to a minute. Full details remain on the Manage tabs. Because the dot and the page share one computation, a red dot always corresponds to at least one attention row on the Manage overview; the indicator is not a separate approximation. The dot has two levels: red (alert) for a current capture issue, a failed model attempt or a platform that needs re-login; yellow (notice) for coverage behind its sweep cadence or posts waiting for the model. A notice clears on its own when the scheduler catches up; an alert needs the owner.</p>
+<p>Feed requests compute the diagnostics dot from the recovery summary (the same grouped, summary-only rows the Manage page shows, mapped by disposition) plus a lightweight coverage projection. The answer is kept per platform scope for one minute and reused by the following feed and person renders, because those queries scan Posts, RawSnapshots and TimelineVisits and would otherwise dominate the render on a slow disk. The dot may therefore lag a change by up to a minute. Full details remain on the Manage tabs. Because the dot and the page share one computation, a red dot always corresponds to at least one attention row on the Manage overview; the indicator is not a separate approximation. The dot has two levels: red (alert) for a current capture issue, a failed model attempt or a platform that needs re-login; yellow (notice) for coverage behind its sweep cadence or posts waiting for the model. A notice usually clears on its own when the scheduler catches up; the overview panel says when a notice row instead waits for a config change or a parser update. An alert needs the owner.</p>
 <p>Every browser-requested application mutation remains an HTTP POST to an action route; the host never starts a process from a request. Browser enhancements preserve the reader's position as specified in chapter 15.</p></div></details>
 <details class="section" id="14-web-host-14-3-routes" open><summary>14.3 Routes</summary><div class="body"><table>
 <thead>
@@ -3928,7 +3928,7 @@ login facebook: ok
 <details class="section" id="15-ui-15-4-banners" open><summary>15.4 Banners</summary><div class="body"><p>Amber panels between the toolbar and the feed, when needed:</p>
 <ul>
 <li><strong>Re-login needed:</strong> <code>Re-login needed: &lt;platforms&gt;. Run Feed.Cli login --platform &lt;platform&gt; and finish the login in the noVNC browser.</code></li>
-<li><strong>Routine diagnostics:</strong> processing queues/retries, upstream warnings and stale/incomplete coverage appear on the Manage Recovery and Coverage tabs, with a small dot on the Manage button: yellow when only coverage or model processing is behind schedule (the scheduler clears it), red when a capture issue, a failed model attempt or a needed re-login requires the owner. The Manage overview opens with a panel that explains the dot: a red panel lists the expired logins and the attention items with their recovery instructions; a yellow panel states in one line what is catching up automatically and links to the Coverage tab. They do not create banners on the normal feed. Reserve normal-feed banners for important issues requiring owner action, such as re-login. A re-login banner must not imply that already captured posts cannot be processed.</li>
+<li><strong>Routine diagnostics:</strong> processing queues/retries, upstream warnings and stale/incomplete coverage appear on the Manage Recovery and Coverage tabs, with a small dot on the Manage button: yellow when only coverage or model processing is behind schedule (the scheduler clears it), red when a capture issue, a failed model attempt or a needed re-login requires the owner. The Manage overview opens with a panel that explains the dot: a red panel lists the expired logins and the attention items with their recovery instructions; a yellow panel splits the notice rows by disposition, because only automatic rows clear on their own: automatic retries with the earliest eligible retry time, paused rows that wait for a disabled scheduler, platform or model to be enabled, and compatibility rows that wait for a parser update. Each group lists its rows like the red panel does, and the panel links to the Recovery and Coverage tabs. They do not create banners on the normal feed. Reserve normal-feed banners for important issues requiring owner action, such as re-login. A re-login banner must not imply that already captured posts cannot be processed.</li>
 <li><strong>Unsorted mode:</strong> <code>Unsorted: &lt;n&gt; posts waiting for a judgment of their current content (&lt;n&gt; in this scope).</code> with a link back to the live feed. Successful judgments place passing posts into matching category views; a judgment can also hide a post under the owner's policy.</li>
 <li><strong>Hidden mode:</strong> <code>Debug: showing &lt;n&gt; hidden posts (&lt;n&gt; total). Each card states which filter hid it and why.</code> with a link back to the live feed.</li>
 </ul></div></details>

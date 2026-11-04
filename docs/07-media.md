@@ -24,7 +24,7 @@ At ingest, reconcile the parser manifest with current Media rows, including reco
 - Download each with a 60 second timeout, following redirects. Pause 500 to 1500 ms after each download.
 - Read and store width and height from the actual file for JPEG, PNG, GIF and WebP. A small header reader is the reference implementation; a maintained image-inspection library is also allowed. Inspection is bounded, handles malformed inputs, and needs no browser/network access. Dimensions support layout without shifts. A file that cannot be sized is kept unsized.
 - The glyph guard: a file whose both sides are under 64 px is deleted and gets no row. A one-pixel placeholder from a link gateway or a page avatar would otherwise fill a card. A wide banner passes, because one side is large. The guard runs at download and again when an existing file is registered. It applies to post images only, never to avatars.
-- A failed download deletes the partial file and leaves no row. A dropped slot leaves a gap in the positions.
+- A failed download deletes the partial file. A glyph leaves no row, and an offline ingest creates no new row. Any other failure (network, CDN, proxy) keeps the row without a file and records Error, AttemptedAt and DownloadAttempts. The `process` child retries due rows in its `image` stage with the video rules: 30 minutes between attempts, PrunedAt with the reason after the third failure. A completed retry stores the file fields, recomputes ContentHash and advances ContentRevision, because the judge reads the picture. A dropped slot leaves a gap in the positions.
 - The download never throws. Ingest continues with the next post.
 
 ## 7.4 Videos wait for the verdict
