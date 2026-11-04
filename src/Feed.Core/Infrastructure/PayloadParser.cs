@@ -12,7 +12,7 @@ public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyLi
 public static class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
-    public const int Version = 15;
+    public const int Version = 16;
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
     public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
@@ -188,16 +188,20 @@ public static class PayloadParser
             if (Get(media, "pk", "id") is not null && At(media, "user").ValueKind == JsonValueKind.Object) return true;
         }
         if (platform == "instagram" && InstagramExploreBranchError(root, error)) return true;
-        // The alias indexes Explore branches in response order, not outer timeline edges.
-        // Keep null media slots so malformed branches cannot shift the index.
+        // The fragment aliases index their branches in response order, not outer timeline edges.
+        // Explore alias: one slot per explore_story object; keep null media slots so malformed
+        // branches cannot shift the index. Feed-item alias (observed 2026-10-16): one slot per
+        // non-null node/media object, because the fragment is not applied to a null media.
         if (platform == "instagram" && path.Length == 5
-            && path[0] == "_on_Query_xdt_api__v1__feed__timeline__connection_edges_node_on_XDTFeedItem_on_XDTFeedItem_explore_story_media"
+            && path[0] is "_on_Query_xdt_api__v1__feed__timeline__connection_edges_node_on_XDTFeedItem_on_XDTFeedItem_explore_story_media"
+                or "_on_Query_xdt_api__v1__feed__timeline__connection_edges_node_on_XDTFeedItem_on_XDTFeedItem_media"
             && int.TryParse(path[1], out var exploreIndex) && exploreIndex >= 0
             && path[2] == "node" && path[3] == "location" && path[4] == "profile_pic_url")
         {
-            var candidates = Array(At(root, "data", "xdt_api__v1__feed__timeline__connection", "edges"))
-                .Select(e => At(e, "node", "explore_story")).Where(e => e.ValueKind == JsonValueKind.Object)
-                .Select(e => At(e, "media")).ToArray();
+            var edges = Array(At(root, "data", "xdt_api__v1__feed__timeline__connection", "edges"));
+            var candidates = path[0]!.EndsWith("_explore_story_media")
+                ? edges.Select(e => At(e, "node", "explore_story")).Where(e => e.ValueKind == JsonValueKind.Object).Select(e => At(e, "media")).ToArray()
+                : edges.Select(e => At(e, "node", "media")).Where(e => e.ValueKind == JsonValueKind.Object).ToArray();
             if (exploreIndex >= candidates.Length) return false;
             var media = candidates[exploreIndex];
             return InstagramMediaUsable(media)
