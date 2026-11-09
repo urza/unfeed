@@ -7,7 +7,7 @@ Source map: [Capture.cs](../src/Feed.Cli/Capture.cs) · [BrowserSession.cs](../s
 ## 6.1 The browser
 
 - Playwright for .NET drives Chromium. One persistent browser context per platform, opened on that platform's profile directory.
-- The browser is always headed. On a host without a display, the CLI starts a virtual X display (`Xvfb`) on `browser.display` and points `DISPLAY` at it. When `DISPLAY` is already set, or the OS has a desktop, nothing is started. A missing `Xvfb` is a loud failure. There is no headless fallback: the sites treat a headless browser differently.
+- The browser is always headed. On a host without a display, the CLI starts a virtual X display (`Xvfb`) on `browser.display` and points `DISPLAY` at it. When `DISPLAY` is already set, or the OS has a desktop, nothing is started. Before it starts `Xvfb`, it removes a stale `/tmp/.X<n>-lock` and socket whose recorded PID is not a running `Xvfb` (a host restart leaves them behind, and `Xvfb` then refuses to start; the PID alone is not proof, it can be reused by another process). A lock held by a live `Xvfb` stays. A missing `Xvfb` is a loud failure. There is no headless fallback: the sites treat a headless browser differently.
 - Viewport 1280 by 900. No user-agent override, no stealth flags, no extra launch arguments. Chromium presents itself as itself.
 - The locale comes from `LC_ALL` or `LANG`. The timezone comes from `timezone` in config, then `TZ` in the `Area/City` form, then `/etc/timezone`, then the process zone. The scheduler and the browser share one clock by construction.
 - The Chromium sandbox is on unless `browser.no_sandbox` or `FEED_NO_SANDBOX=1` turns it off.

@@ -26,6 +26,7 @@ public sealed class BrowserSession : IAsyncDisposable
                 displayName = config.Browser.Display;
                 if (!await DisplayReady(displayName, ct))
                 {
+                    RemoveStaleDisplayLock(displayName);
                     var start = new ProcessStartInfo("setsid") { UseShellExecute = false };
                     start.Environment["FEED_XVFB_LOG"] = paths.Get("logs", "xvfb.log");
                     foreach (var arg in new[] { "bash", "-c", "exec Xvfb \"$@\" >>\"$FEED_XVFB_LOG\" 2>&1", "feed-display" }) start.ArgumentList.Add(arg);
@@ -57,6 +58,23 @@ public sealed class BrowserSession : IAsyncDisposable
             return new(paths, platform, stored, active, pw, context, page, ownership, display);
         }
         catch { pw?.Dispose(); if (display is { HasExited: false }) display.Kill(); display?.Dispose(); ownership.Dispose(); throw; }
+    }
+    /// <summary>
+    /// Removes the X lock file and socket of a display whose server is gone. Xvfb refuses to start while
+    /// /tmp/.X&lt;n&gt;-lock exists ("Server is already active"), and a sandbox or host restart leaves the lock
+    /// behind. The lock PID can belong to a reused, unrelated process, so the check is "is that PID an Xvfb",
+    /// not "is that PID alive". Returns true when stale files were removed.
+    /// </summary>
+    public static bool RemoveStaleDisplayLock(string displayName, Func<int, bool>? isDisplayServer = null)
+    {
+        if (!displayName.StartsWith(':')) return false;
+        var number = displayName[1..].Split('.')[0]; var lockFile = $"/tmp/.X{number}-lock"; var socket = $"/tmp/.X11-unix/X{number}";
+        if (!File.Exists(lockFile)) return false;
+        isDisplayServer ??= pid => { try { return File.ReadAllText($"/proc/{pid}/comm").Trim() == "Xvfb"; } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; } };
+        string text; try { text = File.ReadAllText(lockFile); } catch (IOException) { return false; }
+        if (int.TryParse(text.Trim(), out var pid) && isDisplayServer(pid)) return false;
+        try { File.Delete(lockFile); File.Delete(socket); } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; }
+        return true;
     }
     static async Task<bool> DisplayReady(string name, CancellationToken ct)
     {

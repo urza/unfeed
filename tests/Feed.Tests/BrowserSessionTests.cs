@@ -19,6 +19,20 @@ public sealed class BrowserSessionTests
         var dialog = await Site.OpenInstagramFollowing(page);
         Assert.True(await dialog.IsVisibleAsync()); Assert.Equal("about:blank", page.Url);
     }
+    [Fact] public void StaleDisplayLockIsRemovedOnlyWhenItsPidIsNotAnXServer()
+    {
+        var number = Random.Shared.Next(2000, 9000); var lockFile = $"/tmp/.X{number}-lock"; var socket = $"/tmp/.X11-unix/X{number}";
+        try
+        {
+            // Xvfb writes the PID right-aligned in a 10-character field with a trailing newline.
+            File.WriteAllText(lockFile, $"{Environment.ProcessId,10}\n"); Directory.CreateDirectory("/tmp/.X11-unix"); File.WriteAllText(socket, "");
+            Assert.False(BrowserSession.RemoveStaleDisplayLock($":{number}", pid => pid == Environment.ProcessId)); Assert.True(File.Exists(lockFile));
+            Assert.True(BrowserSession.RemoveStaleDisplayLock($":{number}.0", pid => false)); Assert.False(File.Exists(lockFile)); Assert.False(File.Exists(socket));
+            Assert.False(BrowserSession.RemoveStaleDisplayLock($":{number}", pid => false));
+            File.WriteAllText(lockFile, "garbage"); Assert.True(BrowserSession.RemoveStaleDisplayLock($":{number}", pid => true)); Assert.False(File.Exists(lockFile));
+        }
+        finally { File.Delete(lockFile); File.Delete(socket); }
+    }
     [Fact] public async Task FreshProfilesHaveNotificationBlockBeforeFirstLaunch()
     {
         await using var i = new TestInstance(); var profile = i.Paths.Get("profiles", "instagram");
