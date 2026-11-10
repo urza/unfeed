@@ -95,6 +95,9 @@ public static class Site
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http") || !(uri.Host == "facebook.com" || uri.Host.EndsWith(".facebook.com", StringComparison.OrdinalIgnoreCase))) return null;
         var match = Regex.Match(uri.AbsolutePath, @"(?:^|/)posts/([^/]+)/?$");
         if (match.Success) return "post:" + match.Groups[1].Value;
+        // A reel page (/reel/<id>) has no post dialog and no post link; the key is proven by the page URL alone (see Heart).
+        var reel = Regex.Match(uri.AbsolutePath, @"^/reel/(\d+)/?$");
+        if (reel.Success) return "reel:" + reel.Groups[1].Value;
         if (uri.AbsolutePath is "/permalink.php" or "/story.php")
         {
             var id = Regex.Match(uri.Query, @"(?:^\?|&)story_fbid=([^&]+)");
@@ -134,7 +137,8 @@ public static class Site
         try { await love.WaitForAsync(new() { Timeout = 4000 }); }
         catch (TimeoutException)
         {
-            var opener = control.Locator("xpath=ancestor::*[@role='dialog'][1]").GetByRole(AriaRole.Button, new() { NameRegex = new Regex("^react to .+'s post$", RegexOptions.IgnoreCase) }).Locator("visible=true");
+            // A reel player has no dialog; its opener is the plain "React" button in the main landmark (observed 2026-11-10).
+            var opener = control.Locator("xpath=ancestor::*[@role='dialog' or @role='main'][1]").GetByRole(AriaRole.Button, new() { NameRegex = new Regex("^(react to .+'s post|react)$", RegexOptions.IgnoreCase) }).Locator("visible=true");
             if (await opener.CountAsync() != 1) throw new IOException("reaction picker did not open and no unique picker opener was found");
             await opener.ClickAsync(new() { Timeout = 5000 });
             await love.WaitForAsync(new() { Timeout = 4000 });
@@ -149,7 +153,9 @@ public static class Site
         // Facebook renamed the post control around 2026-10-30: "Like" became "React with Like to <Author>'s post",
         // and the reacted state is expected as "Remove <Reaction> from <Author>'s post". The old short names stay
         // for layouts that still use them. Comment controls keep the short "Like" and are excluded by scope below.
-        var names = platform == "facebook" ? "^(like|like post|remove (like|love|care|haha|wow|sad|angry)|react with like to .+'s post|remove (like|love|care|haha|wow|sad|angry) from .+'s post)$" : "^(like|like post|unlike|remove like|unlike post)$";
+        // A reel control (2026-11-10) is "Like, <n> reactions" and, by the same pattern, "Remove <Reaction>, <n> reactions".
+        var names = platform == "facebook" ? "^(like|like post|remove (like|love|care|haha|wow|sad|angry)|react with like to .+'s post|remove (like|love|care|haha|wow|sad|angry) from .+'s post|(like|remove (like|love|care|haha|wow|sad|angry)), \\d+ reactions?)$" : "^(like|like post|unlike|remove like|unlike post)$";
+        var reelPage = expected.StartsWith("reel:", StringComparison.Ordinal);
         // Take the candidate nodes as one snapshot of element handles. A lazy index locator (Nth) is
         // resolved again at hover/click time, so a comment heart inserted by late hydration could take
         // the approved index after every check below had passed. Handles stay bound to their nodes.
@@ -158,7 +164,22 @@ public static class Site
         foreach (var button in handles)
         {
             if (!await button.IsVisibleAsync()) continue;
-            if (platform == "facebook")
+            if (platform == "facebook" && reelPage)
+            {
+                // A reel page renders one player in the main landmark, with no dialog and no link that names the reel.
+                // The URL match above proves the page; the control must sit in main, outside any dialog or comment,
+                // and be fully in the viewport and hit-testable, because the player preloads neighbors ("Next items").
+                if (!await button.EvaluateAsync<bool>("""
+                    e => {
+                        if (!e.closest('[role="main"]') || e.closest('[role="dialog"]') || e.closest('[role="article"][aria-label]') || e.querySelector('svg[width="16"]')) return false;
+                        const r = e.getBoundingClientRect();
+                        if (r.width <= 0 || r.height <= 0 || r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight) return false;
+                        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                        return hit !== null && e.contains(hit);
+                    }
+                    """)) continue;
+            }
+            else if (platform == "facebook")
             {
                 // A permalink can leave the home feed rendered behind nested post dialogs.
                 // Prove the nearest dialog owns this post; never fall back to a background
@@ -202,7 +223,7 @@ public static class Site
         var pinned = page.Locator($"[data-feed-target='{marker}']");
         if (done || platform == "instagram")
         {
-            var desired = platform == "facebook" ? "^(remove love|remove love from .+'s post)$" : done ? "^(unlike|remove like|unlike post)$" : "^(like|like post)$";
+            var desired = platform == "facebook" ? "^(remove love|remove love from .+'s post|remove love, \\d+ reactions?)$" : done ? "^(unlike|remove like|unlike post)$" : "^(like|like post)$";
             if (await pinned.And(page.GetByRole(AriaRole.Button, new() { NameRegex = new Regex(desired, RegexOptions.IgnoreCase) })).CountAsync() == 0) return null;
         }
         return pinned;

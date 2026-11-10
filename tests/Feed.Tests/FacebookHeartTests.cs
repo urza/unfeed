@@ -47,6 +47,34 @@ public sealed class FacebookHeartTests
     }
 
     [Fact, Trait("Category", "Browser")]
+    public async Task ReelUsesTheUniqueMainControlWithTheReactionCountAndIgnoresCommentsAndOffscreenPlayers()
+    {
+        // A reel page (observed 2026-11-10) has no dialog and no post link; the control is "Like, <n> reactions" in main,
+        // comment hearts keep the short name with a 16 px icon, and preloaded neighbor players sit outside the viewport.
+        const string Reel = "https://www.facebook.com/reel/555/";
+        using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true }); var page = await browser.NewPageAsync();
+        await page.RouteAsync("https://www.facebook.com/**", r => r.FulfillAsync(new() { ContentType = "text/html", Body = "<main></main>" }));
+        await page.GotoAsync("https://www.facebook.com/reel/555");
+        await page.SetContentAsync("""
+            <button aria-label="Like" id="background">Feed behind the player</button>
+            <div role="main">
+              <div role="article" aria-label="Comment by Synthetic Person"><button aria-label="Like" id="comment"><svg width="16"></svg></button></div>
+              <button aria-label="Like, 28 reactions" id="reel" onclick="this.setAttribute('aria-label','Remove Love, 29 reactions')">Reel reaction</button>
+              <button aria-label="React" id="opener"><svg width="16"></svg></button>
+              <button aria-label="Like, 3 reactions" id="next" style="position:absolute; top:5000px">Preloaded next reel</button>
+            </div>
+            """);
+        Assert.Null(await Site.Heart(page, "facebook", false, "https://www.facebook.com/reel/556/"));
+        Assert.Null(await Site.Heart(page, "facebook", true, Reel));
+        var control = await Site.Heart(page, "facebook", false, Reel);
+        Assert.Equal("reel", await control!.GetAttributeAsync("id"));
+        await control.ClickAsync(); // Synthetic fixture only; verifies the same scoped done-state lookup.
+        Assert.Equal("reel", await (await Site.Heart(page, "facebook", true, Reel))!.GetAttributeAsync("id"));
+        Assert.Equal("Like", await page.Locator("#background").GetAttributeAsync("aria-label"));
+        Assert.Equal("Like", await page.Locator("#comment").GetAttributeAsync("aria-label"));
+    }
+
+    [Fact, Trait("Category", "Browser")]
     public async Task ApprovedControlStaysBoundWhenTheDialogGrowsBeforeTheHover()
     {
         using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true }); var page = await browser.NewPageAsync();
