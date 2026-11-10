@@ -144,10 +144,16 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
     public async Task<string> SaveSettings(string action, IFormCollection form, CancellationToken ct)
     {
         var version = form["version"].ToString(); bool refilter = action is "rules" or "filters" or "category";
-        using var processing = refilter ? ResourceLock.Try(paths, "processing") ?? throw new ResourceBusyException("Processing is active. Try saving again after it finishes.") : null;
-        using var ingestFb = refilter ? ResourceLock.Try(paths, "ingest-facebook") ?? throw new ResourceBusyException("Facebook import is active. Try again shortly.") : null;
-        using var ingestIg = refilter ? ResourceLock.Try(paths, "ingest-instagram") ?? throw new ResourceBusyException("Instagram import is active. Try again shortly.") : null;
-        if (refilter) { await using var pending = factory.Open(); await pending.Put("management:refilter_pending", "1", ct); }
+        // A threshold edit changes the visibility of stored verdicts, so it reapplies too. Unlike the rule saves it must
+        // never fail on a busy lock: the same form holds `enabled` and the timeouts, which the owner needs during a long
+        // run. A busy lock leaves the pending key set, and ResumeRefilter does the work when the run ends.
+        bool threshold = action == "processing" && documents.Read().Snapshot().Config.Llm.Threshold != Number(form, "threshold");
+        ResourceLock? Hold(string name, string busy) { if (!refilter && !threshold) return null; var held = ResourceLock.Try(paths, name); return held is null && refilter ? throw new ResourceBusyException(busy) : held; }
+        using var processing = Hold("processing", "Processing is active. Try saving again after it finishes.");
+        using var ingestFb = Hold("ingest-facebook", "Facebook import is active. Try again shortly.");
+        using var ingestIg = Hold("ingest-instagram", "Instagram import is active. Try again shortly.");
+        bool locked = processing is not null && ingestFb is not null && ingestIg is not null;
+        if (refilter || threshold) { await using var pending = factory.Open(); await pending.Put("management:refilter_pending", "1", ct); }
         var saved = documents.Save(version, d => {
             var s = d.Snapshot(); var root = d.ConfigObject();
             if (action == "scheduler") { ManagementFiles.Set(ManagementFiles.Object(root, "scheduler"), "enabled", JsonValue.Create(Checked(form, "enabled"))); }
@@ -211,6 +217,8 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
             return d with { Config = ManagementFiles.Json(root) };
         });
         if (refilter) await Refilter(saved.Snapshot(), CancellationToken.None);
+        if (threshold && locked) { var counts = await Refilter(saved.Snapshot(), CancellationToken.None); return $"Saved. Threshold reapplied: {counts.Hidden} hidden, {counts.Shown} shown, no model calls."; }
+        if (threshold) return "Saved. Existing posts follow the new threshold when the active run ends; work already running keeps its starting settings.";
         return refilter ? "Saved. Existing posts were refiltered; model judgments are not rerun automatically." : "Saved. New runs use these settings; work already running keeps its starting settings.";
     }
     public async Task<string> Person(long id, string action, bool enable, string version, CancellationToken ct)
@@ -261,21 +269,12 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         using var ig = ResourceLock.Try(paths, "ingest-instagram"); if (ig is null) return;
         await Refilter(documents.Read().Snapshot(), ct);
     }
-    async Task Refilter(InstanceSnapshot snapshot, CancellationToken ct)
+    async Task<VisibilityStore.Counts> Refilter(InstanceSnapshot snapshot, CancellationToken ct)
     {
+        // One transaction with the pending key: a crash leaves the key set, and ResumeRefilter repeats the whole pass.
         await using var db = factory.Open(); await using var transaction = await db.Database.BeginTransactionAsync(ct);
-        var authors = await db.Authors.AsNoTracking().ToArrayAsync(ct); long last = 0;
-        while (true) {
-            var posts = await db.Posts.Where(p => p.Id > last).OrderBy(p => p.Id).Take(500).ToArrayAsync(ct); if (posts.Length == 0) break;
-            foreach (var p in posts) {
-                var rules = new RuleContext(authors.FirstOrDefault(a => a.Id == p.AuthorId), authors, snapshot); p.VisibilityRevision++;
-                Filters.Apply(p, rules);
-                if (!p.Hidden && p.Judged && p.LlmScore < snapshot.Config.Llm.Threshold && !rules.Shield("llm")) p.SetHidden("llm", $"llm {p.LlmScore}: {p.LlmReason}");
-                if (p.CategoriesJson is not null) p.CategoriesJson = JsonSerializer.Serialize(Filters.Restrict(JsonSerializer.Deserialize<string[]>(p.CategoriesJson) ?? [], rules, p.Platform));
-            }
-            last = posts[^1].Id; await db.SaveChangesAsync(ct); db.ChangeTracker.Clear();
-        }
+        var counts = await VisibilityStore.Reapply(db, db.Posts, snapshot, ct);
         await db.Kv.Where(k => k.Key == "management:refilter_pending").ExecuteDeleteAsync(ct);
-        await transaction.CommitAsync(ct);
+        await transaction.CommitAsync(ct); return counts;
     }
 }

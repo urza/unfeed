@@ -14,7 +14,7 @@ var builder = WebApplication.CreateBuilder(args);
 var dataArg = args.Select((v,i)=>(v,i)).FirstOrDefault(x=>x.v=="--data");
 var data = dataArg.v is null ? args.FirstOrDefault(a=>a.StartsWith("--data="))?[7..] : dataArg.i+1<args.Length?args[dataArg.i+1]:throw new ArgumentException("--data requires a directory");
 var paths = new InstancePaths(data); paths.Create(); var files = new InstanceFiles(paths); var initial = files.Current; var factory = new DbFactory(paths);
-await using(var db=factory.Open()) await db.Initialize();
+await using(var db=factory.Open()){await db.Initialize();await Prompts.RestampVersions(db,initial);}
 if(builder.Configuration["urls"] is null && Environment.GetEnvironmentVariable("ASPNETCORE_URLS") is null)builder.WebHost.UseUrls($"http://{initial.Config.Web.Host}:{initial.Config.Web.Port}");
 var minimum=initial.Config.Ui.LogLevel switch{"trace"=>LogLevel.Trace,"debug"=>LogLevel.Debug,"warn"=>LogLevel.Warning,"error"=>LogLevel.Error,_=>LogLevel.Information};
 builder.Logging.ClearProviders();builder.Logging.SetMinimumLevel(minimum);builder.Logging.AddProvider(new LogSink(paths,"web",minimum));builder.Logging.AddFilter("Microsoft",LogLevel.Warning);

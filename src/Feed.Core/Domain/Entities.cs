@@ -27,6 +27,9 @@ public sealed class Post
     public int? LlmTokenLimit { get; set; }
     public int LlmFailures { get; set; } public int SummaryFailures { get; set; }
     public bool Hidden { get; set; } public string? HiddenBy { get; set; } public string? HiddenReason { get; set; } public DateTime? HiddenAt { get; set; } public int VisibilityRevision { get; set; }
+    // The ContentRevision the owner unhid. Visibility.Decide skips the llm hide while it equals ContentRevision.
+    // It stores the revision, not a flag, so a content change expires it and no code path has to clear it.
+    public int? OwnerUnhiddenRevision { get; set; }
     public void SetHidden(string owner, string reason) { if (!ClosedValues.HideOwners.Contains(owner) || owner == "thumbs") throw new ArgumentException("Invalid hide owner"); if (!Hidden) HiddenAt = Clock.Now; Hidden = true; HiddenBy = owner; HiddenReason = reason; VisibilityRevision++; }
     public void ClearHidden() { Hidden = false; HiddenBy = HiddenReason = null; HiddenAt = null; VisibilityRevision++; }
     public bool Judged => CategoriesJson is not null && VerdictContentRevision == ContentRevision;

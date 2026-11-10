@@ -44,24 +44,29 @@ The `rules` report shows resolved authors, unmatched/ambiguous entries, the bypa
 
 ## 8.7 The engine
 
-The pure evaluator is shared by ingest, content refresh and `refilter`. Evaluation order and persisted owner are deterministic:
+One pure function, `Visibility.Decide`, gives a post its hide owner and reason, or the result "visible". Ingest, content refresh, identity merge, the Manage refilter and CLI `refilter` all use it, so two paths cannot give the same post different results. The order is deterministic:
 
-1. A reserved `thumbs` hide is untouched. An `other` hide is also preserved unless the documented unhide action releases it.
-2. Resolve configured bypasses, then evaluate type, audience, keyword and mute gates. The first active exclusion wins. It may replace an older `llm` hide: deterministic exclusions take precedence over derived model output.
-3. If no deterministic gate excludes the post, clear any previous deterministic hide. Preserve an existing `llm` hide unless an effective model shield releases it; otherwise only a passing fresh verdict or an owner unhide releases it.
-4. Persist visibility and its revision together. SetHidden and ClearHidden preserve the HiddenAt rules from chapter 5.
+1. A reserved `thumbs` or `other` hide stays as stored. Only the documented unhide action releases an `other` hide.
+2. Resolve configured bypasses, then evaluate type, audience, keyword and mute gates. The first active exclusion wins. It replaces an older `llm` hide: deterministic exclusions take precedence over derived model output.
+3. If no deterministic gate excludes the post, the stored verdict decides. The owner is `llm` when the post has a verdict for its current content, the score is below `llm.threshold`, no effective model shield covers the author, and the owner did not unhide this content (8.9). The engine applies the threshold to the stored score, so a threshold edit needs no model call.
+4. Otherwise the post is visible. A post without a verdict for its current content is never hidden by `llm`: an `llm` hide ends when the content changes, and the next verdict decides again.
+5. Persist visibility and its revision together, and write only when the owner or the reason changed. SetHidden and ClearHidden preserve the HiddenAt rules from chapter 5.
 
-The documented refilter/content-refresh paths reconcile hide ownership; render never does. The operation reports total, hidden, shown, unchanged and per-owner counts. A configuration change alone does not secretly rewrite historical post decisions during a page request.
+A landing verdict applies step 3 alone, through the same code. It does not re-evaluate the deterministic gates: the owner may have unhidden a muted or keyword-hidden post, and a verdict must not hide it again. Those gates return at the next refilter or content refresh.
+
+The documented ingest, verdict, refilter and content-refresh paths reconcile hide ownership; render never does. The refilter operation reports total, hidden, shown and unchanged counts. A configuration change alone does not secretly rewrite historical post decisions during a page request.
 
 ## 8.8 When it runs
 
-Every new post is evaluated in its insert transaction, including after a failed or checkpointed capture. A content revision refresh also evaluates deterministic rules atomically. No unchecked row is visible between storage and a later stage. A filter failure rolls back the transaction and leaves the raw for retry.
+Every new post is evaluated in its insert transaction, including after a failed or checkpointed capture. A content revision refresh also evaluates the rules atomically. No unchecked row is visible between storage and a later stage. A filter failure rolls back the transaction and leaves the raw for retry.
 
-`refilter [--post-id N | --since <date> | --all]` explicitly reapplies current rules to stored posts; default is since the newest collect began. Use `--all` after a global type, audience, keyword, mute or bypass edit. It also reapplies close-friends-only category restrictions. Refilter takes the relevant ingest lock so it cannot race an ingest transaction; in-flight model results are guarded by VisibilityRevision.
+`refilter [--post-id N | --since <date> | --all]` explicitly reapplies current rules to stored posts; default is since the newest collect began. Use `--all` after a global type, audience, keyword, mute or bypass edit. It also reapplies close-friends-only category restrictions. Refilter takes the relevant ingest lock so it cannot race an ingest transaction.
+
+CLI `refilter` and the Manage refilter run the same operation (`VisibilityStore.Reapply`) and give the same result for the same post. Only the scope differs: Manage always covers all history. The operation increments VisibilityRevision on every post in its scope, also when the result does not change. A verdict in flight carries the rules from its selection, and this revision makes its commit count as superseded.
 
 ## 8.9 Unhide
 
-The page action clears the four visibility columns and increments VisibilityRevision. It is an explicit owner override. Stored verdicts stay; a later explicit rescore, content update or refilter may hide the post again. An answer already in flight against the prior visibility revision cannot overwrite the action.
+The page action clears the four visibility columns, increments VisibilityRevision and stores the post's current ContentRevision in `OwnerUnhiddenRevision`. It is an explicit owner override of the model. While the content is unchanged, no refilter, threshold edit or rescore re-applies the `llm` hide. A content change ends the override, because the stored revision no longer matches; the next verdict decides again. Deterministic gates are not overridden: a mute, keyword, type or audience rule can hide the post again at the next refilter. An answer already in flight against the prior visibility revision cannot overwrite the action.
 
 
 ## Management controls
@@ -71,3 +76,5 @@ The People section at `/manage` edits close-friend membership, mute and always-s
 Remove from feed list clears local `IsFriend`, removes matching close-friend and extra home-timeline entries, and skips pending/retry sweep targets. Preserve posts and their action history; reapply audience rules instead of deleting posts. A later add-only import can add the relationship back. These operations never unfriend/unfollow on the platform. A profile already being visited may finish.
 
 After a management edit, reapply deterministic gates, category restrictions and any still-applicable current-content low-score verdict. In particular, unmuting must not inadvertently bypass an existing low model score. Manual hide owners remain protected. The controls do not invoke the model.
+
+A save of the processing settings that changes `llm.threshold` reapplies the engine to all history, because the threshold acts on stored scores. This save never fails on a busy lock: the same form holds `enabled` and the timeouts, which the owner needs during a long run. When the processing and ingest locks are free, the reapply runs in the request and the confirmation gives the hidden and shown counts. When a lock is busy, the save sets the pending-refilter marker, and the scheduler tick reapplies when the locks are free. A run that is active at save time keeps its starting threshold; the later reapply corrects the verdicts that land after the save. A save that leaves the threshold unchanged does not touch stored posts.

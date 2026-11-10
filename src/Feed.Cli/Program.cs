@@ -60,7 +60,7 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
                 var report = await ParserAudit.Read(factory, a.Platform(), a.Number("limit") ?? 20, a.Get("raw-ids") is { } rawIds ? ParseIds(rawIds) : null, a.Number("run-id"), a.Flag("failed"), ct);
                 Directory.CreateDirectory(Path.GetDirectoryName(output)!); InstancePaths.AtomicWrite(output, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true })); Console.WriteLine($"parser-audit: {report.Length} captures; report={output}; no ingest or model calls"); return 0;
             }
-            await using (var db = factory.Open()) await db.Initialize(ct);
+            await using (var db = factory.Open()) { await db.Initialize(ct); await Prompts.RestampVersions(db, s, ct); }
             var level = (a.Get("log-level") ?? s.Config.Ui.LogLevel) switch { "trace" => LogLevel.Trace, "debug" => LogLevel.Debug, "warn" => LogLevel.Warning, "error" => LogLevel.Error, _ => LogLevel.Information };
             logs = new(paths, "cli", level, a.Flag("quiet")); Console.SetOut(new LoggedOutput(originalOutput, logs, a.Flag("quiet"))); logs.Write(LogLevel.Information, "cli", "command " + a.Command + "; instance=" + paths.Root); ledger = new(factory);
             if (a.Command is "help" or "--help" || a.Flag("help")) { Console.WriteLine(Usage); return 0; }
@@ -176,8 +176,8 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
             else if (a.Command == "refilter")
             {
                 int total = 0, hidden = 0, shown = 0; await using var db = factory.Open(); if (!a.Flag("all") && since is null && postId is null) since = await db.Runs.Where(r => r.Kind == "collect").OrderByDescending(r => r.StartedAt).Select(r => (DateTime?)r.StartedAt).FirstOrDefaultAsync(ct) ?? Clock.Now;
-                foreach (var p in platforms) { using var held = ResourceLock.Try(paths, "ingest-" + p) ?? throw new ResourceBusyException("ingest busy"); var authors = await db.Authors.ToListAsync(ct); var posts = await db.Posts.Where(x => x.Platform == p && (postId == null || x.Id == postId) && (since == null || x.CapturedAt >= since)).OrderByDescending(x => x.PostedAt).ThenByDescending(x => x.Id).ToListAsync(ct); foreach (var post in posts) { total++; bool was = post.Hidden; post.VisibilityRevision++; var rules = new RuleContext(authors.FirstOrDefault(x => x.Id == post.AuthorId), authors, s); Filters.Apply(post, rules); if (post.CategoriesJson is not null) post.CategoriesJson = JsonSerializer.Serialize(Filters.Restrict(JsonSerializer.Deserialize<string[]>(post.CategoriesJson) ?? [], rules, p)); if (!was && post.Hidden) hidden++; if (was && !post.Hidden) shown++; } await db.SaveChangesAsync(ct); }
-                Console.WriteLine($"refilter: total={total}, hidden={hidden}, shown={shown}, unchanged={total - hidden - shown}; scope={(a.Flag("all") ? "all history" : $"since={since:O} post={postId}")}, newest first");
+                foreach (var p in platforms) { using var held = ResourceLock.Try(paths, "ingest-" + p) ?? throw new ResourceBusyException("ingest busy"); var counts = await VisibilityStore.Reapply(db, db.Posts.Where(x => x.Platform == p && (postId == null || x.Id == postId) && (since == null || x.CapturedAt >= since)), s, ct); total += counts.Total; hidden += counts.Hidden; shown += counts.Shown; }
+                Console.WriteLine($"refilter: total={total}, hidden={hidden}, shown={shown}, unchanged={total - hidden - shown}; scope={(a.Flag("all") ? "all history" : $"since={since:O} post={postId}")}");
             }
             else if (a.Command == "avatars")
             {

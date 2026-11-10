@@ -92,6 +92,7 @@ Index: (AuthorId). Only the identity resolver writes this table.
 | HiddenReason | text? | |
 | HiddenAt | datetime? | when the current hide began. Null while visible. |
 | VisibilityRevision | integer | incremented by every hide/unhide change, including bulk changes; guards against an in-flight verdict overwriting a newer decision |
+| OwnerUnhiddenRevision | integer? | the ContentRevision that the owner unhid. While it equals ContentRevision, the engine skips the `llm` hide (8.9). A content change ends the override with no clear step. |
 
 Indexes: unique (Platform, PlatformPostId); (PostedAt); (Hidden, PostedAt); (AuthorId, PostedAt) named `IX_Posts_AuthorHistory`; (Hidden, Platform, IsSponsored, ContentRevision, VerdictContentRevision, CategoriesJson) named `IX_Posts_FeedMembership`. The last two are covering indexes for the feed read: view membership, the toolbar counts, the ad count and rare-voice histories are answered from the index alone. Post rows are wide (captions, verdicts, manifests), so a feed read must touch rows only for the cards it renders; a query plan that scans Posts for a count is a regression.
 
@@ -352,12 +353,11 @@ Reason formats: `keyword: <phrase>`, `muted: <entry>`, `llm <score>: <reason>`, 
 
 Who may change the triple:
 
-- **The store**, at insert, through the shared deterministic evaluator for structural, whitelist, keyword and mute drops.
-- **The filter engine** (chapter 8), for configured type, audience, keyword and mute gates. Refilter/content refresh may replace an older model hide with a current deterministic exclusion, release a deterministic hide whose rule no longer applies, or release a model hide through its configured bypass. Reserved thumbs/other hides stay until their documented override. With no applicable deterministic exclusion or shield, an old model hide remains.
-- **The scorer** (chapter 9), for owner `llm`. A score under threshold hides unless a model shield applies. A fresh passing verdict releases a model hide. The scorer never re-judges another owner's hidden post, and conditional revision checks prevent it from overwriting a newer decision.
-- **The unhide action** on the page clears the triple. The verdict columns stay, so a later rescore may hide the post again.
+- **The filter engine** (chapter 8), the one function that derives owner and reason from the configured gates, the stored verdict, the threshold and the owner's unhide. The store calls it at insert and content refresh, and refilter calls it for stored posts. When a verdict lands, the scorer applies only the engine's model step (8.7). It may replace an older model hide with a current deterministic exclusion, release a deterministic hide whose rule no longer applies, restore the `llm` hide of a low stored score when a deterministic gate clears, and release a model hide through its bypass or a raised score line. Reserved thumbs/other hides stay until their documented override.
+- **The scorer** (chapter 9) supplies the verdict that the engine reads. A score under threshold hides unless a model shield or an owner unhide of the same content applies. A fresh passing verdict releases a model hide. The scorer never re-judges another owner's hidden post, and conditional revision checks prevent it from overwriting a newer decision.
+- **The unhide action** on the page clears the triple and records the unhidden content revision. The verdict columns stay.
 
-A stale policy hide stays hidden. Policy-only or model-configuration changes require explicit `rescore --all`; they do not automatically release or replace a verdict. A content revision change is different: it queues processing of the changed content, including an `llm`-hidden post. That hide remains until a passing fresh verdict releases it. No stale result is a reason to override another layer's hide.
+The threshold and the always-show bypasses are decision inputs, not verdict inputs. An edit to them reaches history through a refilter with no model call. A stale policy hide stays hidden: policy or model-configuration changes require explicit `rescore --all`; they do not automatically release or replace a verdict. A content revision change is different: it queues processing of the changed content, and an `llm` hide of the old content ends at the next engine pass (fail-open). No stale result is a reason to override another layer's hide.
 
 ## 5.6 Identity
 

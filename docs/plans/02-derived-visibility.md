@@ -90,3 +90,18 @@ Decided against in review (2026-11-09):
 
 - Raw category storage with read-time `Restrict`. Category views select in SQL through `json_each(p.CategoriesJson)` (FeedQuery.cs L65-68), so a read-time rule cannot apply there. The prompt also tells the model to omit a close-friends-only category for other authors (Prompts.cs L23), so raw storage has nothing to restore after a close-friend add.
 - Removal of close friends and `video_context` from the version, and a per-author rescore queue. Both are prompt inputs. Without them in the version, a hand edit of the config file leaves old verdicts marked as current.
+
+## Notes from implement
+
+Implemented on 2026-11-10 on branch `02-derived-visibility`. Differences from the text above:
+
+- `Visibility.Decide(post, rules)` takes no separate config. `RuleContext` already carries the instance snapshot.
+- The application operation is `VisibilityStore.Reapply`. A second class named `Visibility` in the Application namespace clashes with the Domain one in every file that imports both. The name follows the existing `Identity` and `IdentityStore` pair.
+- Verdict apply (Processing.cs) uses `Visibility.Model`, the model's part of `Decide`, and not the full function. The full function re-evaluated the deterministic gates at every verdict. Six existing tests failed, because a verdict gave a `whitelist` hide to a visible post. It also undid an owner unhide of a muted post at the next processing run. `FreshVerdictDoesNotUndoAnOwnerUnhideOfAMutedPost` guards this.
+- Step 3 measurement on a copy of the live database (10,856 posts, Debug build): `refilter --all` took about 14 seconds net. The cost was the entry resolution in `RuleContext.Shield` and `CloseFriend`. `ResolvedRules` now resolves the entries once per `Reapply` call, and the run takes about 2 seconds net.
+- The same copy showed no visibility change from the new engine at the unchanged threshold. A threshold change from 4 to 5 hid the 4 posts with a score of 4, the 78 shielded posts stayed visible, and the change back showed the 4 posts again. The restamp moved 1,822 verdicts to the new version, and the number of distinct versions stayed 12.
+- The restamp is `Prompts.RestampVersions`, called from CLI and Web startup.
+- The CLI `refilter` summary line no longer says "newest first". `Reapply` works in id order, and the order does not change the result.
+- The threshold field hint in Manage said "history needs explicit rescoring". It now says that a change applies to stored scores at once.
+
+Not checked: the Manage threshold save on the real live instance. The unit tests cover the save path, and the copy covers the engine on live data.

@@ -420,6 +420,9 @@ namespace Feed.Core.Infrastructure.Migrations
                     b.Property<string>("ObservedAuthorUrl")
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("OwnerUnhiddenRevision")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Permalink")
                         .HasColumnType("TEXT");
 

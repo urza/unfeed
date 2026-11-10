@@ -52,11 +52,38 @@ public static class Identity
     }
     public static string Safe(string s) { var value = Regex.Replace(s, "[^a-zA-Z0-9._-]", "_"); return value is "" or "." or ".." ? "unknown" : value; }
 }
-public sealed record RuleContext(Author? Author, IReadOnlyList<Author> Authors, InstanceSnapshot Instance)
+// The always-show and close-friend entries, resolved to author ids. One entry costs a pass over all authors, and
+// Identity.Keys parses RefsJson for each of them. A bulk pass therefore builds this once and shares it between its
+// RuleContexts: without sharing, a refilter of 10,800 posts took about 14 seconds (measured 2026-11-10).
+public sealed class ResolvedRules(IReadOnlyList<Author> authors, InstanceSnapshot instance)
 {
-    public bool Shield(string gate) => Author is not null && Instance.Config.Filters.AlwaysShowBypasses.Contains(gate) && Instance.Preferences.Shows.Any(e => Identity.Resolve(e, Authors).Any(a => a.Id == Author.Id));
-    public bool CloseFriend => Author is { IsFriend: true } && Instance.Config.Platform(Author.Platform).CloseFriends.Any(e => Identity.Resolve(e, Authors.Where(a => a.Platform == Author.Platform && a.IsFriend)).Any(a => a.Id == Author.Id));
+    readonly Lazy<HashSet<long>> shown = new(() => instance.Preferences.Shows.SelectMany(e => Identity.Resolve(e, authors)).Select(a => a.Id).ToHashSet());
+    // A close-friend entry resolves only among the friends of its own platform.
+    readonly Lazy<HashSet<long>> closeFriends = new(() => authors.Where(a => a.IsFriend).GroupBy(a => a.Platform).SelectMany(g => instance.Config.Platform(g.Key).CloseFriends.SelectMany(e => Identity.Resolve(e, g))).Select(a => a.Id).ToHashSet());
+    public bool Shown(Author a) => shown.Value.Contains(a.Id);
+    public bool CloseFriend(Author a) => closeFriends.Value.Contains(a.Id);
+}
+public sealed record RuleContext(Author? Author, IReadOnlyList<Author> Authors, InstanceSnapshot Instance, ResolvedRules? Shared = null)
+{
+    readonly ResolvedRules resolved = Shared ?? new(Authors, Instance);
+    public bool Shield(string gate) => Author is not null && Instance.Config.Filters.AlwaysShowBypasses.Contains(gate) && resolved.Shown(Author);
+    public bool CloseFriend => Author is { IsFriend: true } && resolved.CloseFriend(Author);
     public bool FriendTag(Tag t, string platform) => Identity.UrlRef(platform, t.Url) is { } r && Authors.Any(a => a.Platform == platform && a.IsFriend && Identity.Keys(a).Contains(r));
+}
+public static class Visibility
+{
+    // The one visibility rule. Ingest, identity merge and both refilters all ask here, and verdict apply uses its
+    // Model step, so two paths cannot give the same post different results. Returns null for a visible post.
+    public static (string Owner, string Reason)? Decide(Post p, RuleContext c)
+    {
+        // Reserved owners are not derived from rules. Returning the stored pair makes Filters.Apply a no-op for them.
+        if (p.Hidden && p.HiddenBy is "thumbs" or "other") return (p.HiddenBy, p.HiddenReason!);
+        return Filters.Evaluate(p, c) ?? Model(p, c);
+    }
+    // The model's part of the rule, without the deterministic gates. Verdict apply uses it alone (see Processing).
+    // Fail-open (binding rule 12): only a verdict for the current content hides. Judged is false after a content change.
+    // An owner unhide of this same content outranks the model, but not the deterministic gates.
+    public static (string Owner, string Reason)? Model(Post p, RuleContext c) => p.Judged && p.LlmScore < c.Instance.Config.Llm.Threshold && p.OwnerUnhiddenRevision != p.ContentRevision && !c.Shield("llm") ? ("llm", $"llm {p.LlmScore}: {p.LlmReason}") : null;
 }
 public static class Filters
 {
@@ -70,11 +97,11 @@ public static class Filters
         foreach (var entry in c.Instance.Preferences.Mutes) if (Identity.Matches(entry, c.Author) || c.Author is null && !entry.Contains(':') && Identity.NameMatches(entry, p.ObservedAuthorName)) return ("mute", "muted: " + entry);
         return null;
     }
+    // Writes only on a change, so an unchanged post keeps its HiddenAt and VisibilityRevision.
     public static void Apply(Post p, RuleContext c)
     {
-        if (p.HiddenBy is "thumbs" or "other") return;
-        if (Evaluate(p, c) is { } d) { if (!p.Hidden || p.HiddenBy != d.Owner || p.HiddenReason != d.Reason) p.SetHidden(d.Owner, d.Reason); }
-        else if (p.Hidden && (p.HiddenBy != "llm" || c.Shield("llm"))) p.ClearHidden();
+        if (Visibility.Decide(p, c) is { } d) { if (!p.Hidden || p.HiddenBy != d.Owner || p.HiddenReason != d.Reason) p.SetHidden(d.Owner, d.Reason); }
+        else if (p.Hidden) p.ClearHidden();
     }
     public static string[] Restrict(IEnumerable<string> categories, RuleContext c, string platform)
     {

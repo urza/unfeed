@@ -241,7 +241,9 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                             if (result.Value is Verdict verdict)
                             {
                                 p.LlmError = null; p.LlmFailures = 0; p.LlmTokenLimit = null; p.LlmScore = verdict.Score; p.LlmReason = verdict.Reason; p.CategoriesJson = JsonSerializer.Serialize(Filters.Restrict(verdict.Categories, w.Rules, p.Platform)); p.VerdictContentRevision = p.ContentRevision; p.PrefsVersion = version; p.VerdictInputHash = w.Hash; p.VerdictModel = instance.Config.Llm.Model; p.VerdictEndpoint = result.Endpoint; p.JudgedAt = Clock.Now;
-                                if (verdict.Score < instance.Config.Llm.Threshold && !w.Rules.Shield("llm")) p.SetHidden("llm", $"llm {verdict.Score}: {verdict.Reason}"); else if (p.HiddenBy == "llm") p.ClearHidden();
+                                // Only the model's part of the visibility rule. A verdict must not re-evaluate the deterministic gates: the owner may
+                                // have unhidden a muted or keyword-hidden post, and the next run would hide it again. Those gates return at ingest and refilter.
+                                if (Visibility.Model(p, w.Rules) is { } hide) p.SetHidden(hide.Owner, hide.Reason); else if (p.HiddenBy == "llm") p.ClearHidden();
                             }
                             else { p.SummaryError = null; p.SummaryFailures = 0; p.Summary = (string)result.Value; p.SummaryContentRevision = p.ContentRevision; p.SummaryInputHash = w.Hash; p.SummaryModel = w.Inline ? null : instance.Config.Llm.Model; p.SummaryEndpoint = result.Endpoint; p.SummarizedAt = Clock.Now; }
                             await db.SaveChangesAsync(token); counts.Completed++; stage.Completed++;

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Feed.Core.Domain;
 using Feed.Core.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 namespace Feed.Core.Application;
 
 public sealed record Verdict(int Score, string Reason, string[] Categories);
@@ -35,7 +36,32 @@ public static class Prompts
     }
     public static string Sha(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     static string Sha1(string value, int length) => Convert.ToHexStringLower(SHA1.HashData(Encoding.UTF8.GetBytes(value)))[..length];
+    // Hashes what the model sees or what changes its request. The hide threshold is not here: Visibility.Decide applies
+    // it to stored scores, so a threshold edit must not mark verdicts as stale. Of the always-show bypasses only the
+    // `llm` flag is here, because Policy adds the always-show sentence to every prompt when it is set.
     public static string ConfigurationHash(InstanceSnapshot s, bool textOnly = false)
+    {
+        var baseline = JsonSerializer.Serialize(new { s.Config.Llm.Model, primary = Endpoint(s.Config.Llm.BaseUrl), fallback = Endpoint(s.Config.Llm.FallbackBaseUrl), temperature = 0, s.Config.Llm.MaxTokens, s.Config.Llm.SummaryMaxTokens, vision = s.Config.Llm.Vision && !textOnly, s.Config.Llm.VisionMaxImages, preprocessing = "v1:8MB:768:ffmpeg-q4-even:original-fallback", bypassLlm = s.Config.Filters.AlwaysShowBypasses.Contains("llm"), friends = s.Config.Platforms.OrderBy(x => x.Key).Select(x => new { platform = x.Key, entries = x.Value.CloseFriends }) });
+        if (s.Config.VideoContext.Enabled) baseline = JsonSerializer.Serialize(new { baseline, video_context = s.Config.VideoContext, video_context_version = VideoContextProvider.Version });
+        // Preserve existing versions when the optional provider extension is absent.
+        return Sha(s.Config.Llm.SummaryEnableThinking is null ? baseline : JsonSerializer.Serialize(new { baseline, s.Config.Llm.SummaryEnableThinking }));
+    }
+    // One-time upgrade step, run at CLI and Web startup. ConfigurationHash dropped the threshold and the bypass list, so
+    // without this step every stored verdict would show the "older policy" trail line. Verdicts made under the current
+    // settings get the new version; verdicts that were already stale stay stale. Delete this method and
+    // LegacyConfigurationHash together when no instance can still hold version format 1.
+    public static async Task RestampVersions(FeedDb db, InstanceSnapshot s, CancellationToken ct = default)
+    {
+        const string key = "prefs:version-format"; if (await db.Get(key, ct) == "2") return;
+        foreach (var textOnly in new[] { false, true })
+        {
+            string current = Version(s, textOnly), legacy = current[..(current.LastIndexOf(".m") + 2)] + LegacyConfigurationHash(s, textOnly);
+            await db.Posts.Where(p => p.PrefsVersion == legacy).ExecuteUpdateAsync(u => u.SetProperty(p => p.PrefsVersion, current), ct);
+        }
+        await db.Put(key, "2", ct);
+    }
+    // The exact ConfigurationHash of version format 1. Do not edit it: RestampVersions must reproduce the stored values.
+    static string LegacyConfigurationHash(InstanceSnapshot s, bool textOnly)
     {
         var baseline = JsonSerializer.Serialize(new { s.Config.Llm.Model, primary = Endpoint(s.Config.Llm.BaseUrl), fallback = Endpoint(s.Config.Llm.FallbackBaseUrl), temperature = 0, s.Config.Llm.MaxTokens, s.Config.Llm.SummaryMaxTokens, vision = s.Config.Llm.Vision && !textOnly, s.Config.Llm.VisionMaxImages, preprocessing = "v1:8MB:768:ffmpeg-q4-even:original-fallback", s.Config.Llm.Threshold, bypass = s.Config.Filters.AlwaysShowBypasses, friends = s.Config.Platforms.OrderBy(x => x.Key).Select(x => new { platform = x.Key, entries = x.Value.CloseFriends }) });
         if (s.Config.VideoContext.Enabled) baseline = JsonSerializer.Serialize(new { baseline, video_context = s.Config.VideoContext, video_context_version = VideoContextProvider.Version });

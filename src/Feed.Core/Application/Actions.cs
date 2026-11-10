@@ -31,6 +31,6 @@ public sealed class Actions(DbFactory factory)
         await using var db = factory.Open(); var p = await db.Posts.FindAsync([id], ct); if (p is null) return false;
         db.Feedback.Add(new() { PostId = id, Value = value, Platform = p.Platform, AuthorId = p.AuthorId, ViewKey = view, Scope = scope, CategoriesAtVote = p.CategoriesJson, ScoreAtVote = p.LlmScore, ReasonAtVote = p.LlmReason }); await db.SaveChangesAsync(ct); return true;
     }
-    public async Task<bool> Unhide(long id, CancellationToken ct = default) { await using var db = factory.Open(); return await db.Posts.Where(p => p.Id == id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Hidden, false).SetProperty(p => p.HiddenBy, (string?)null).SetProperty(p => p.HiddenReason, (string?)null).SetProperty(p => p.HiddenAt, (DateTime?)null).SetProperty(p => p.VisibilityRevision, p => p.VisibilityRevision + 1), ct) > 0; }
+    public async Task<bool> Unhide(long id, CancellationToken ct = default) { await using var db = factory.Open(); return await db.Posts.Where(p => p.Id == id).ExecuteUpdateAsync(s => s.SetProperty(p => p.Hidden, false).SetProperty(p => p.HiddenBy, (string?)null).SetProperty(p => p.HiddenReason, (string?)null).SetProperty(p => p.HiddenAt, (DateTime?)null).SetProperty(p => p.VisibilityRevision, p => p.VisibilityRevision + 1).SetProperty(p => p.OwnerUnhiddenRevision, p => (int?)p.ContentRevision), ct) > 0; }
     public async Task MarkRead(CancellationToken ct = default) { await using var db = factory.Open(); await db.Put("last_visit", Clock.Now.ToString("O"), ct); }
 }
