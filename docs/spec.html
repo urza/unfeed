@@ -3424,7 +3424,7 @@ Some prose the human wrote.
 <li>Validate: the post exists, the platform supports like-back, the post has a like handle and a permalink. A problem answers 409 with the text, and nothing is written.</li>
 <li>Write a <code>Likes</code> row in state <code>pending</code>, unless a pending or sent row already exists. A failed row allows a new press.</li>
 <li>In the same transaction, ensure a run request of kind <code>like</code> for the platform when it has no pending or claimed like request. The unique active-request index prevents duplicates. The scheduler also reconciles pending hearts without an active request, so a press racing a sender's last sweep cannot strand the heart.</li>
-<li>Redirect back. With script, the chip updates in place and polls (chapter 15).</li>
+<li>Redirect back. With script, the chip updates in place and polls (chapter 15). Manage → Hearts lists every heart with its state and reason (14.8).</li>
 </ol></div></details>
 <details class="section" id="11-likeback-11-3-the-sender" open><summary>11.3 The sender</summary><div class="body"><p>The scheduler starts <code>Feed.Cli like --platform X</code>. The sender:</p>
 <ol>
@@ -3772,6 +3772,11 @@ login facebook: ok
 <td>the page</td>
 </tr>
 <tr>
+<td><code>GET /manage?section=hearts</code></td>
+<td>the newest 100 <code>Likes</code> rows with their post and person (<code>HeartsQuery.Read</code>)</td>
+<td>the page</td>
+</tr>
+<tr>
 <td><code>GET /manage/log?file=cli|web</code></td>
 <td>the last 5000 lines of one log, or both merged by timestamp when <code>file</code> is absent</td>
 <td>plain text, oldest first</td>
@@ -3955,6 +3960,10 @@ login facebook: ok
 <tr>
 <td><code>GET /manage?section=recovery</code></td>
 <td>Grouped processing recovery, informational notices, recent classification completions and collection visit reports. Optional <code>collection</code> includes a selected older capture run.</td>
+</tr>
+<tr>
+<td><code>GET /manage?section=hearts</code></td>
+<td>Read-only list of the newest 100 hearts, newest first: when pressed, person, post, state (<code>Queued</code>, <code>Pressed, waiting for confirmation</code>, <code>Sent &lt;at&gt;</code>, <code>Failed</code>) and the sender's reason. A failed heart whose post has no pending or sent row offers a "Heart again" form that posts to <code>POST /posts/{id}/like</code> (11.2) and returns to the tab.</td>
 </tr>
 <tr>
 <td><code>GET /manage?section=people</code></td>
@@ -4156,10 +4165,11 @@ login facebook: ok
 <li><strong>One accent, one glass, one warm sun.</strong> Nothing else competes.</li>
 </ul>
 <p>Recovery details must be readable without opening log files: show affected post/capture, failure cause, retry eligibility and any paused or blocked state at <code>/manage?section=recovery</code>. Recovery details link to the Recovery tab and to <code>/manage/log?file=cli</code>. The Manage button shows a small dot for current failures or recent upstream warnings; these do not create a normal-feed banner. Coverage labels distinguish <code>partial capture with errors</code> from <code>rendered but no matching post payload</code>, and show delayed/exhausted retries. Exact repeated-content groups use an <code>N repeated posts</code> badge and preserve expandable original cards and their actions.</p></div></details>
-<details class="section" id="15-ui-15-14-management" open><summary>15.14 Management</summary><div class="body"><p>Manage is the routine entry point from the feed toolbar on desktop and phones. Its navigation contains Overview, Recovery, Coverage, People, Schedule, Rules, Categories &amp; views, Processing, Storage and Backgrounds. Each tab shows a small 16 px stroke icon before its label (grid, restore arrow, circled check, people, clock, sliders, list with chevron, chip, database, picture); the icon inherits the tab text color and is hidden from assistive technology. Management uses ordinary server-rendered forms and works without JavaScript. Do not time-refresh an editor. Show success messages and actionable validation/conflict errors.</p>
+<details class="section" id="15-ui-15-14-management" open><summary>15.14 Management</summary><div class="body"><p>Manage is the routine entry point from the feed toolbar on desktop and phones. Its navigation contains Overview, Recovery, Coverage, Hearts, People, Schedule, Rules, Categories &amp; views, Processing, Storage and Backgrounds. Each tab shows a small 16 px stroke icon before its label (grid, restore arrow, circled check, people, clock, sliders, list with chevron, chip, database, picture); the icon inherits the tab text color and is hidden from assistive technology. Management uses ordinary server-rendered forms and works without JavaScript. Do not time-refresh an editor. Show success messages and actionable validation/conflict errors.</p>
 <p>Collection/import times, running-work start times, People activity dates and planned next runs include relative labels such as “33 minutes ago” or “in 5 hours” beside their exact timestamps. These labels are calculated on page load; refresh status to update them.</p>
 <ul>
 <li>Overview has one platform card per platform: last-known login health, local people/post counts, last collection/import, queued/running actions and next planned collection. Queued work shows the kind, mode, status and the scheduler's note. A collect that waits for the manual cooldown shows the remaining minutes and the local start time, with a <code>Start now (skip the cooldown)</code> button (<code>POST /manage/platform/{platform}/now</code>) that sets <code>SkipCooldown</code> on that request. Expose all collection modes, Refresh friends/following, platform enablement, opt-in like-back permission and Start login. Explain add-only import and manual noVNC login. Global pause/resume states that existing work may finish and that the buttons on the page still start work while paused.</li>
+<li>Hearts lists the newest 100 hearts, newest first: when pressed, the person (linked to the person page), the post (its first words linked to the original, plus an "in feed" link to the card on the person page), the state and the sender's reason for a failure. A failed heart whose post has no pending or sent row shows a "Heart again" button (14.8).</li>
 <li>People is searchable and paginated. Show avatar/name linked to the internal person page, local relationship, Close friend, Muted and Always show buttons with accessible pressed states. Expanded activity includes post/visibility counts, latest post, last encounter/check, retry information and exact identity refs. Below the list, only when any exist, the last 20 identity events: a merge (a record without a platform id joined into the record that has it) or an alias conflict (a handle or slug that already belongs to another person), with the time, the key, the kept person linked, the other person (linked for a conflict; for a merge the removed record's name and id from the event snapshot) and the count. No undo. Remove from feed list is inside a descriptive disclosure, explaining retained posts and possible re-addition. Never describe local removal as platform unfriending.</li>
 <li>Schedule opens with the scheduling state as a banner with one Pause or Resume button, a short statement of the three combined rules, and a disclosure that explains how a slot fires. Then one native form per platform and mode. Each form starts with a plain-language line of its rule (cadence, weekdays, times) and that mode's planned next run, then edits comma-separated 24-hour times, a repeat-every-N-days cadence with its starting date, and weekday pills. Empty times disable a mode; an empty starting date means today. Show the timezone and explain delay constraints.</li>
 <li>Rules exposes blocked phrases, written model policy, learned rules, mute/show lists, audience/type gates and configurable always-show bypasses. Categories/views edit existing definitions with labels, prose, checkboxes and person references; initial/new structures remain file edits. Explain effects on stored versus future judgments.</li>

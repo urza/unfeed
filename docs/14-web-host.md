@@ -35,6 +35,7 @@ Every browser-requested application mutation remains an HTTP POST to an action r
 |---|---|---|
 | `GET /` | the feed. Query: `view` (a view key; empty means `ui.default_view`, which falls back to `all`), `platform` (a platform key), `hidden=1` (the hidden inspection mode), `unsorted=1` (the unsorted mode; `hidden` wins when both are set) | the page. An unknown view redirects to `/`. An unknown platform redirects to `/`. "Known platform" means a platform with stored posts. |
 | `GET /manage?section=coverage` | the Coverage tab model (14.7) | the page |
+| `GET /manage?section=hearts` | the newest 100 `Likes` rows with their post and person (`HeartsQuery.Read`) | the page |
 | `GET /manage/log?file=cli|web` | the last 5000 lines of one log, or both merged by timestamp when `file` is absent | plain text, oldest first |
 | `GET /healthz` | opens the database and performs a small read against the expected schema; no full-table count is required | `ok` plus a newline; a database failure is a 500 |
 | `GET /media/{path}` | a stored media file. `path` is relative to the media folder. A path that escapes it, or names a file outside `media/`, is a 404. Never serve the database, the config, the profiles or the raws through this route. | the file, with range support, content type from the extension, `Cache-Control: public, max-age=31536000, immutable` |
@@ -151,6 +152,7 @@ Source: [ManagementRoutes](../src/Feed.Web/ManagementRoutes.cs), [Management](..
 |---|---|
 | `GET /manage` | Overview by default; `section=people`, `schedule`, `rules`, `categories`, `processing` or `storage` selects an editor. Only read-only processing summaries refresh automatically; editor forms do not. |
 | `GET /manage?section=recovery` | Grouped processing recovery, informational notices, recent classification completions and collection visit reports. Optional `collection` includes a selected older capture run. |
+| `GET /manage?section=hearts` | Read-only list of the newest 100 hearts, newest first: when pressed, person, post, state (`Queued`, `Pressed, waiting for confirmation`, `Sent <at>`, `Failed`) and the sender's reason. A failed heart whose post has no pending or sent row offers a "Heart again" form that posts to `POST /posts/{id}/like` (11.2) and returns to the tab. |
 | `GET /manage?section=people` | Search with `q`, restrict `platform`, filter `friends`, `removed`, `close`, `muted` or `always`; `page` selects a bounded 40-person page. |
 | `POST /manage/settings/{action}` | Validated file edit for scheduler, platform, schedule, timing, rules, filters, category, view, storage or processing. |
 | `POST /manage/people/{id}/{action}` | `close`, `mute`, `always` set membership using `enabled`; `remove` removes the local relationship. |

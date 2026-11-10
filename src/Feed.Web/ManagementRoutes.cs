@@ -8,7 +8,7 @@ namespace Feed.Web;
 
 public static class ManagementRoutes
 {
-    static readonly string[] Sections = ["overview", "recovery", "coverage", "people", "schedule", "rules", "categories", "processing", "storage"];
+    static readonly string[] Sections = ["overview", "recovery", "coverage", "hearts", "people", "schedule", "rules", "categories", "processing", "storage"];
     public static void MapManagement(this WebApplication app, string stamp)
     {
         app.MapGet("/manage", async (HttpContext ctx, Management management, Backgrounds backgrounds, IAntiforgery antiforgery, Feed.Core.Infrastructure.InstanceFiles files, Scheduler scheduler) => {

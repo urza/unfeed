@@ -19,7 +19,7 @@ A press on the heart (`POST /posts/{id}/like`):
 1. Validate: the post exists, the platform supports like-back, the post has a like handle and a permalink. A problem answers 409 with the text, and nothing is written.
 2. Write a `Likes` row in state `pending`, unless a pending or sent row already exists. A failed row allows a new press.
 3. In the same transaction, ensure a run request of kind `like` for the platform when it has no pending or claimed like request. The unique active-request index prevents duplicates. The scheduler also reconciles pending hearts without an active request, so a press racing a sender's last sweep cannot strand the heart.
-4. Redirect back. With script, the chip updates in place and polls (chapter 15).
+4. Redirect back. With script, the chip updates in place and polls (chapter 15). Manage → Hearts lists every heart with its state and reason (14.8).
 
 ## 11.3 The sender
 

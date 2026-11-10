@@ -21,7 +21,7 @@ public sealed class WebTests
         {
             using var http=new HttpClient{BaseAddress=new Uri($"http://127.0.0.1:{port}")};using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(60));
             while(true){if(process.HasExited)throw new InvalidOperationException("Web host exited: "+await stderr);try{if((await http.GetAsync("/healthz",timeout.Token)).IsSuccessStatusCode)break;}catch(HttpRequestException){}await Task.Delay(100,timeout.Token);}
-            Assert.Equal(HttpStatusCode.OK,(await http.GetAsync("/manage?section=coverage")).StatusCode);
+            Assert.Equal(HttpStatusCode.OK,(await http.GetAsync("/manage?section=coverage")).StatusCode);Assert.Equal(HttpStatusCode.OK,(await http.GetAsync("/manage?section=hearts")).StatusCode);
             using var pw=await Playwright.CreateAsync();await using var browser=await pw.Chromium.LaunchAsync(new(){Headless=true});
             await using(var context=await browser.NewContextAsync(new(){JavaScriptEnabled=false}))
             {

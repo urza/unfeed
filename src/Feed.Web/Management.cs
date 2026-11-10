@@ -21,6 +21,7 @@ public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnaps
     public RecoveryIssue[] RecoverySummary { get; init; } = [];
     public CoverageRow[] Coverage { get; init; } = [];
     public IdentityEventRow[] Events { get; init; } = [];
+    public HeartRow[] Hearts { get; init; } = [];
     public RecoveryIssue[] Recovery { get; init; } = [];
     public ProcessingCompletion[] RecentCompletions { get; init; } = [];
     public Run[] Collections { get; init; } = [];
@@ -72,6 +73,7 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
             RecoverySignature = signature, RecoveryPage = Math.Max(1, page), Backup = await Maintenance.BackupLine(paths, db, ct), Tools = await ToolHealth.Line(db, ct),
             Coverage = section == "coverage" ? await CoverageQuery.Read(db, s, ct: ct) : [],
             Events = section == "people" ? await IdentityStore.Events(db, 20, ct: ct) : [],
+            Hearts = section == "hearts" ? await HeartsQuery.Read(db, 100, ct) : [],
             RecoverySummary = await RecoveryQuery.Read(db, s, ct: ct, grouped: true, summaryOnly: true),
             Recovery = await RecoveryQuery.Read(db, s, ct: ct, grouped: signature is null, fingerprint: signature, page: page),
             Collections = (await db.Runs.AsNoTracking().Where(r => r.Kind == "collect").OrderByDescending(r => r.Id).Take(10).ToArrayAsync(ct)).Concat(await db.Runs.AsNoTracking().Where(r => r.Id == collectionId).ToArrayAsync(ct)).DistinctBy(r => r.Id).ToArray(),

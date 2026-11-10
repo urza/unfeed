@@ -42,6 +42,18 @@ else if(Model.Section == "recovery") {
  </article>}
  <p>For older run IDs, consult <a href="/manage/log?file=cli">CLI logs</a>. <a href="/manage?section=coverage">Current coverage and retry status</a>.</p></section>
 }
+else if(Model.Section == "hearts") {
+ <section class="manage-panel glass"><h1>Hearts</h1><p>One row per heart pressed on the page, newest first (the last 100). A heart becomes a like on the original post through the like sender; a failed row keeps its reason, and a new press on the card or here queues it again. "Outcome unknown" means the sender pressed the control but could not confirm the result; check the original before you press again.</p>
+ @if(Model.Hearts.Length > 0){<div class="manage-table-scroll"><table class="people-table hearts-table"><thead><tr><th>Pressed</th><th>Person</th><th>Post</th><th>State</th><th>Detail</th></tr></thead><tbody>
+ @foreach(var h in Model.Hearts){<tr class="@h.Like.State"><td data-label="Pressed">@At(h.Like.RequestedAt)</td>
+  <td data-label="Person"><PlatformGlyph Platform="@h.Like.Platform"/> @if(h.Author is not null){<a href="@($"/people/{h.Author.Id}")">@h.PersonName</a>}else{@h.PersonName}</td>
+  <td data-label="Post">@if(SafeUrl(h.Post.Permalink) is { } link){<a href="@link" rel="noreferrer">@(h.Snippet.Length > 0 ? h.Snippet : "Open the original")</a>}else{@(h.Snippet.Length > 0 ? h.Snippet : "Post " + h.Post.Id)} @if(h.Author is not null){<a href="@($"/people/{h.Author.Id}#post-{h.Post.Id}")">in feed</a>}</td>
+  <td data-label="State">@(h.Like.State switch { "sent" => "Sent " + At(h.Like.SentAt), "pending" => h.Like.AttemptedAt is null ? "Queued" : "Pressed, waiting for confirmation", _ => "Failed" })</td>
+  <td data-label="Detail">@h.Like.Error @if(h.CanRetry){<form method="post" action="@($"/posts/{h.Post.Id}/like")" class="inline"><button type="submit">Heart again</button></form>}</td></tr>}
+ </tbody></table></div>}
+ else{<p>No hearts yet. The heart on a card queues one.</p>}
+ </section>
+}
 else if(Model.Section == "coverage") {
  <section class="manage-panel glass"><h1>Coverage</h1><p>One row per person on a feed list: when their timeline was last visited and last captured with a result. "Not checked recently" means the last success is older than the platform's sweep interval plus slack. People behind schedule come first; the scheduled sweep catches up on its own.</p>
  @foreach(var group in Model.Coverage.GroupBy(c => c.Platform)){var rows = group.OrderByDescending(c => c.Incomplete).ThenByDescending(c => c.Stale).ThenBy(c => c.LastCapture ?? DateTime.MinValue).ToArray();
