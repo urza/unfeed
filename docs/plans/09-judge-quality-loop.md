@@ -1,6 +1,6 @@
 # Plan 09: Build the judge-quality loop
 
-Status: proposed 2026-11-09 from the step-back review. Reviewed and reduced on 2026-11-10 (plan review: CHANGE COURSE, smaller course taken with one adjustment; report: `.work/09-judge-quality-loop/plan-review.md`). Implemented on 2026-11-10 on branch `09-judge-quality-loop`; see "Notes from implement".
+Status: proposed 2026-11-09 from the step-back review. Reviewed and reduced on 2026-11-10 (plan review: CHANGE COURSE, smaller course taken with one adjustment; code review: GO). Reports in `.work/09-judge-quality-loop/`. Implemented on 2026-11-10 on branch `09-judge-quality-loop`; see "Notes from implement".
 
 ## Outcome
 
@@ -45,7 +45,7 @@ The owner edits policy often (12 versions, three of them with more than 900 post
    - prints a summary line: sampled, would hide, would unhide, labels changed, unchanged, failed, and how many compared verdicts were under the current version (differences there are model noise, not the edit).
    The CLI output is the whole report. Nothing is stored.
 2. **`owner=` filter on the hidden scope.** `FeedQuery.Read` takes an optional `owner` for the hidden scope and filters `HiddenBy`. The route reads `?owner=`; `/?hidden=1&owner=llm` lists the `llm` hides, each card with its score and reason in the trail as today. Unknown values fall back to no filter.
-3. **Make `curate` match the spec, and mark disagreements.** `curate` without flags groups the uncurated signals by author and prints the memory sentences `Prompts.Memory` would produce for that author. A signal that disagrees with the current verdict gets a mark: a thumb down on a visible post with the current score at or above the threshold; a thumb up on a post hidden by `llm`, or on a post whose current score is below the threshold. After the groups, one block lists the owner unhides that disagree: posts with `OwnerUnhiddenRevision == ContentRevision`, judged for the current content, score below the threshold (post id, platform, score, reason). The two predicates live in one small static class `JudgeReport` in `Feed.Core/Queries`, so a unit test covers them without the console. `feedback` stays a flat list.
+3. **Make `curate` match the spec, and mark disagreements.** `curate` without flags groups the uncurated signals by author and prints the memory sentences `Prompts.Memory` would produce for that author. A signal that disagrees with the current verdict gets a mark: a thumb down on a visible post with the current score at or above the threshold; a thumb up on a post hidden by `llm`, or on a post whose current score is below the threshold. After the groups, one block lists the owner unhides that disagree: posts with `OwnerUnhiddenRevision == ContentRevision`, judged for the current content, score below the threshold (post id, platform, score, reason). The thumb predicate and the report live in one small static class `JudgeReport` in `Feed.Core/Queries`, so a unit test covers them without the console. `feedback` stays a flat list.
 4. **Keep the UI promise honest.** The thumb chip titles become "More like this (remembered for this author)" and "Less like this (remembered for this author)".
 
 ## Contracts to preserve
@@ -95,7 +95,7 @@ Prompt redesign, structured output decoding, summary merging, automatic policy e
 
 - The trial lives inside `Processing.Run` as a `WorkScope.Trial` flag: the selection takes judged posts for their current content, `Stamp` becomes a read-only eligibility check, a failed result writes no `LlmError`, a dead batch sets no backoff marker, and a verdict goes to `Compare` instead of the apply block. `WorkCounts.Trial` carries the five trial counts; the CLI prints the summary line from them.
 - `Compare` loads the post untracked and sets the trial score on that copy, so `Visibility.Model` runs the full rule (owner unhide, `llm` shield) and nothing reaches the database.
-- The curate report is `JudgeReport.Curate` in `Feed.Core/Queries`, next to the two predicates, so the unit test checks the lines without the console. The memory sentences shown per author are those a new post by the author would carry (no post excluded, curated rows included), which is what `Processing` passes to `Prompts.Memory`.
+- The curate report is `JudgeReport.Curate` in `Feed.Core/Queries`, next to the thumb predicate `Disagrees`, so the unit test checks the lines without the console. The unhide rule is one EF query inside `Curate` (a C# predicate cannot run in SQL), covered by the report test. The memory sentences shown per author are those a new post by the author would carry (no post excluded, curated rows included), which is what `Processing` passes to `Prompts.Memory`.
 - The owner filter is validated against `ClosedValues.HideOwners` in the route; the counts of the hidden scope stay unfiltered, as the plan says.
 - `--trial` refuses `--all` (the stale condition has no meaning in a trial) and takes a default limit of 100 only when `--limit` is absent.
 - No browser test was added: the plan has no page any more, and the chip title and the empty message are plain strings covered by the fast tests.

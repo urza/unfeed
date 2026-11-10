@@ -139,7 +139,7 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
                 run.StatsJson = JsonSerializer.Serialize(counts, new JsonSerializerOptions { IncludeFields = true });
                 foreach (var stage in counts.Stages.OrderBy(x => x.Key)) Console.WriteLine($"process {stage.Key}: selected={stage.Value.Selected}, completed={stage.Value.Completed}, failed={stage.Value.Failed}, superseded={stage.Value.Superseded}, selected-but-not-dispatched={stage.Value.Undispatched}, remaining={stage.Value.Remaining}");
                 if (counts.Trial is { } t) Console.WriteLine($"trial {platform}: sampled={counts.Selected}, would hide={t.WouldHide}, would unhide={t.WouldUnhide}, labels changed={t.LabelsChanged}, unchanged={t.Unchanged}, failed={counts.Failed}, superseded={counts.Superseded}; compared verdicts under the current policy version={t.CurrentVersion} (differences there are model noise, not the policy edit); nothing was written");
-                Console.WriteLine($"{a.Command} {platform}: {counts}"); resultCode = counts.Failed > 0 ? 1 : 0;
+                Console.WriteLine($"{a.Command}{(trial ? " --trial" : "")} {platform}: {counts}"); resultCode = counts.Failed > 0 ? 1 : 0;
             }
             else if (a.Command == "reparse")
             {

@@ -78,7 +78,7 @@ public sealed class JudgeTrialTests
     }
 
     [Fact]
-    public void DisagreementPredicatesCoverBothDirections()
+    public void DisagreementPredicateCoversBothDirections()
     {
         Post Judged(int score, bool llmHidden = false) { var p = new Post { Platform = "facebook", CategoriesJson = "[]", VerdictContentRevision = 1, LlmScore = score, LlmReason = "stored" }; if (llmHidden) p.SetHidden("llm", "llm"); return p; }
         Feedback Thumb(int value) => new() { Value = value };
@@ -88,8 +88,6 @@ public sealed class JudgeTrialTests
         Assert.False(JudgeReport.Disagrees(Thumb(1), Judged(8), 4));              // agreement
         Assert.False(JudgeReport.Disagrees(Thumb(-1), Judged(2, llmHidden: true), 4));
         Assert.False(JudgeReport.Disagrees(Thumb(-1), new Post { Platform = "facebook" }, 4)); // not judged: no score to disagree with
-        var unhid = Judged(2); unhid.OwnerUnhiddenRevision = 1; Assert.True(JudgeReport.UnhideDisagrees(unhid, 4));
-        Assert.False(JudgeReport.UnhideDisagrees(Judged(2), 4)); var high = Judged(8); high.OwnerUnhiddenRevision = 1; Assert.False(JudgeReport.UnhideDisagrees(high, 4));
     }
 
     [Fact]
@@ -123,8 +121,8 @@ public sealed class JudgeTrialTests
         }
         var s = new InstanceSnapshot(new() { Platforms = ImmutableDictionary<string, PlatformConfig>.Empty.Add("facebook", new()) }, new(), Preferences.Parse(""));
         var page = await new FeedQuery(i.Factory).Read(s, "all", null, "hidden", default, owner: "llm");
-        Assert.Equal(llm, Assert.Single(page.Items).Lead.Post.Id); Assert.Equal(2, page.HiddenCount);
-        var all = await new FeedQuery(i.Factory).Read(s, "all", null, "hidden", default); Assert.Equal(2, all.Items.Length);
+        Assert.Equal(llm, Assert.Single(page.Items).Lead.Post.Id); Assert.Equal(2, page.HiddenCount); Assert.Equal("llm", page.Owner);
+        var all = await new FeedQuery(i.Factory).Read(s, "all", null, "hidden", default); Assert.Equal(2, all.Items.Length); Assert.Null(all.Owner);
         var none = await new FeedQuery(i.Factory).Read(s, "all", null, "hidden", default, owner: "mute"); Assert.Empty(none.Items); Assert.Equal("No posts hidden by mute.", none.EmptyMessage);
     }
 }

@@ -16,8 +16,6 @@ public static class JudgeReport
         bool low = p.Judged && p.LlmScore < threshold;
         return f.Value < 0 ? !p.Hidden && p.Judged && !low : f.Value > 0 && (p.Hidden && p.HiddenBy == "llm" || low);
     }
-    // An owner unhide of this content against a low score: the owner saw the llm hide and reversed it.
-    public static bool UnhideDisagrees(Post p, int threshold) => p.OwnerUnhiddenRevision == p.ContentRevision && p.Judged && p.LlmScore < threshold;
     public static async Task<string[]> Curate(FeedDb db, InstanceSnapshot s, CancellationToken ct)
     {
         int threshold = s.Config.Llm.Threshold; var lines = new List<string>();
@@ -26,8 +24,9 @@ public static class JudgeReport
         var posts = await db.Posts.AsNoTracking().Where(p => postIds.Contains(p.Id)).ToDictionaryAsync(p => p.Id, ct);
         var authorIds = rows.Where(f => f.AuthorId != null).Select(f => f.AuthorId!.Value).Distinct().ToArray();
         var authors = await db.Authors.AsNoTracking().Where(a => authorIds.Contains(a.Id)).ToDictionaryAsync(a => a.Id, ct);
-        // The memory sentences need the author's whole recent feedback, curated rows included, as Processing passes them.
-        var memorySource = await db.Feedback.AsNoTracking().Where(f => f.AuthorId != null && authorIds.Contains(f.AuthorId.Value)).OrderByDescending(f => f.Id).Take(200 * Math.Max(1, authorIds.Length)).ToListAsync(ct);
+        // The memory sentences need the author's recent feedback, curated rows included, as Processing passes it; Memory
+        // itself keeps the newest 40 rows of 180 days per author, so no cap is needed here.
+        var memorySource = await db.Feedback.AsNoTracking().Where(f => f.AuthorId != null && authorIds.Contains(f.AuthorId.Value)).ToListAsync(ct);
         if (rows.Count == 0) lines.Add("curate: no uncurated signals");
         foreach (var group in rows.GroupBy(f => f.AuthorId).OrderByDescending(g => g.Max(f => f.Id)))
         {
@@ -41,7 +40,8 @@ public static class JudgeReport
             // Memory is per post, so the sentences shown are those a new post by this author would carry (no post excluded).
             foreach (var sentence in Prompts.Memory(memorySource, 0, group.Key)) lines.Add("  memory: " + sentence);
         }
-        var unhides = await db.Posts.AsNoTracking().Where(p => p.OwnerUnhiddenRevision == p.ContentRevision && p.CategoriesJson != null && p.VerdictContentRevision == p.ContentRevision && p.LlmScore < threshold).OrderByDescending(p => p.Id).Take(50).ToListAsync(ct);
+        // An owner unhide of this content against a low score: the owner saw the llm hide and reversed it (spec 9.6).
+        var unhides = await db.Posts.AsNoTracking().Where(p => p.OwnerUnhiddenRevision == p.ContentRevision && p.CategoriesJson != null && p.VerdictContentRevision == p.ContentRevision && p.LlmScore < threshold).OrderByDescending(p => p.Id).ToListAsync(ct);
         lines.Add(unhides.Count == 0 ? "unhides: no owner unhide disagrees with the current verdict" : $"unhides: {unhides.Count} owner unhide{(unhides.Count == 1 ? "" : "s")} against a low score");
         foreach (var p in unhides) lines.Add($"  post #{p.Id} {p.Platform}: score {p.LlmScore}; {p.LlmReason}");
         return lines.ToArray();

@@ -33,7 +33,7 @@ string Logs(string? which,int count){var names=which is "cli" or "web"?new[]{whi
 app.MapGet("/",async(HttpContext ctx,FeedQuery query,Backgrounds backgrounds)=>{
  var s=Snapshot(ctx);var view=ctx.Request.Query["view"].ToString();if(view.Length==0)view=s.Taxonomy.Views.Any(v=>v.Key==s.Config.Ui.DefaultView)?s.Config.Ui.DefaultView:"all";
  var platform=ctx.Request.Query["platform"].ToString();if(platform is "" or "all")platform=null;var scope=ctx.Request.Query["hidden"]=="1"?"hidden":ctx.Request.Query["unsorted"]=="1"?"unsorted":"live";
- var owner=ctx.Request.Query["owner"].ToString();if(!ClosedValues.HideOwners.Contains(owner))owner=null;
+ var owner=ctx.Request.Query["owner"].ToString().ToLowerInvariant();if(!ClosedValues.HideOwners.Contains(owner))owner=null;
  try{var model=await query.Read(s,view,platform,scope,ctx.RequestAborted,owner:owner);return (IResult)new RazorComponentResult<FeedView>(new{Model=model,Stamp=stamp,Background=backgrounds.Current.Selected});}catch(ArgumentException){return Results.Redirect("/");}
 });
 app.MapGet("/healthz",async(CancellationToken ct)=>{await using var db=factory.Open();await db.Kv.AsNoTracking().Select(k=>k.Key).FirstOrDefaultAsync(ct);return Results.Text("ok\n");});
