@@ -1,82 +1,104 @@
-# Plan 03: Media identity from platform ids; content hash from bytes
+# Plan 03: Media identity from the CDN filename; content hash stable across URL rotation
 
-Status: proposed 2026-11-09 from the step-back review. Not started. A fresh session reviews this plan before any code changes.
+Status: proposed 2026-11-09 from the step-back review. Corrected on 2026-11-10 against main at 21e1f35 and a copy of the live database, then reviewed the same day (`.work/03-media-identity/plan-review.md`). Not started.
 
 ## Outcome
 
-A post's media slot is identified by the platform's own media id, with a stable fallback. A change of CDN host or URL grammar never bumps `ContentRevision` and never sends a post back to the model. Duplicate media rows for one slot stop appearing. Signed URLs leave the database once the file is on disk.
+A post's media slot is identified by the asset's CDN filename, with the current URL-based key as the fallback. A change of CDN host, path prefix or rendition parameters never bumps `ContentRevision` and never sends a post back to the model. Duplicate media rows for one asset stop appearing, and two renditions of one picture occupy one slot.
 
 ## Problem and evidence
 
-`PayloadParser.SourceKey` (L34-39) derives media identity from the CDN URL (scheme, host, path, `stp` and `url` parameters). `Ingest.ContentHash` (L81-87) includes `{Kind, SourceKey, bytes}` per source. Media rows match sources by `SourceKey` in four places (L85, L116, L125, `FeedQuery.RepeatKey`). A URL change therefore looks like new content: `ContentRevision++`, `InvalidateModel`, re-judge.
+`PayloadParser.SourceKey` (L34-39) derives media identity from the CDN URL: scheme, host, path, and the `stp` and `url` query parameters. `Ingest.ContentHash` (L82-88) includes `{Kind, SourceKey, bytes}` per source. Media rows match sources by `SourceKey` in four places (Ingest L86, L117, L126; `FeedQuery.RepeatKey` L171). When Meta serves the same file from another CDN host, the key changes and the post looks like new content: a new row, a new download, `ContentRevision++`, `InvalidateModel`, re-judge.
 
-Live instance, 2026-11-09:
+Live instance, copy of 2026-11-10 (aggregates only):
 
 | Measure | Value |
 |---|---|
-| Duplicate media rows removed by key version 2 on 10-25 | 191,804 across 8,624 posts |
-| Posts with `ContentRevision > 1` | 8,221 of 10,815 (max 382) |
-| Posts created after 10-25 with `ContentRevision > 1` | 162 of 1,371 (11.8%) |
-| (PostId, Position) groups with more than one row | 1,203 |
-| `Media.OriginalUrl` plus `Post.MediaManifestJson` size | about 41 MB, 30% of live table data |
+| Posts; media rows | 10,856; 25,877 (21,719 images, 4,158 videos) |
+| Posts with `ContentRevision > 1` | 8,244 (max 382) |
+| Posts captured after 10-25 with `ContentRevision > 1` | 180 of 1,412 (Facebook 170 of 626, Instagram 10 of 786) |
+| Rows whose URL ends in an asset filename (`<n>_<n>_<n>_n.ext`, `<token>.mp4`) | 25,560 of 25,877; 306 are proxied external previews (`url=` parameter); 11 have no filename |
+| Groups of rows with one filename in one post (duplicate identities) | 1,216 groups, 1,341 surplus rows |
+| What differs inside those groups | Facebook images: host only 948, `stp` only 150, host and `stp` 18; Facebook videos: host only 71; Instagram: 28 |
+| Rows with a different filename at the same (PostId, Position) | 1,268 slot groups; where both rows have bytes, the bytes always differ: a different picture, not a renamed one |
+| Posts with two current rows of one filename (two renditions in two slots) | 156, all Facebook; in 100 the lower slot is the smaller rendition |
+| Same filename, same `stp`, host rotated: downloaded bytes | 425 groups equal, 523 groups differ, and 520 of those differ in pixel size. The CDN picks the rendition by the signed parameters (`oh`, `ctp`), so no visible parameter fixes the rendition |
+| `Media.OriginalUrl` plus `Post.MediaManifestJson` | 17 MB plus 24 MB, of a 412 MB database |
 
-The parser reads no Facebook media id at all (media walk L517-530). For Instagram it reads `pk` for the post but not for carousel slides or `video_versions` (L113, L239, L455). The fixtures have no Facebook photo id and no `video_versions[].id`.
+Parser diff of 40 recent Facebook raw pairs (same post, two captures, revision bumped): the media key differed in 30 pairs, 27 of them with the same filename set; `SharedUrl` differed in 16, `TagsJson` in 7, text in 1. Ten Instagram pairs: media key in 5 (3 with the same filename set), `ObservedAuthorName` in 4, `TagsJson` in 3. The media key is the first cause of needless revisions. Shared-link and tag churn are the second cause and stay out of this plan (see "Out of scope").
 
-`Media` has no unique index (`FeedDbModelSnapshot.cs` L243). `MediaKeys.Normalize` (key version 2) runs once at `FeedDb.Initialize` and rekeys rows from `OriginalUrl` without a revision bump.
+Platform ids in the raws (25 newest raws per platform, read-only): Instagram carousel slides carry `pk` (552 of 552); `video_versions[]` entries carry no id (220 of 220). Facebook image nodes carry a numeric `id` in 59 of 113 cases (`Photo`, `Video`, `ProfilePicAttachmentMedia`); the other 54 (link previews, text backgrounds, untyped `image` objects) have no id and no identified parent. The fixtures have no Facebook photo id and no `video_versions[].id`.
+
+`Media` has no unique index on the key (`FeedDbModelSnapshot.cs` L231-291). `MediaKeys.Normalize` (key version 2) runs once at `FeedDb.Initialize` and rekeys rows from `OriginalUrl` without a revision bump. Spec 7.3 names this mechanism for every change of the key rule.
 
 ## Current behavior to keep in mind
 
-- `MediaSource(Kind, Url, SourceKey)` (`Entities.cs` L109). `Limit` (PayloadParser L554) keeps distinct-key images up to 8 (Facebook) or 10 (Instagram), then one video.
-- File path: `media/{platform}/{Safe(PlatformPostId)}/{pos:00}{suffix}{ext}`. The suffix is `-<sha(SourceKey)[..12]>` when another row holds the position (Ingest L127). Files are write-once (`MediaFiles.Image` L39-61).
+- `MediaSource(Kind, Url, SourceKey)` (`Entities.cs` L109). `Limit` (PayloadParser L554) keeps distinct-key images in payload order up to 8 (Facebook) or 10 (Instagram), then one video.
+- File path: `media/{platform}/{Safe(PlatformPostId)}/{pos:00}{suffix}{ext}`. The suffix is `-<sha(SourceKey)[..12]>` when another row holds the position (Ingest L128, Maintenance L24 and L55). Files are write-once (`MediaFiles.Image` L39-60).
 - `Maintenance.Images` (L14-44) retries undownloaded rows; a late success recomputes the hash and bumps the revision (L36-39) because the judge reads pictures.
-- Videos wait for the verdict (`Maintenance.Videos` L45-84). Video `ContentHash` is set but does not enter the post hash.
-- `MediaManifestJson` readers: `MediaKeys.cs` L33, `Maintenance.cs` L37, `IdentityStore.cs` L50, `FeedQuery.cs` L170, `ParserAudit.cs` L26.
+- Videos wait for the verdict (`Maintenance.Videos` L45-84). A video row's `ContentHash` is set but does not enter the post hash.
+- `MediaManifestJson` readers: `MediaKeys.cs` L33, `Maintenance.cs` L37, `IdentityStore.cs` L73, `FeedQuery.cs` L170, `ParserAudit.cs` L26. All deserialize `MediaSource[]`.
+- A bump of `PayloadParser.Version` re-admits unparsed blocked raws (`Processing.cs` L50) and re-indexes the diagnostics of raws with a warning (`CaptureIndex.cs` L24). It never replays the 36,703 parsed raws, and the posts keep their stored keys.
 
 ## Target design
 
-1. **A `MediaKey` per source.** Add `MediaKey` to `MediaSource` and a `MediaKey` column to `Media`. Priority: platform media id when the payload has one; else the last path segment of the CDN URL without query (Meta filenames are stable per asset); else the current `SourceKey`. Key form: `id:<platform id>`, `file:<name>`, `url:<sourcekey>`, so the kind is visible.
-2. **Parser reads the ids.** Facebook: the `id` of the `Photo` or `Video` node that holds the image or playable URL in the media walk (L517-530). Instagram: `carousel_media[].pk` for slides, the item `pk` for single media, `video_versions[].id` when present. Parser version 17.
-3. **Hash from keys and bytes.** `Ingest.ContentHash` uses `{Kind, MediaKey, bytes}`; `SourceKey` leaves the hash. A late image download still changes the hash once, as today. A URL-only change does not.
-4. **Match by `MediaKey`.** Replace the four `SourceKey` matches with `MediaKey`. `SourceKey` and `OriginalUrl` become fetch details for the pending download. Add a unique index on `(PostId, MediaKey)` filtered on `IsCurrent = 1`.
-5. **Key version 3 normalization.** Extend `MediaKeys.Normalize`: for existing rows compute `MediaKey` from `OriginalUrl` with the filename fallback, collapse rows per `(PostId, MediaKey)` with the same keep-order as version 2 (file on disk, then hash, then newest), rewrite the manifest, recompute `ContentHash` without a revision bump, delete superseded files after commit. Kv `media:key-version = 3`.
-6. **Drop signed URLs after download.** The daily job nulls `OriginalUrl` for rows with `Path` set and strips `Url` from manifest entries whose row is downloaded. A replay from raw restores URLs if a file is lost. Videos keep their URL until downloaded or pruned.
+1. **Key version 3: the filename is the identity.** `PayloadParser.SourceKey` keeps its signature and returns, in priority order:
+   - for a proxied external preview (a `url` query parameter): today's key, the URL without fragment with `stp` and `url` only. The proxied origin is the identity.
+   - for a URL on a Meta CDN host (the host ends in `fbcdn.net` or `cdninstagram.com`) whose last path segment is a filename with an extension: `file:<segment>`. Meta names an asset once (`<n>_<n>_<n>_n.jpg`, `<token>.mp4`); the host, the path prefix and the rendition parameters vary per request and per CDN edge. The host condition keeps a generic name such as `image.jpg` on another host from joining two pictures; every filename-keyed row on the live instance is on one of the two suffixes (25,545 and 15).
+   - for anything else: today's key.
+   The `permalink:<id>` key for a video fetched through yt-dlp is set by the parser, not by `SourceKey`, and stays. `MediaKeys.Version` becomes `"3"`.
+2. **No parser version bump, no new column, no manifest change.** `SourceKey` stays the one identity column, `MediaSource` keeps its three fields, and `ContentHash` stays `{Kind, SourceKey, bytes}`. The parser does not read platform media ids (open question 1).
+3. **Normalization version 3.** `MediaKeys.Normalize` runs as today under the new version: rekey rows from `OriginalUrl`, collapse rows per `(PostId, SourceKey)`, rewrite the manifest with `DistinctBy` on the new key, recompute `ContentHash`, no revision bump, delete superseded files after the commit. Two changes to the version 2 code:
+   - A row or a manifest entry whose key starts with `permalink:` keeps its key. Version 2 rekeyed those rows from the permalink URL (`Ingest.cs` L130 stores the permalink as `OriginalUrl`), so the next recapture of a reel-only post found no row, added one and bumped the revision. The live instance has 10 such rows, all rekeyed.
+   - The keep-order becomes: file on disk, then largest stored `Width`, then known byte hash, then newest. Two renditions of one picture now share a key, and in 100 of the 156 live cases the newer row is the smaller one.
+   Kv `media:key-version = 3`, `media:key-migration` records the counts. The expected count on the live instance is about 1,341 removed rows (measured above); no dry-run command is added.
+4. **The widest rendition wins a slot.** The Facebook media walk reads the `width` next to `image.uri` (or next to a bare `uri`). When two images share a key, the wider one replaces the earlier entry at its first-seen position; `Limit` is unchanged. Instagram already picks one candidate per node (6.9). The reader sees the card at full width, so the 768 px cap of vision input (7.6) is no reason to keep a thumbnail.
 
 ## Contracts to preserve
 
-- Write-once files and the `NN` slot naming (7.2). The suffix rule stays for a replaced slot.
-- Images download at ingest because signed URLs expire (7.3).
+- Write-once files and the `NN` slot naming (7.2). The suffix rule stays for a replaced slot; existing files keep their names because `Path` is stored.
+- Images download at ingest because signed URLs expire (7.3). An existing row with its file on disk is never fetched again (Ingest L127), so a host rotation costs no download.
 - Videos wait for the verdict; the hidden rule and the size cap stay (7.4).
-- Content-revision invalidation still fires for real content changes: text, shared text, tags, a new image, a late image file.
-- Raw replay remains the source of truth. Normalization never fabricates a key the raw cannot reproduce.
+- Content-revision invalidation still fires for real content changes: text, shared text, tags, a new image (new filename), a late image file.
+- Raw replay remains the source of truth. Normalization derives every key from a stored URL and never fabricates one.
+- `OriginalUrl` stays on every row. It is the input that every key version rekeys from.
 
 ## Implementation sequence
 
-1. Parser: extract ids and compute `MediaKey` with the three-tier rule. Update both fixtures to carry a Facebook photo id and an Instagram slide `pk`. Tests: a URL change with the same id gives the same key; a missing id falls back to the filename; a missing filename falls back to the source key.
-2. Entities and migration: `Media.MediaKey`, the filtered unique index, manifest schema with `MediaKey`. Keep `SourceKey`.
-3. Ingest and Maintenance: match and hash by `MediaKey`. Test: re-ingest the same post with a rewritten CDN host, assert `ContentRevision` unchanged and no new row. Test: a genuinely new image bumps the revision once.
-4. `MediaKeys.Normalize` version 3 with a dry-run report line. Test on a synthetic database with duplicate slots: rows collapse, files kept match the keep-order, no revision bump, Kv updated.
-5. `FeedQuery.RepeatKey` on `MediaKey` plus hash. Test: repeat folding still folds byte-identical images.
-6. Daily URL cleanup. Test: downloaded rows lose `OriginalUrl`; pending rows keep it; replay restores it.
+1. `SourceKey` version 3 in `PayloadParser` with the rule comment updated. Tests in `MediaTests`: a host rotation gives the same key; a different `stp` on one filename gives the same key; a proxied preview with another `url` gives a different key; a URL without a filename, or a filename on another host, keeps the URL key; the existing `SigningTokensDoNotChangeMediaIdentityButRenditionsDo` test changes its rendition assertion to the new rule.
+2. Facebook walk: widest `image` per key at the first-seen position. Test in `ParserTests`: two renditions of one filename in one story yield one image source with the wider URL, in the position of the first.
+3. `MediaKeys.Version = "3"`, header comment extended with the version 3 reason, the `permalink:` guard and the width rule in the keep-order. The `KeyVersionTwoNormalizes...` test becomes the version 3 test: two rows of one filename from two hosts collapse to the row with the file on disk, the manifest holds one entry with the `file:` key, the revision is unchanged, the hash matches `Ingest.ContentHash`, the marker is `3`. Two more cases: two rows with files on disk and different `Width` keep the wider; a `permalink:` video row and its manifest entry keep their key, and a recapture gives `Revised 0`.
+4. Ingest test: extend `RecaptureWithRotatedCdnParametersKeepsRevisionRowsAndFiles` so the second capture also rotates the host; the expected key becomes `file:a_n.jpg`; assert `Revised 0`, one row, one download, revision 1. Add a case where the second capture carries a different filename and assert the revision goes to 2 with a second row.
+5. Spec updates (below), spec.html rebuilt.
 
 ## Spec updates
 
-- `docs/07-media.md` 7.2 L13-17 (identity is the media key, not the URL), 7.3 L22 (the fetch key rule moves under "download"), 7.7 (URL cleanup).
-- `docs/05-data-model.md` L64-65 (manifest and content hash), L100-111 (Media columns, `MediaKey`, index), L287 (Kv `media:key-version` 3), 5.12 L449 (hash definition).
-- `docs/06-collectors.md` L165 (Facebook media walk reads ids), L193-194 (Instagram slides and video ids).
-- `IMPLEMENTATION.md` internal choices: media identity line.
+- `docs/07-media.md` 7.2 L13 (rows carry the key, not the URL, as identity) and 7.3 L23 (the key rule: filename first, proxied preview by origin, else the URL; version 3; the collapse keep-order).
+- `docs/05-data-model.md` L131 (`SourceKey` meaning) and L307 (Kv `media:key-version` 3).
+- `docs/06-collectors.md` L167 (the Facebook walk keeps the widest image per asset).
 
 ## Verification
 
-- Fast suite plus the tests above.
-- Private instance: run normalization version 3 in dry-run first and record collapsed rows and freed bytes; then live. Confirm the feed renders identically and the "older policy" count is unchanged. Over the following week, the share of new posts with `ContentRevision > 1` should fall from about 12% toward the share with real edits.
+- Fast suite, browser suite, `./build.sh`.
+- On a copy of the live database in a scratch instance directory, with the `media/` tree mirrored as empty files (13,375 files; `File.Exists` is all the keep-order reads): run `status --data <copy>` so `Initialize` performs the version 3 normalization; read `media:key-migration`; confirm the removed-row count is near 1,341, that `sum(ContentRevision)` over all posts is unchanged, that no row lost its `Path`, that the 10 permalink rows keep their key, and that the kept row of a two-rendition post is the wider one. Do not run against `data/`.
+- Over the following week: among new posts with `ContentRevision > 1`, the count whose media rows share a filename (the measure in the evidence table) should be zero. The overall share of bumped posts falls less, because shared-link and tag churn stay.
 
-## Open questions for the reviewer
+## Decisions (plan review, 2026-11-10; the owner is away, the session decided as owner proxy)
 
-1. Is the CDN filename an acceptable fallback for Facebook assets with no `Photo` node id? It is stable in practice but undocumented.
-2. Should a late image download still bump the revision, or should the judge be re-run only when vision is enabled? Today it bumps regardless.
-3. Null `OriginalUrl` after download, or keep it for debugging and accept the 30% storage share?
-4. Should the backfill in step 4 reparse from raw where the raw still exists, to get real ids instead of filenames? It costs one pass over 35k files.
+1. No platform-id tier. Instagram slides and posts carry `pk`; Facebook image nodes carry an id in about half of the cases; `video_versions` never do. The filename key covers every observed duplicate, and a renamed asset did not occur in 25,877 rows. The id tier would need a parser change, fixture edits and a second match path for rows keyed before the change. Reviewers agreed.
+2. No daily null of `OriginalUrl` after download (the original item 6): it saves 17 MB of 412 MB and removes the input every key normalization rekeys from. Reviewers agreed.
+3. No unique index on `(PostId, SourceKey)`: the migration runs before the normalization that collapses the 156 live duplicates, so the index would fail at upgrade, and an index violation at ingest would fail the raw instead of keeping the post. The matching logic keeps one row per key. Reviewers agreed; the skeptic's con 4 is answered in the report.
+4. The widest rendition wins (item 4 and the keep-order in item 3). The ux reviewer showed that first-seen would put a thumbnail on the card for about two thirds of the two-rendition posts, now and after the upgrade.
+5. A late image download still bumps the revision: the judge reads the picture (7.3). Unchanged.
+6. The `file:` tier is limited to Meta CDN hosts (skeptic con 1).
 
 ## Out of scope
 
-Image retention bounds (review finding 7), video context (plan 10), author identity (plan 04).
+- Shared-link and tag churn: `SharedUrl` differed in 16 of 40 recapture pairs and `TagsJson` in 7, with the media key unchanged in 10 of them. This is the second cause of needless revisions and needs its own measurement of what varies (a tracking parameter, a different attachment pick, a tag slice). Candidate for a follow-up plan.
+- Image retention bounds (review finding 7), video context (plan 10), author identity (plan 04, merged).
+
+## Changes before review (2026-11-10)
+
+- Anchors corrected to main at 21e1f35.
+- The 11-09 evidence table is replaced by the 11-10 measurement; the raw sample and the parser diff of recapture pairs are added.
+- The design moved from "platform id, else filename, else URL" with a new `MediaKey` column, parser version 17, a unique index and a daily URL cleanup to the filename key alone under the existing key-version mechanism. The reasons are in decisions 1 to 3. The reviewers judged this course; the review added the `permalink:` guard, the widest-rendition rule and the host condition.
