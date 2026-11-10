@@ -51,9 +51,10 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         var counts = await db.Posts.GroupBy(p => p.AuthorId).Select(g => new { Id = g.Key, Total = g.Count(), Hidden = g.Count(p => p.Hidden), Latest = g.Max(p => p.PostedAt) }).ToArrayAsync(ct);
         var visits = section == "people" ? await db.TimelineVisits.AsNoTracking().Where(v => v.AuthorId != null).OrderByDescending(v => v.At).ThenByDescending(v => v.Id).ToArrayAsync(ct) : [];
         var targets = section == "people" ? await db.SweepTargets.AsNoTracking().Where(t => t.State == "retry" && db.Kv.Any(k => k.Key == "sweep:" + t.Platform + ":cycle" && k.Value == t.CycleId)).ToArrayAsync(ct) : [];
+        var resolved = new ResolvedRules(authors, s);
         var visiblePeople = authors.Where(a => (platform.Length == 0 || a.Platform == platform) && (query.Length == 0 || Identity.Normalize((a.DisplayName ?? "") + " " + a.RefsJson).Contains(Identity.Normalize(query)))).Select(a => {
-            var rules = new RuleContext(a, authors, s); var count = counts.FirstOrDefault(c => c.Id == a.Id);
-            return new PersonRow(a, rules.CloseFriend, s.Preferences.Mutes.Any(e => Identity.Matches(e, a)), s.Preferences.Shows.Any(e => Identity.Resolve(e, authors).Any(x => x.Id == a.Id)), count?.Total ?? 0, count?.Hidden ?? 0, count?.Latest, visits.FirstOrDefault(v => v.AuthorId == a.Id), targets.FirstOrDefault(t => t.AuthorId == a.Id) is { } t ? $"Retry {t.Attempts}/{TimelineCoverage.MaxAttempts}; due {t.RetryAt:u}" : null);
+            var rules = new RuleContext(a, authors, s, resolved); var count = counts.FirstOrDefault(c => c.Id == a.Id);
+            return new PersonRow(a, rules.CloseFriend, s.Preferences.Mutes.Any(e => Identity.Matches(e, a)), resolved.Shown(a), count?.Total ?? 0, count?.Hidden ?? 0, count?.Latest, visits.FirstOrDefault(v => v.AuthorId == a.Id), targets.FirstOrDefault(t => t.AuthorId == a.Id) is { } t ? $"Retry {t.Attempts}/{TimelineCoverage.MaxAttempts}; due {t.RetryAt:u}" : null);
         }).Where(p => filter switch { "friends" => p.Author.IsFriend, "removed" => !p.Author.IsFriend, "close" => p.Close, "muted" => p.Muted, "always" => p.Always, _ => true }).ToArray();
         page = section == "recovery" ? Math.Max(1, page) : Math.Clamp(page, 1, Math.Max(1, (visiblePeople.Length + 39) / 40));
         var states = await db.PlatformStates.AsNoTracking().ToArrayAsync(ct); var runs = await db.Runs.AsNoTracking().OrderByDescending(r => r.Id).ToArrayAsync(ct);
@@ -146,13 +147,12 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         var version = form["version"].ToString(); bool refilter = action is "rules" or "filters" or "category";
         // A threshold edit changes the visibility of stored verdicts, so it reapplies too. Unlike the rule saves it must
         // never fail on a busy lock: the same form holds `enabled` and the timeouts, which the owner needs during a long
-        // run. A busy lock leaves the pending key set, and ResumeRefilter does the work when the run ends.
+        // run. It therefore takes no lock here. After the save it tries ResumeRefilter once; with a busy lock the pending
+        // key stays set and a scheduler tick does the work. A run that starts in between already reads the new threshold.
         bool threshold = action == "processing" && documents.Read().Snapshot().Config.Llm.Threshold != Number(form, "threshold");
-        ResourceLock? Hold(string name, string busy) { if (!refilter && !threshold) return null; var held = ResourceLock.Try(paths, name); return held is null && refilter ? throw new ResourceBusyException(busy) : held; }
-        using var processing = Hold("processing", "Processing is active. Try saving again after it finishes.");
-        using var ingestFb = Hold("ingest-facebook", "Facebook import is active. Try again shortly.");
-        using var ingestIg = Hold("ingest-instagram", "Instagram import is active. Try again shortly.");
-        bool locked = processing is not null && ingestFb is not null && ingestIg is not null;
+        using var processing = refilter ? ResourceLock.Try(paths, "processing") ?? throw new ResourceBusyException("Processing is active. Try saving again after it finishes.") : null;
+        using var ingestFb = refilter ? ResourceLock.Try(paths, "ingest-facebook") ?? throw new ResourceBusyException("Facebook import is active. Try again shortly.") : null;
+        using var ingestIg = refilter ? ResourceLock.Try(paths, "ingest-instagram") ?? throw new ResourceBusyException("Instagram import is active. Try again shortly.") : null;
         if (refilter || threshold) { await using var pending = factory.Open(); await pending.Put("management:refilter_pending", "1", ct); }
         var saved = documents.Save(version, d => {
             var s = d.Snapshot(); var root = d.ConfigObject();
@@ -217,8 +217,7 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
             return d with { Config = ManagementFiles.Json(root) };
         });
         if (refilter) await Refilter(saved.Snapshot(), CancellationToken.None);
-        if (threshold && locked) { var counts = await Refilter(saved.Snapshot(), CancellationToken.None); return $"Saved. Threshold reapplied: {counts.Hidden} hidden, {counts.Shown} shown, no model calls."; }
-        if (threshold) return "Saved. Existing posts follow the new threshold when the active run ends; work already running keeps its starting settings.";
+        if (threshold) return await ResumeRefilter(CancellationToken.None) is { } counts ? $"Saved. Threshold reapplied: {counts.Hidden} hidden, {counts.Shown} shown, no model calls." : "Saved. Existing posts follow the new threshold when the active run ends; work already running keeps its starting settings.";
         return refilter ? "Saved. Existing posts were refiltered; model judgments are not rerun automatically." : "Saved. New runs use these settings; work already running keeps its starting settings.";
     }
     public async Task<string> Person(long id, string action, bool enable, string version, CancellationToken ct)
@@ -261,13 +260,14 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
             _ => "Always-show setting saved. Existing posts were refiltered; mute and category rules still apply."
         };
     }
-    public async Task ResumeRefilter(CancellationToken ct)
+    // Returns null when nothing is pending or a lock is busy. The scheduler calls this on every tick, so a busy lock only delays the work.
+    public async Task<VisibilityStore.Counts?> ResumeRefilter(CancellationToken ct)
     {
-        await using var db = factory.Open(); if (await db.Get("management:refilter_pending", ct) is null) return;
-        using var processing = ResourceLock.Try(paths, "processing"); if (processing is null) return;
-        using var fb = ResourceLock.Try(paths, "ingest-facebook"); if (fb is null) return;
-        using var ig = ResourceLock.Try(paths, "ingest-instagram"); if (ig is null) return;
-        await Refilter(documents.Read().Snapshot(), ct);
+        await using var db = factory.Open(); if (await db.Get("management:refilter_pending", ct) is null) return null;
+        using var processing = ResourceLock.Try(paths, "processing"); if (processing is null) return null;
+        using var fb = ResourceLock.Try(paths, "ingest-facebook"); if (fb is null) return null;
+        using var ig = ResourceLock.Try(paths, "ingest-instagram"); if (ig is null) return null;
+        return await Refilter(documents.Read().Snapshot(), ct);
     }
     async Task<VisibilityStore.Counts> Refilter(InstanceSnapshot snapshot, CancellationToken ct)
     {

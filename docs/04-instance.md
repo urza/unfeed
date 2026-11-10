@@ -116,7 +116,7 @@ This is independent of `llm.vision`: captions are text, including with `rescore 
 | `summary_max_tokens` | int | 4000 | the summary budget |
 | `summary_enable_thinking` | bool? | null | Optional vLLM/Qwen chat-template override for summaries only. Null omits the extension; false disables thinking when supported by the configured endpoint(s). Judgment requests are unchanged. |
 | `summary_languages` | list | `["English", "Czech", "Slovak"]` | a summary keeps the post's language only for these. Any other post is summarized in English. Empty means always English. |
-| `threshold` | int | 4 | the hide line. A score under it hides the post. 0 hides nothing and still assigns categories. An edit applies to stored verdicts at the next refilter, with no model call (8.7). |
+| `threshold` | int | 4 | the hide line. A score under it hides the post. 0 hides nothing and still assigns categories. A save in Manage applies it to stored verdicts with no model call. After an edit in the file, run `refilter --all` (8.7, 8.8). |
 | `timeout_seconds` | int | 180 | per call, minimum 10 |
 | `batch` | int | 20 | maximum rows per selection/accounting batch; automatic and explicit model work feed successive batches through one rolling pool. Not an invocation limit or an execution barrier; use `--limit` for a hard scope cap. |
 | `parallel` | int | 1 | maximum model calls in flight across this instance, including judgment, summary and explicit commands. Refill free slots promptly while prepared work remains, across batch boundaries. Tune for the endpoint; it is not multiplied by platforms or workers. |

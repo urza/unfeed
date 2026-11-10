@@ -1,6 +1,6 @@
 # Plan 02: Derive visibility from stored decisions; version only prompt inputs
 
-Status: proposed 2026-11-09 from the step-back review. Reviewed and reduced on 2026-11-09 (report: `.work/02-derived-visibility/plan-review.md`). Not started.
+Status: proposed 2026-11-09 from the step-back review. Reviewed and reduced on 2026-11-09 (report: `.work/02-derived-visibility/plan-review.md`). Implemented on 2026-11-10 on branch `02-derived-visibility`; see "Notes from implement".
 
 ## Outcome
 

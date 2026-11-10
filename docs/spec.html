@@ -849,7 +849,7 @@ build.sh            publishes both executables into out/
 <td><code>threshold</code></td>
 <td>int</td>
 <td>4</td>
-<td>the hide line. A score under it hides the post. 0 hides nothing and still assigns categories. An edit applies to stored verdicts at the next refilter, with no model call (8.7).</td>
+<td>the hide line. A score under it hides the post. 0 hides nothing and still assigns categories. A save in Manage applies it to stored verdicts with no model call. After an edit in the file, run <code>refilter --all</code> (8.7, 8.8).</td>
 </tr>
 <tr>
 <td><code>timeout_seconds</code></td>
@@ -3066,7 +3066,7 @@ Some prose the human wrote.
 <p>A landing verdict applies step 3 alone, through the same code. It does not re-evaluate the deterministic gates: the owner may have unhidden a muted or keyword-hidden post, and a verdict must not hide it again. Those gates return at the next refilter or content refresh.</p>
 <p>The documented ingest, verdict, refilter and content-refresh paths reconcile hide ownership; render never does. The refilter operation reports total, hidden, shown and unchanged counts. A configuration change alone does not secretly rewrite historical post decisions during a page request.</p></div></details>
 <details class="section" id="08-filters-8-8-when-it-runs" open><summary>8.8 When it runs</summary><div class="body"><p>Every new post is evaluated in its insert transaction, including after a failed or checkpointed capture. A content revision refresh also evaluates the rules atomically. No unchecked row is visible between storage and a later stage. A filter failure rolls back the transaction and leaves the raw for retry.</p>
-<p><code>refilter [--post-id N | --since &lt;date&gt; | --all]</code> explicitly reapplies current rules to stored posts; default is since the newest collect began. Use <code>--all</code> after a global type, audience, keyword, mute or bypass edit. It also reapplies close-friends-only category restrictions. Refilter takes the relevant ingest lock so it cannot race an ingest transaction.</p>
+<p><code>refilter [--post-id N | --since &lt;date&gt; | --all]</code> explicitly reapplies current rules to stored posts; default is since the newest collect began. Use <code>--all</code> after a global type, audience, keyword, mute, bypass or threshold edit in the instance files. It also reapplies close-friends-only category restrictions. Refilter takes the relevant ingest lock so it cannot race an ingest transaction.</p>
 <p>CLI <code>refilter</code> and the Manage refilter run the same operation (<code>VisibilityStore.Reapply</code>) and give the same result for the same post. Only the scope differs: Manage always covers all history. The operation increments VisibilityRevision on every post in its scope, also when the result does not change. A verdict in flight carries the rules from its selection, and this revision makes its commit count as superseded.</p></div></details>
 <details class="section" id="08-filters-8-9-unhide" open><summary>8.9 Unhide</summary><div class="body"><p>The page action clears the four visibility columns, increments VisibilityRevision and stores the post's current ContentRevision in <code>OwnerUnhiddenRevision</code>. It is an explicit owner override of the model. While the content is unchanged, no refilter, threshold edit or rescore re-applies the <code>llm</code> hide. A content change ends the override, because the stored revision no longer matches; the next verdict decides again. Deterministic gates are not overridden: a mute, keyword, type or audience rule can hide the post again at the next refilter. An answer already in flight against the prior visibility revision cannot overwrite the action.</p></div></details>
 <details class="section" id="08-filters-management-controls" open><summary>Management controls</summary><div class="body"><p>The People section at <code>/manage</code> edits close-friend membership, mute and always-show rules using exact stored platform identities. If removing a person from a name-based rule that currently matches several people, retain the other current matches as exact refs. The Rules section also exposes the complete mute/show lists, including entries with no imported match. Mute is persistent policy, not a change to the platform relationship.</p>
@@ -3562,7 +3562,7 @@ Some prose the human wrote.
 </tr>
 <tr>
 <td><code>refilter [--post-id N | --since &lt;date&gt; | --all]</code></td>
-<td>re-runs the filter engine (deterministic gates, the stored low-score verdict, category restrictions) under ingest ownership, with the same rules as the Manage refilter. The default scope is narrower than Manage: posts captured since the newest collect. Use --all after a global rule edit (chapter 8).</td>
+<td>re-runs the filter engine (deterministic gates, the stored low-score verdict, category restrictions) under ingest ownership, with the same rules as the Manage refilter. The default scope is narrower than Manage: posts captured since the newest collect. Use --all after a global rule or threshold edit (chapter 8).</td>
 <td>0</td>
 </tr>
 <tr>

@@ -60,7 +60,7 @@ The documented ingest, verdict, refilter and content-refresh paths reconcile hid
 
 Every new post is evaluated in its insert transaction, including after a failed or checkpointed capture. A content revision refresh also evaluates the rules atomically. No unchecked row is visible between storage and a later stage. A filter failure rolls back the transaction and leaves the raw for retry.
 
-`refilter [--post-id N | --since <date> | --all]` explicitly reapplies current rules to stored posts; default is since the newest collect began. Use `--all` after a global type, audience, keyword, mute or bypass edit. It also reapplies close-friends-only category restrictions. Refilter takes the relevant ingest lock so it cannot race an ingest transaction.
+`refilter [--post-id N | --since <date> | --all]` explicitly reapplies current rules to stored posts; default is since the newest collect began. Use `--all` after a global type, audience, keyword, mute, bypass or threshold edit in the instance files. It also reapplies close-friends-only category restrictions. Refilter takes the relevant ingest lock so it cannot race an ingest transaction.
 
 CLI `refilter` and the Manage refilter run the same operation (`VisibilityStore.Reapply`) and give the same result for the same post. Only the scope differs: Manage always covers all history. The operation increments VisibilityRevision on every post in its scope, also when the result does not change. A verdict in flight carries the rules from its selection, and this revision makes its commit count as superseded.
 
