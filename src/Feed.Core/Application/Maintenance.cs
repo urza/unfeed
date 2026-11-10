@@ -216,13 +216,18 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
                 await copy.OpenAsync(ct); using var check = copy.CreateCommand(); check.CommandText = "PRAGMA integrity_check";
                 if (await check.ExecuteScalarAsync(ct) is not "ok" and var result) throw new IOException("backup integrity check failed: " + result);
             }
-            if (!File.Exists(target)) File.Move(temp, target);
+            // Two processes can pass the File.Exists check above during the same VACUUM INTO; the one that loses the
+            // rename keeps the winner's copy instead of failing its start.
+            try { File.Move(temp, target); } catch (IOException) when (File.Exists(target)) { }
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
     }
     public static void Rotate(string folder)
     {
         if (!Directory.Exists(folder)) return;
+        // A process killed during its VACUUM INTO leaves its temporary copy behind; an hour of age keeps the copy a
+        // parallel process writes right now.
+        foreach (var temp in Directory.EnumerateFiles(folder, "*.tmp")) if (File.GetLastWriteTimeUtc(temp) < DateTime.UtcNow.AddHours(-1)) File.Delete(temp);
         var daily = Directory.EnumerateFiles(folder, "feed-????????.db").Select(f => (File: f, Date: DateTime.TryParseExact(Path.GetFileNameWithoutExtension(f)[5..], "yyyyMMdd", null, System.Globalization.DateTimeStyles.None, out var d) ? d : (DateTime?)null)).Where(x => x.Date != null).OrderByDescending(x => x.Date).ToArray();
         var keep = daily.Take(DailyBackups).Concat(daily.Where(x => x.Date!.Value.DayOfWeek == DayOfWeek.Sunday).Take(SundayBackups)).Select(x => x.File).ToHashSet();
         foreach (var x in daily) if (!keep.Contains(x.File)) File.Delete(x.File);
@@ -231,22 +236,24 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
     }
     public static async Task<string> BackupLine(InstancePaths paths, FeedDb db, CancellationToken ct)
     {
-        var copies = Directory.Exists(paths.Get("backups")) ? Directory.EnumerateFiles(paths.Get("backups"), "*.db").Count() : 0;
-        if (await db.Get("backup:error", ct) is { } error) return $"backup: FAILED {error}; {copies} copies in backups/";
-        return await db.Get("backup:last", ct) is { } last ? $"backup: last {last}; {copies} copies in backups/" : "backup: none yet";
+        var copies = Directory.Exists(paths.Get("backups")) ? Directory.EnumerateFiles(paths.Get("backups"), "*.db").Count() : 0; var last = await db.Get("backup:last", ct);
+        if (await db.Get("backup:error", ct) is { } error) return $"backup: FAILED {error}; last good {last ?? "never"}; {copies} copies in backups/";
+        return last is not null ? $"backup: last {last}; {copies} copies in backups/" : "backup: none yet (daily backups run only while the scheduler is enabled)";
     }
     // Deleted raw rows outlive their files by months so that status and recovery still explain a recent capture,
     // then they go: at about 800 rows a day the table would otherwise grow for good. The files were deleted by the
     // prune before, so no run lookup depends on these rows.
     public async Task<string> Trim(FeedConfig c, bool dryRun, CancellationToken ct)
     {
-        using var processing = ResourceLock.Try(paths, "processing") ?? throw new ResourceBusyException("processing busy; retention deferred");
         if (c.RawRowsRetentionDays == 0) return "trim: raw rows retention is off";
+        using var processing = ResourceLock.Try(paths, "processing") ?? throw new ResourceBusyException("processing busy; retention deferred");
         await using var db = factory.Open(); var cutoff = Clock.Now.AddDays(-c.RawRowsRetentionDays);
         var rows = db.RawSnapshots.Where(r => r.Deleted && r.CapturedAt <= cutoff); var diagnostics = db.RawDiagnostics.Where(d => rows.Any(r => r.Id == d.RawSnapshotId));
         var rowCount = await rows.CountAsync(ct); var diagnosticCount = await diagnostics.CountAsync(ct);
+        // The diagnostics go explicitly: the count in the summary and the deletion must not depend on the connection's
+        // foreign_keys pragma, which is what the model's cascade relies on.
         if (!dryRun) { await diagnostics.ExecuteDeleteAsync(ct); await rows.ExecuteDeleteAsync(ct); }
-        return $"trim: {(dryRun ? "dry-run" : "done")} deleted raw rows={rowCount}, diagnostics={diagnosticCount}; rows deleted more than {c.RawRowsRetentionDays} days ago by capture date";
+        return $"trim: {(dryRun ? "dry-run" : "done")} deleted raw rows={rowCount}, diagnostics={diagnosticCount}; rows captured more than {c.RawRowsRetentionDays} days ago";
     }
     // Free pages are given back by one VACUUM that also turns on incremental auto-vacuum; after that a daily
     // incremental_vacuum keeps the file small with no rewrite. The rewrite needs every writer parked behind the

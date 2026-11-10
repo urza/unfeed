@@ -31,7 +31,7 @@ public sealed class LifecycleTests
     {
         await using var i = new TestInstance(); await i.Init(); await File.WriteAllTextAsync(i.Paths.Get("backups"), "not a folder");
         var result = await new Maintenance(i.Paths, i.Factory, new HttpClient()).Backup(default); Assert.StartsWith("backup failed", result);
-        await using var db = i.Factory.Open(); Assert.NotNull(await db.Get("backup:error")); Assert.StartsWith("backup: FAILED", await Maintenance.BackupLine(i.Paths, db, default));
+        await using var db = i.Factory.Open(); Assert.NotNull(await db.Get("backup:error")); var line = await Maintenance.BackupLine(i.Paths, db, default); Assert.StartsWith("backup: FAILED", line); Assert.Contains("last good never", line);
     }
     [Fact] public async Task SnapshotRefusesTheLiveFileAndKeepsAnExistingTarget()
     {
@@ -50,11 +50,12 @@ public sealed class LifecycleTests
             for (var d = 0; d < 40; d++) File.WriteAllText(Path.Combine(folder, $"feed-{last.AddDays(-d):yyyyMMdd}.db"), "");
             foreach (var name in new[] { "pre-20261001000000_A.db", "pre-20261101000000_B.db", "pre-20261110000000_C.db" }) File.WriteAllText(Path.Combine(folder, name), "");
             File.WriteAllText(Path.Combine(folder, "feed-manual.db"), "");
+            var stale = Path.Combine(folder, "feed-20261109.db.123.tmp"); File.WriteAllText(stale, ""); File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-2)); File.WriteAllText(Path.Combine(folder, "feed-20261110.db.456.tmp"), "");
             Maintenance.Rotate(folder);
             var kept = Directory.GetFiles(folder).Select(Path.GetFileName).Order().ToArray();
             var expected = Enumerable.Range(0, 7).Select(d => $"feed-{last.AddDays(-d):yyyyMMdd}.db")
                 .Concat(new[] { "feed-20261108.db", "feed-20261101.db", "feed-20261025.db", "feed-20261018.db" })
-                .Concat(new[] { "pre-20261101000000_B.db", "pre-20261110000000_C.db", "feed-manual.db" }).Distinct().Order().ToArray();
+                .Concat(new[] { "pre-20261101000000_B.db", "pre-20261110000000_C.db", "feed-manual.db", "feed-20261110.db.456.tmp" }).Distinct().Order().ToArray();
             Assert.Equal(expected, kept);
         }
         finally { Directory.Delete(folder, true); }
@@ -95,12 +96,15 @@ public sealed class LifecycleTests
             db.Add(new RawDiagnostic { RawSnapshotId = old.Id, Code = "a", Fingerprint = "f1", Impact = "auxiliary" }); db.Add(new RawDiagnostic { RawSnapshotId = live.Id, Code = "b", Fingerprint = "f2", Impact = "auxiliary" }); await db.SaveChangesAsync();
         }
         var config = new InstanceFiles(i.Paths).Current.Config; Assert.Equal(180, config.RawRowsRetentionDays);
-        Assert.Equal("trim: dry-run deleted raw rows=1, diagnostics=1; rows deleted more than 180 days ago by capture date", await maintenance.Trim(config, true, default));
+        Assert.Equal("trim: dry-run deleted raw rows=1, diagnostics=1; rows captured more than 180 days ago", await maintenance.Trim(config, true, default));
         await using (var db = i.Factory.Open()) { Assert.Equal(3, await db.RawSnapshots.CountAsync()); Assert.Equal(2, await db.RawDiagnostics.CountAsync()); }
         Assert.StartsWith("trim: done deleted raw rows=1, diagnostics=1", await maintenance.Trim(config, false, default));
         await using (var db = i.Factory.Open()) { Assert.Equal(["live.json", "recent.json"], (await db.RawSnapshots.Select(r => r.Path).ToListAsync()).Order()); Assert.Equal("b", (await db.RawDiagnostics.SingleAsync()).Code); }
-        Assert.Equal("trim: raw rows retention is off", await maintenance.Trim(config with { RawRowsRetentionDays = 0 }, false, default));
-        using (ResourceLock.Try(i.Paths, "processing")) await Assert.ThrowsAsync<ResourceBusyException>(() => maintenance.Trim(config, false, default));
+        using (ResourceLock.Try(i.Paths, "processing"))
+        {
+            Assert.Equal("trim: raw rows retention is off", await maintenance.Trim(config with { RawRowsRetentionDays = 0 }, false, default));
+            await Assert.ThrowsAsync<ResourceBusyException>(() => maintenance.Trim(config, false, default));
+        }
     }
     [Fact] public async Task DailyMaintenanceBacksUpThenCompacts()
     {

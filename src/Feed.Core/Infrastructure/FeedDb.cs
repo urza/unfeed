@@ -51,7 +51,12 @@ public sealed class FeedDb(InstancePaths paths) : DbContext
         var pending = (await Database.GetPendingMigrationsAsync(ct)).ToArray();
         if (pending.Length > 0 && (await Database.GetAppliedMigrationsAsync(ct)).Any())
         {
-            var backups = paths.Get("backups"); await Application.Maintenance.Snapshot(this, Path.Combine(backups, $"pre-{pending[0]}.db"), ct); Application.Maintenance.Rotate(backups);
+            var backups = paths.Get("backups"); var target = Path.Combine(backups, $"pre-{pending[0]}.db");
+            // Deliberate: a start without a restore point is refused. The message names the cause, because the raw
+            // SQLite or IO error (disk full, folder not writable) does not.
+            try { await Application.Maintenance.Snapshot(this, target, ct); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException) { throw new IOException($"pre-migration backup to {target} failed: {e.Message}; free disk space or remove old copies in backups/, then start again", e); }
+            Application.Maintenance.Rotate(backups);
         }
         await Database.MigrateAsync(ct); await Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct); await Application.MediaKeys.Normalize(this, paths, ct);
     }
