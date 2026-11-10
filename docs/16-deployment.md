@@ -19,7 +19,7 @@ The checkout contains reusable code and synthetic examples. `data/` contains per
 | `Xvfb` | the virtual display for the headed browser on a headless host |
 | `x11vnc`, `websockify` with noVNC | the human's window into that display for the login |
 | `ffmpeg` | reference processor for shrinking vision images; an equivalent implementation is allowed by 7.6 |
-| `yt-dlp` | the video fallback download and the optional video context (7.8). Install the standalone release binary `yt-dlp_linux` at the version the Dockerfile pins, not the distribution package, which is months behind; a missing or broken tool shows in `status` and on Manage after the next scheduled processing run (12.9) |
+| `yt-dlp` | the video fallback download and the optional video context (7.8). Install the standalone release binary `yt-dlp_linux` at the version the Dockerfile pins, not the distribution package, which is months behind; a missing or broken tool shows in `status` and on Manage after the next `process` run (12.9) |
 | File-copy support in .NET | profile staging uses the built-in recursive copy; rsync is not required |
 | `sqlite3` | ad-hoc read-only queries by the operator |
 | Noto fonts, including color emoji | the browser renders the sites' text and emoji as a human's browser would |

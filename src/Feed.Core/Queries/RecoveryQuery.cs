@@ -82,8 +82,8 @@ public static class RecoveryQuery
                 bool attention = tool == "yt-dlp" && s.Config.VideoContext.Enabled, notice = tool == "yt-dlp" || s.Config.Llm.Vision;
                 if (!attention && !notice) continue;
                 var problem = $"{tool} {(state.Status == "missing" ? "is not installed or not on PATH" : "did not answer a version call: " + state.Error)}";
-                var recovery = tool == "yt-dlp" ? "Install yt-dlp (deployment 16.2) or set video_context.enabled to false. Pending video fallbacks wait for the tool. The next processing run clears this row."
-                    : "Install ffmpeg (deployment 16.2). Until then vision sends the original image. The next processing run clears this row.";
+                var recovery = (tool == "yt-dlp" ? "Install yt-dlp (deployment 16.2) or set video_context.enabled to false. Pending video fallbacks wait for the tool. " : "Install ffmpeg (deployment 16.2). Until then vision sends the original image. ")
+                    + "The next processing run clears this row; press Process pending work on the AI processing page to check now.";
                 issues.Add(new("tools", tool, problem, 1, state.At, null, recovery, !attention) { Disposition = attention ? RecoveryDisposition.Attention : RecoveryDisposition.Informational });
             }
         var superseded = CaptureHealth.Superseded(db);

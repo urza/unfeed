@@ -1,3 +1,4 @@
+using Feed.Core.Domain;
 using Feed.Core.Infrastructure;
 using Xunit;
 namespace Feed.Tests;
@@ -11,7 +12,7 @@ public sealed class ToolHealthTests
         Assert.Equal("missing", (await ToolHealth.Check("feed-test-missing-tool", default)).Status);
         var present = await ToolHealth.Check("dotnet", default);
         Assert.Equal("ok", present.Status); Assert.Matches(@"^\d+\.", present.Version!);
-        await ToolHealth.Probe(db, default, "feed-test-missing-tool");
-        Assert.False(await ToolHealth.Available(db, "feed-test-missing-tool")); Assert.Equal("missing", (await ToolHealth.Read(db, "feed-test-missing-tool"))!.Status);
+        await db.Put(ToolHealth.Key("yt-dlp"), System.Text.Json.JsonSerializer.Serialize(new ToolHealth.State("error", null, "exit 1", Clock.Now), InstanceValidation.Json));
+        Assert.False(await ToolHealth.Available(db, "yt-dlp")); Assert.StartsWith("tools: yt-dlp error (exit 1), checked ", await ToolHealth.Line(db));
     }
 }

@@ -68,9 +68,11 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
                         await using var input = await response.Content.ReadAsStreamAsync(timeout.Token); await using var output = File.Create(temp); var buffer = new byte[65536]; long total = 0; int n;
                         while ((n = await input.ReadAsync(buffer, timeout.Token)) > 0) { total += n; if (total > cap) throw new OversizeException(); await output.WriteAsync(buffer.AsMemory(0, n), timeout.Token); }
                     }
-                    catch (Exception e) when ((e is HttpRequestException or TaskCanceledException) && !ct.IsCancellationRequested && p.Permalink is not null) { temp = fallbackReady ? await DownloadTool(p, temp, cap, ct) : throw new System.ComponentModel.Win32Exception("yt-dlp is not installed"); }
+                    catch (Exception e) when ((e is HttpRequestException or TaskCanceledException) && !ct.IsCancellationRequested && p.Permalink is not null) { temp = await Fallback(); }
                 }
-                else temp = fallbackReady ? await DownloadTool(p, temp, cap, ct) : throw new System.ComponentModel.Win32Exception("yt-dlp is not installed");
+                else temp = await Fallback();
+                // The probe's verdict and a failed spawn end the same way, in the Win32Exception catch below.
+                Task<string> Fallback() => fallbackReady ? DownloadTool(p, temp, cap, ct) : throw new System.ComponentModel.Win32Exception("yt-dlp is not available");
                 await db.Entry(m).ReloadAsync(ct); await db.Entry(p).ReloadAsync(ct);
                 if (!m.IsCurrent || p.Hidden) { File.Delete(temp); m.PrunedAt = Clock.Now; m.Error = "source superseded or post hidden"; }
                 else {
@@ -78,10 +80,10 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
                     m.Path = rel; m.ContentHash = MediaFiles.Hash(await File.ReadAllBytesAsync(full, ct)); (m.Width, m.Height) = await VideoSize(full, ct); m.Error = null; completed++;
                 }
             }
-            // A missing yt-dlp (Win32Exception, or the probe's verdict above) is the host's state, not the video's: the
-            // row keeps its attempts and waits, and the attempt stamp alone spaces the retries 30 minutes apart. Before
-            // plan 10 the first such failure pruned the row for good; the recovery rows now show the missing tool.
-            catch (System.ComponentModel.Win32Exception) { failed++; m.Error = "yt-dlp is not installed; the row waits for the tool"; m.DownloadAttempts--; }
+            // An unavailable yt-dlp (Win32Exception, or the probe's verdict above) is the host's state, not the video's:
+            // the row keeps its attempts and waits, and the attempt stamp alone spaces the retries 30 minutes apart.
+            // Before plan 10 the first such failure pruned the row for good; the recovery rows now show the tool.
+            catch (System.ComponentModel.Win32Exception) { failed++; m.Error = "yt-dlp is not available (see the tools line); the row waits for the tool"; m.DownloadAttempts--; }
             catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested) { failed++; m.Error = e.Message; if (m.DownloadAttempts >= 3 || e is OversizeException) m.PrunedAt = Clock.Now; }
             finally { foreach (var partial in Directory.EnumerateFiles(Path.GetDirectoryName(originalTemp)!, Path.GetFileName(originalTemp) + "*")) File.Delete(partial); }
             await db.SaveChangesAsync(ct);
@@ -93,18 +95,16 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
         if (p.Permalink is null) throw new IOException("no permalink for video fallback");
         // No cookies on purpose (plan 10): the owner's exported session must not be replayed by a second client with
         // another fingerprint. A permalink that needs a login fails here and the row is pruned after three attempts.
-        {
-            var start = new ProcessStartInfo("yt-dlp") { UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
-            var args = new List<string> { "--no-playlist", "--no-progress", "--max-filesize", cap.ToString(), "-f", "best[ext=mp4]/best", "--print", "after_move:filepath", "-o", output + ".%(ext)s", "--", p.Permalink }; foreach (var a in args) start.ArgumentList.Add(a);
-            using var process = Process.Start(start)!; using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(300)); var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token); var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
-            try {
-                await process.WaitForExitAsync(timeout.Token); var printed = await stdout; var error = await stderr;
-                var result = printed.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim();
-                if (process.ExitCode != 0 || result is null || !Path.GetFullPath(result).StartsWith(Path.GetFullPath(output) + ".", StringComparison.Ordinal) || !File.Exists(result)) throw new IOException("yt-dlp: " + error);
-                if (new FileInfo(result).Length > cap) throw new OversizeException(); return result;
-            }
-            finally { if (!process.HasExited) process.Kill(true); await process.WaitForExitAsync(); try { await Task.WhenAll(stdout, stderr); } catch (OperationCanceledException) { } }
+        var start = new ProcessStartInfo("yt-dlp") { UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
+        var args = new List<string> { "--no-playlist", "--no-progress", "--max-filesize", cap.ToString(), "-f", "best[ext=mp4]/best", "--print", "after_move:filepath", "-o", output + ".%(ext)s", "--", p.Permalink }; foreach (var a in args) start.ArgumentList.Add(a);
+        using var process = Process.Start(start)!; using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(300)); var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token); var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
+        try {
+            await process.WaitForExitAsync(timeout.Token); var printed = await stdout; var error = await stderr;
+            var result = printed.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim();
+            if (process.ExitCode != 0 || result is null || !Path.GetFullPath(result).StartsWith(Path.GetFullPath(output) + ".", StringComparison.Ordinal) || !File.Exists(result)) throw new IOException("yt-dlp: " + error);
+            if (new FileInfo(result).Length > cap) throw new OversizeException(); return result;
         }
+        finally { if (!process.HasExited) process.Kill(true); await process.WaitForExitAsync(); try { await Task.WhenAll(stdout, stderr); } catch (OperationCanceledException) { } }
     }
     static async Task<(int? Width, int? Height)> VideoSize(string path, CancellationToken ct)
     {

@@ -16,10 +16,9 @@ public static class ToolHealth
     public sealed record State(string Status, string? Version, string? Error, DateTime At);
     public static string Key(string tool) => "tools:" + tool;
 
-    public static async Task Probe(FeedDb db, CancellationToken ct, params string[] tools)
+    public static async Task Probe(FeedDb db, CancellationToken ct)
     {
-        foreach (var tool in tools.Length == 0 ? Tools : tools)
-            await db.Put(Key(tool), JsonSerializer.Serialize(await Check(tool, ct), InstanceValidation.Json), ct);
+        foreach (var tool in Tools) await db.Put(Key(tool), JsonSerializer.Serialize(await Check(tool, ct), InstanceValidation.Json), ct);
     }
     public static async Task<State?> Read(FeedDb db, string tool, CancellationToken ct = default)
         => await db.Get(Key(tool), ct) is { } json ? JsonSerializer.Deserialize<State>(json, InstanceValidation.Json) : null;

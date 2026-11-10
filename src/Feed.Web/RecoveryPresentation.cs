@@ -20,7 +20,7 @@ public static class RecoveryPresentation
         "classification" => "The post is stored. Classification needs another attempt; collecting the post again is not necessary.",
         "summary" => "The post is stored. Its summary needs another attempt.",
         "notice" => "These captures were processed. No replay is needed for these recorded warnings.",
-        "tools" => "The processing child checks yt-dlp and ffmpeg at the start of each scheduled run. Install the tool as deployment 16.2 describes, or turn off the feature that needs it. The next run clears this row.",
+        "tools" => "Each processing run checks yt-dlp and ffmpeg at its start. Install the tool as deployment 16.2 describes, or turn off the feature that needs it. The next run clears this row; Process pending work on the AI processing page starts one now.",
         "silent" => "The last home collects in a row found no posts. The feed shape or the capture gate may have changed. Inspect the raw diagnostics of the linked collect run and the browser session through noVNC. One collect that finds posts ends this alert.",
         _ => "Feed kept the captured data. Inspect the recovery instructions before collecting again."
     };

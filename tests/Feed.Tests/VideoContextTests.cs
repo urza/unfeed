@@ -95,7 +95,7 @@ public sealed class VideoContextTests
     }
     [Fact] public async Task CancellationPropagatesAndWritesNoCacheEntry()
     {
-        await using var i = new TestInstance(); Directory.CreateDirectory(i.Paths.Get("profiles","facebook")); File.WriteAllText(i.Paths.Get("profiles","facebook","cookies.txt"),"synthetic cookie");
+        await using var i = new TestInstance();
         using var cancel = new CancellationTokenSource();
         var tool = new Tool(async(s,ct) => { cancel.Cancel(); await Task.Delay(Timeout.Infinite,ct);return ""; });
         using var provider = new VideoContextProvider(i.Paths,tool:tool);

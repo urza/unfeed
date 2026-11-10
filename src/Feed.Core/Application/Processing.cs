@@ -26,9 +26,9 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
         using var ownedVideoContext = videoContext is null ? new VideoContextProvider(paths) : null;
         var enrichment = videoContext ?? ownedVideoContext!;
         var counts = new WorkCounts();
-        // The scheduled run is the one place that checks the external tools, so a tool installed or removed on a
-        // direct Linux host shows after the next run. Manual rescore and summarize runs skip it: they run inside
-        // tests and from the CLI, where two extra spawns per invocation buy nothing.
+        // A process run (scheduled, the Manage button or the CLI command) is the one place that checks the external
+        // tools, so a tool installed or removed on a direct Linux host shows after the next run. Rescore and summarize
+        // runs skip it: they run inside tests and from the CLI, where two extra spawns per invocation buy nothing.
         if (scope.Kind == "process") { await using var db = factory.Open(); await ToolHealth.Probe(db, ct); }
         await using var reporting = new WorkReporter(counts, report);
         string[] platforms = scope.Platform == "all" ? Platforms.All.Where(instance.Config.Enabled).ToArray() : [scope.Platform];
