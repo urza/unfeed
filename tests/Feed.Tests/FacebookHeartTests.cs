@@ -8,6 +8,17 @@ public sealed class FacebookHeartTests
 {
     const string Target = "https://www.facebook.com/synthetic/posts/101";
 
+    [Fact]
+    public void LikeUrlRewritesPermalinkPhpToThePostsFormAndLeavesOtherShapesAlone()
+    {
+        // permalink.php pages render no story_fbid link inside the post dialog, so the ownership proof fails there (2026-11-10).
+        Assert.Equal("https://www.facebook.com/1234/posts/pfbid0abc", Site.FacebookLikeUrl("https://www.facebook.com/permalink.php?story_fbid=pfbid0abc&id=1234"));
+        Assert.Equal("https://www.facebook.com/1234/posts/pfbid0abc", Site.FacebookLikeUrl("https://www.facebook.com/story.php?id=1234&story_fbid=pfbid0abc&comment_id=9"));
+        Assert.Equal(Target, Site.FacebookLikeUrl(Target));
+        Assert.Equal("https://www.facebook.com/permalink.php?story_fbid=pfbid0abc", Site.FacebookLikeUrl("https://www.facebook.com/permalink.php?story_fbid=pfbid0abc"));
+        Assert.Equal("https://www.facebook.com/photo/?fbid=5", Site.FacebookLikeUrl("https://www.facebook.com/photo/?fbid=5"));
+    }
+
     [Fact, Trait("Category", "Browser")]
     public async Task PermalinkDialogExcludesBackgroundAndCommentsAndConfirmsOnlyItsPost()
     {

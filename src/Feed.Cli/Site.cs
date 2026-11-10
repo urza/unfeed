@@ -102,6 +102,19 @@ public static class Site
         }
         return null;
     }
+    /// <summary>
+    /// The URL the like sender opens for a Facebook post. A `permalink.php?story_fbid=X&amp;id=N` page renders the
+    /// post dialog with `permalink.php?__cft__=...` timestamp links that carry no `story_fbid`, so the dialog
+    /// ownership proof in <see cref="Heart"/> finds no post key and rejects the control (observed 2026-11-10,
+    /// every heart on this shape failed). The same post as `/N/posts/X` renders `/N/posts/X` links in the dialog.
+    /// The post key is identical for both forms, so the proof stays as strict as before.
+    /// </summary>
+    public static string FacebookLikeUrl(string permalink)
+    {
+        if (!Uri.TryCreate(permalink, UriKind.Absolute, out var uri) || uri.AbsolutePath is not ("/permalink.php" or "/story.php")) return permalink;
+        var story = Regex.Match(uri.Query, @"(?:^\?|&)story_fbid=([^&]+)"); var owner = Regex.Match(uri.Query, @"(?:^\?|&)id=(\d+)(?:&|$)");
+        return story.Success && owner.Success ? $"https://www.facebook.com/{owner.Groups[1].Value}/posts/{Uri.UnescapeDataString(story.Groups[1].Value)}" : permalink;
+    }
     static string? InstagramPostKey(string? value)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http") || !(uri.Host == "instagram.com" || uri.Host.EndsWith(".instagram.com", StringComparison.OrdinalIgnoreCase))) return null;
