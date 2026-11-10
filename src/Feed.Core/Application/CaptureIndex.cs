@@ -29,13 +29,13 @@ public static class CaptureIndex
             try
             {
                 var file=factory.Paths.Get(raw.Path);var body=await File.ReadAllTextAsync(file,ct);var context=CaptureContext.Read(file,body);
-                var parsed=CaptureRecovery.ParseSaved(platform,body,file,context:context);
+                var parsed=PayloadParser.Parse(platform,body,context:context);
                 // Changed outcomes need a real replay. Indexing must not clear or mask them.
                 if (raw.Parsed && parsed.Diagnostics.Count > 0 || !raw.Parsed && parsed.Diagnostics.Count == 0) continue;
                 await using var tx=await db.Database.BeginTransactionAsync(ct);
                 await db.RawDiagnostics.Where(d=>d.RawSnapshotId==raw.Id).ExecuteDeleteAsync(ct);
                 foreach(var d in parsed.Issues) db.RawDiagnostics.Add(new(){RawSnapshotId=raw.Id,Code=d.Code,Fingerprint=d.Fingerprint,Path=d.Path,Impact=d.Impact,Evidence=d.Evidence,Root=d.Root,ParserVersion=PayloadParser.Version});
-                raw.CaptureToken=System.IO.File.Exists(file+".visits")?null:context?.Visit;raw.ContextJson=context is null?null:JsonSerializer.Serialize(context);raw.ClassificationJson=JsonSerializer.Serialize(parsed.Parts);raw.ParserVersion=PayloadParser.Version;
+                raw.CaptureToken=System.IO.File.Exists(file+".visits")?null:context?.Visit;raw.ContextJson=context is null?null:JsonSerializer.Serialize(context);raw.ParserVersion=PayloadParser.Version;
                 await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);count++;
             }
             catch(Exception e) when(e is IOException or FormatException or JsonException){Console.Error.WriteLine($"capture-index #{raw.Id}: {e.Message}");}

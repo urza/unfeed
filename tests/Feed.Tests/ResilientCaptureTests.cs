@@ -39,34 +39,6 @@ public sealed class ResilientCaptureTests
         Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("\"instream_extra_config\":null", "\"instream_extra_config\":{\"post_id\":\"hidden\"}")).Diagnostics);
         Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("VideoPlayerRelay_video", "Unknown")).Diagnostics);
     }
-    const string Unknown = """{"data":{"future_item":{"text":"unrecognized"}}}""";
-    const string Auxiliary = """{"label":"ProfileCometProfilePicture_user$defer$ProfileCometNewPictureMenu_user","path":["user","profile_header_renderer","user"],"data":{"story_bucket":{"nodes":[]},"cosmetic_hint":true}}""";
-    [Fact] public void RecoverySelectsIntactUnknownRootsWithSourceIndicesAndBoundedRequest()
-    {
-        var body = Story(1700000000) + new string(' ', 50000) + "\n" + Auxiliary;
-        var input = Assert.IsType<RecoveryInput>(RecoveryInput.Build("facebook", body, null, PayloadParser.Parse("facebook", body), 12000));
-        Assert.Equal(new[] { 1 }, input.SourceRoots); Assert.Equal(Auxiliary, input.Body);
-        Assert.True(JsonSerializer.Serialize(input.Messages).Length <= 12000);
-        var proposal = input.Merge(body, new([new(0, "auxiliary", "Profile controls", ["/data/story_bucket"])]));
-        var parsed = CaptureRecovery.Validate("facebook", body, proposal);
-        Assert.Empty(parsed.Diagnostics); Assert.Single(parsed.Posts); Assert.False(parsed.ExplicitEmpty);
-        Assert.Throws<FormatException>(() => input.Merge(body, new([new(1, "auxiliary", "Wrong index", [""])])));
-    }
-    [Fact] public void PartialOverlayPreservesOversizedSiblingAndCanReplay()
-    {
-        var body = Unknown + new string(' ', 50000) + "\n" + Auxiliary;
-        var input = Assert.IsType<RecoveryInput>(RecoveryInput.Build("facebook", body, null, PayloadParser.Parse("facebook", body), 12000));
-        var proposal = input.Merge(body, new([new(0, "auxiliary", "Profile controls", ["/data/story_bucket"])]));
-        var parsed = CaptureRecovery.Validate("facebook", body, proposal);
-        Assert.Single(parsed.Diagnostics); Assert.Contains(parsed.Parts, p => p.Root == 0 && p.Kind == "unknown");
-        Assert.Contains(parsed.Parts, p => p.Root == 1 && p.Kind == "auxiliary_model_validated");
-        Assert.Null(RecoveryInput.Build("facebook", body, null, parsed, 12000));
-    }
-    [Fact] public void UnknownBranchesInsideOneEnvelopeAreNotCutAwayToFit()
-    {
-        var body = "{\"data\":{\"padding\":\"" + new string('x', 50000) + "\",\"unknown\":{}}}";
-        Assert.Null(RecoveryInput.Build("facebook", body, null, PayloadParser.Parse("facebook", body), 12000));
-    }
     [Fact] public async Task ParserBlockedVisitRetainsGapWithoutBrowserRetry()
     {
         await using var i = new TestInstance(); await i.Init();

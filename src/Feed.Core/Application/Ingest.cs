@@ -6,7 +6,9 @@ using Feed.Core.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 namespace Feed.Core.Application;
 
-public sealed record IngestResult(int Found, int New, int Revised, int Media, int Failed);
+// Blocked is the subset of Failed that waits for a parser upgrade: the raw is kept, its posts are stored, and
+// nothing retries it by browser. Capture reports it apart from the failures that mean a broken run.
+public sealed record IngestResult(int Found, int New, int Revised, int Media, int Failed, int Blocked = 0);
 public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles media)
 {
     public static bool FriendsDirectory(string dir) => Path.GetFileName(dir).StartsWith("friends-", StringComparison.Ordinal) && !Path.GetFileName(dir).StartsWith("friends-timelines-", StringComparison.Ordinal);
@@ -36,16 +38,15 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
         {
             var people = FriendsDirectory(Path.GetDirectoryName(file)!); var body = await System.IO.File.ReadAllTextAsync(file, ct);
             var context = CaptureContext.Read(file, body);
-            var parsed = CaptureRecovery.ParseSaved(platform, body, file, people, context);
+            var parsed = PayloadParser.Parse(platform, body, people, context);
             await using (var diagnosticsDb = factory.Open())
             {
                 await using var tx = await diagnosticsDb.Database.BeginTransactionAsync(ct);
                 var raw = await diagnosticsDb.RawSnapshots.SingleAsync(r => r.Path == relative, ct);
-                if (raw.ParserVersion != PayloadParser.Version || raw.BlockedParserVersion is { } blocked && blocked != PayloadParser.Version) { raw.RecoveryAttempts = 0; raw.RecoveryState = null; raw.RecoveryAttemptedAt = null; raw.RecoveryError = null; raw.RecoveryKey = null; }
                 raw.ContextJson = context is null ? null : JsonSerializer.Serialize(context);
                 // Multi-visit deduplication cannot safely assign this capture to one person.
                 raw.CaptureToken = System.IO.File.Exists(file + ".visits") ? null : context?.Visit;
-                raw.ClassificationJson = JsonSerializer.Serialize(parsed.Parts); raw.ParserVersion = PayloadParser.Version;
+                raw.ParserVersion = PayloadParser.Version;
                 await diagnosticsDb.RawDiagnostics.Where(d => d.RawSnapshotId == raw.Id).ExecuteDeleteAsync(ct);
                 foreach (var d in parsed.Issues) diagnosticsDb.RawDiagnostics.Add(new() { RawSnapshotId = raw.Id, Code = d.Code, Fingerprint = d.Fingerprint, Path = d.Path, Impact = d.Impact, Evidence = d.Evidence, Root = d.Root, ParserVersion = PayloadParser.Version });
                 await diagnosticsDb.SaveChangesAsync(ct); await tx.CommitAsync(ct);
@@ -73,7 +74,7 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
         catch (Exception e) when (e is not OperationCanceledException)
         {
             int? blocked = e is FormatException or JsonException ? PayloadParser.Version : null;
-            await using var db = factory.Open(); await db.RawSnapshots.Where(r => r.Path == relative).ExecuteUpdateAsync(s => s.SetProperty(r => r.Error, e.Message).SetProperty(r => r.Parsed, false).SetProperty(r => r.BlockedParserVersion, blocked), ct); return new(found, added, revised, files, 1);
+            await using var db = factory.Open(); await db.RawSnapshots.Where(r => r.Path == relative).ExecuteUpdateAsync(s => s.SetProperty(r => r.Error, e.Message).SetProperty(r => r.Parsed, false).SetProperty(r => r.BlockedParserVersion, blocked), ct); return new(found, added, revised, files, 1, blocked is null ? 0 : 1);
         }
     }
     // Changed content invalidates model output: clear the attempt state so the judge and the summary run again for the new revision.

@@ -47,7 +47,7 @@ Illustrative output uses synthetic counts; counters vary by operation and curren
 ```
 collect facebook home: ok run=#12 (found=31, new=9, scrolls=8, batches=6, media=14); ingest=done; coverage=home-only
 process facebook: ok run=#13 (raws=0, scored=7, summarized=3, videos=1, failed=0, superseded=0, remaining=0)
-friends instagram home: ok run=#14 (found=12, new=0, scrolls=4, batches=2, visited=0, incomplete=0, empty=0, unrendered=0); ingest=done; coverage=complete=false; pruned=0 [error=]
+friends instagram home: ok run=#14 (found=12, new=0, scrolls=4, batches=2, visited=0, incomplete=0, empty=0, unrendered=0, blocked=0); ingest=done; coverage=complete=false; pruned=0 [error=]
 reparse facebook: ok (dirs=1, found=31, new=0, revised=0, media=0, pending=0)
 login facebook: ok
 ```
@@ -68,9 +68,8 @@ In the timeline modes, `visited` counts the profiles opened, `empty` the profile
 
 ### Capture inspection and recovery commands
 
-- `parser-audit --platform X [--raw-ids N,N | --run-id N | --failed] [--limit N] --output FILE`: read-only bounded parsing, default 20/max 1000 captures. The output must be a new JSON file inside the private instance. Reports native/effective outcomes, structured issues, source hashes, observations and corresponding stored post fields for comparison. Does not migrate the database, ingest, call the model or create a run.
+- `parser-audit --platform X [--raw-ids N,N | --run-id N | --failed] [--limit N] --output FILE`: read-only bounded parsing, default 20/max 1000 captures. The output must be a new JSON file inside the private instance. Reports parser outcomes, structured issues, source hashes, observations and corresponding stored post fields for comparison. Does not migrate the database, ingest, call the model or create a run.
 - `capture-index --platform X [--limit N]`: default 100/max 5000 diagnostic records. Backfills structured evidence under ingest ownership without post replay. Changed parser outcomes are skipped until real replay; the command does not clear historical errors.
-- `capture-recover --platform X|all [--raw-ids N,N] [--mode observe|apply] [--limit N]`: invokes the bounded model queue explicitly, using the primary configured model. Defaults to configured mode/batch; mode must be observe/apply. Explicit IDs must fit the batch and limit and refer to available unparsed feed captures outside active browser runs. Explicit selection permits a deliberate new attempt or applying an observed proposal; it does not rewrite stored policy. Output reports applications; unresolved decisions remain in Recovery and the attempt audit.
 
 `status` summarizes compatibility groups with affected-capture counts and fingerprints. Inspect detailed records through paginated Recovery or a bounded parser audit. Group counts and affected-capture counts are different quantities.
 

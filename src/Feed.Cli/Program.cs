@@ -23,7 +23,6 @@ Usage: dotnet out/Feed.Cli.dll COMMAND [--data DIR] [options]
   reparse --platform X [--run DIR | --path DIR | --all | --failed] [--no-network]
   capture-index --platform X [--limit N]
   parser-audit --platform X [--raw-ids N,N | --run-id N | --failed] [--limit N] --output FILE
-  capture-recover --platform X|all [--raw-ids N,N] [--mode observe|apply] [--limit N]
   process --platform X|all [--limit N]
   refilter [--post-id N | --since DATE | --all]
   rescore [--all] [--platform X] [--limit N] [--since DATE] [--post-id N | --post-ids N,N,...] [--author REF] [--text-only]
@@ -71,15 +70,6 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
                 var indexLimit = a.Number("limit") ?? 100;
                 if (indexLimit > 5000) throw new ArgumentException("Index limit cannot exceed 5000");
                 Console.WriteLine($"capture-index: {await CaptureIndex.Run(factory, a.Platform(), indexLimit, ct)} captures indexed; no post replay"); return 0;
-            }
-            if (a.Command == "capture-recover")
-            {
-                var p = a.Platform(true); var recoveryMode = a.Get("mode") ?? s.Config.CaptureRecovery.Mode;
-                if (recoveryMode is not ("observe" or "apply")) throw new ArgumentException("Recovery mode must be observe or apply");
-                using var ownership = ResourceLock.Try(paths, "processing") ?? throw new ResourceBusyException("processing busy");
-                var snapshot = s with { Config = s.Config with { CaptureRecovery = s.Config.CaptureRecovery with { Mode = recoveryMode } } };
-                var n = await new CaptureRecovery(paths, factory, new ModelClient(http), ingest).Run(snapshot, p == "all" ? Platforms.All.Where(s.Config.Enabled).ToArray() : [p], a.Number("limit") ?? s.Config.CaptureRecovery.Batch, ct, a.Get("raw-ids") is { } rawIds ? ParseIds(rawIds) : null);
-                Console.WriteLine($"capture-recover: applied={n}; inspect saved model attempts and Recovery for unresolved proposals"); return 0;
             }
             if (a.Command == "init") { Console.WriteLine($"init: instance at {paths.Root}, database {paths.Database} ready; config {(File.Exists(paths.Get("config.json")) ? "found" : "absent (defaults: every platform paused)")}"); return 0; }
             if (a.Command == "rules") { Console.Write(await Reports.Rules(factory, s)); return 0; }

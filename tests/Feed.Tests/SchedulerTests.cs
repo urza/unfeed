@@ -63,7 +63,7 @@ public sealed class SchedulerTests
         using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(10));
         while(true){await using var db=i.Factory.Open();var r=await db.RunRequests.SingleAsync(timeout.Token);if(r.Status=="refused"){Assert.Contains("before registering",r.Note);Assert.NotNull(await db.Get("process:not_before"));break;}await Task.Delay(10,timeout.Token);}
     }
-    [Fact] public async Task CaptureRecoveryHonorsPauseReloginAndStartupBackoff()
+    [Fact] public async Task SweepRecoveryHonorsPauseReloginAndStartupBackoff()
     {
         await using var i = new TestInstance(); await i.Init();
         var config = i.Paths.Get("config.json");

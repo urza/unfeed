@@ -163,7 +163,7 @@ One row per work execution: collect, process, friends, reparse, rescore, summari
 | Status | text | see 5.3 |
 | StartedAt, FinishedAt? | datetime | |
 | PostsFound, PostsNew | integer | |
-| StatsJson | text? | scrolls, batches, visited, skipped, empty, media, model calls, failures |
+| StatsJson | text? | scrolls, batches, visited, skipped, empty, media, model calls, failures; for a collect also `listener_errors` and `parser_blocked` (raws that wait for a parser upgrade) |
 | Error | text? | |
 | RawDir | text? | the run directory name under `raw/<platform>/` |
 
@@ -251,7 +251,7 @@ One row per profile visit in a close-friends, all-followed or explicit person co
 | Status | text | `rendered`, `empty`, `unrendered` |
 | CaptureStatus | text | `captured`, `empty`, `incomplete` or `failed`; rendering alone does not prove a usable capture |
 | PostsFound, NewestPostedAt, OldestPostedAt | integer, datetime?, datetime? | observed distinct posts and their date range; never an assertion of full history coverage |
-| StopReason | text | `depth`, `no_new`, `explicit_empty`, `checkpoint`, `timeout`, `capture_error` or `interrupted` |
+| StopReason | text | `depth`, `no_new`, `explicit_empty`, `checkpoint`, `timeout`, `capture_error`, `parser_blocked` (rendered, no observed posts, a blocked response; no browser retry) or `interrupted` |
 | Note | text? | page title, final URL and the first 200 characters of text, for an unrendered visit |
 | Screenshot | text? | published copy at `media/diagnostics/<platform>/<run dir>/timeline-<handle>.png`; original remains in the raw run directory |
 
@@ -468,12 +468,12 @@ SweepTargets persist `Attempts` and nullable `RetryAt`; `retry` is a waiting sta
 The management queue migration expands the platform-request check constraint and active-request uniqueness to `friends` and `login`. The existing claim, startup identity and recovery columns apply unchanged. `management:refilter_pending` in Kv records unfinished management-driven refiltering; completion clears it in the same transaction as the post updates.
 
 
-## Capture classification and model-attempt provenance
+## Capture classification and provenance
 
-RawSnapshots additionally store nullable `ContextJson`, `ClassificationJson`, `ParserVersion`, `RecoveryAttemptedAt`, `RecoveryState`, `RecoveryKey`, `RecoveryError`, and `RecoveryAttempts` (default zero). Existing records remain unresolved until an actual successful replay. `RawDiagnostics` contains the current structured issues per raw: code, normalized path, affected root, content impact, fingerprint, human-readable evidence and parser version. Diagnostic indexing can backfill these fields without ingesting posts or changing historical failure/coverage outcomes.
-
-`CaptureRecoveryAttempts` records raw identity, start/finish, state/error, source and input hashes, exact request messages/response, model/endpoint, prompt version, proposal and validation result. Attempt history is retained when a successful replay replaces current diagnostics. Recovery overlays bind validated proposals to exact raw-body hashes and are revalidated on replay. They never rewrite the raw bytes. A parser version change resets the per-capture model budget during actual ingest, preserving attempt history.
+RawSnapshots additionally store nullable `ContextJson` and `ParserVersion`. `RawDiagnostics` contains the current structured issues per raw: code, normalized path, affected root, content impact, fingerprint, human-readable evidence and parser version. Diagnostic indexing can backfill these fields without ingesting posts or changing historical failure/coverage outcomes.
 
 `TimelineVisits.CaptureToken` is nullable for old visits. New request context is frozen at request start and refers to that token; late responses are saved but cannot supply posts or empty evidence for the next visit. An unavailable association stays unknown.
 
-RawSnapshot also stores nullable CaptureToken for verified single-visit association; duplicate multi-visit captures remain unassigned. TimelineVisit stores VisualDiagnosisJson, VisualError, VisualAttemptedAt and VisualAttempts. Visual diagnosis never changes the recorded capture outcome. Current-alert supersession is derived from later clean visits and completed ingestion, preserving the historical records. Raw/visit CaptureToken indexes support the association checks.
+RawSnapshot also stores nullable CaptureToken for verified single-visit association; duplicate multi-visit captures remain unassigned. Current-alert supersession is derived from later clean visits and completed ingestion, preserving the historical records. Raw/visit CaptureToken indexes support the association checks.
+
+The model-assisted recovery columns (`ClassificationJson`, `RecoveryAttemptedAt`, `RecoveryState`, `RecoveryKey`, `RecoveryError`, `RecoveryAttempts`), the `CaptureRecoveryAttempts` table and the visit columns `VisualDiagnosisJson`, `VisualError`, `VisualAttemptedAt` and `VisualAttempts` were dropped by the `RemoveCaptureRecovery` migration (plan 01, 2026-11-10). A rollback to an older binary needs the pre-migration backup.

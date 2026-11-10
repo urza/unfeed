@@ -60,7 +60,7 @@ public sealed class RecoveryHardeningTests
         await using var i = new TestInstance(); await i.Init();
         var file = i.Paths.Get("raw/facebook/fixture/001.json"); Directory.CreateDirectory(Path.GetDirectoryName(file)!); await File.WriteAllTextAsync(file, "{\"unknown\":true}");
         using var http = new HttpClient(); var media = new MediaFiles(i.Paths, http); var ingest = new Ingest(i.Paths, i.Factory, media);
-        Assert.Equal(1, (await ingest.File("facebook", file, Snapshot, true, default)).Failed);
+        var blocked = await ingest.File("facebook", file, Snapshot, true, default); Assert.Equal(1, blocked.Failed); Assert.Equal(1, blocked.Blocked);
         await using (var db = i.Factory.Open()) { Assert.Equal(PayloadParser.Version, (await db.RawSnapshots.SingleAsync()).BlockedParserVersion); await db.RawSnapshots.ExecuteUpdateAsync(u => u.SetProperty(r => r.AttemptedAt, Clock.Now.AddHours(-1))); }
         var worker = new Processing(i.Paths, i.Factory, new(http), media, ingest);
         Assert.Equal(0, (await worker.Run(Snapshot, new(), null, default)).Stage("facebook", "raw").Selected);

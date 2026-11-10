@@ -134,7 +134,7 @@ Read-only. `GET /manage?section=coverage` renders the rows of `CoverageQuery.Rea
 - **Last attempt.** The time of the last visit, with any outcome.
 - **Posts.** The posts found on the last visit.
 - **Failures.** The failed visits in a row.
-- **Detail.** The last visit status and its note, with any saved visual diagnosis as advisory evidence. A stale or incomplete row adds its recovery hint.
+- **Detail.** The last visit status and its note. A stale or incomplete row adds its recovery hint.
 
 Rows are grouped by platform. Each group heading counts the people behind schedule. Inside a group, incomplete rows come first, then stale rows, then the oldest last success. The tab never starts a visit; the scheduled sweep catches up on its own.
 

@@ -21,11 +21,11 @@ public static class ParserAudit
             try
             {
                 var file = factory.Paths.Get(raw.Path); var body = await File.ReadAllTextAsync(file, ct); var context = CaptureContext.Read(file, body);
-                var native = PayloadParser.Parse(platform, body, context: context); var effective = CaptureRecovery.ParseSaved(platform, body, file, context: context);
-                var postIds = effective.Posts.Select(o => o.Post.PlatformPostId).ToArray();
+                var native = PayloadParser.Parse(platform, body, context: context);
+                var postIds = native.Posts.Select(o => o.Post.PlatformPostId).ToArray();
                 var stored = await db.Posts.AsNoTracking().Where(p => p.Platform == platform && postIds.Contains(p.PlatformPostId)).Select(p => new { p.PlatformPostId, p.Text, p.Permalink, p.PostedAt, p.MediaManifestJson, p.ContentRevision, p.ContentHash, p.RawRef, p.LatestRawRef }).ToArrayAsync(ct);
                 reports.Add(new { raw.Id, raw.RunId, raw.Parsed, PreviousError = raw.Error, BodyHash = CaptureContext.Hash(body), Context = context, ParserVersion = PayloadParser.Version,
-                    Native = new { native.Parts, native.Issues, native.Diagnostics, native.ExplicitEmpty }, Effective = effective, Stored = stored });
+                    Native = new { native.Parts, native.Issues, native.Diagnostics, native.ExplicitEmpty, native.Posts }, Stored = stored });
             }
             catch (Exception e) when (e is IOException or FormatException or JsonException) { reports.Add(new { raw.Id, Error = e.Message }); }
         }

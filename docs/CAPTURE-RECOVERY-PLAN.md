@@ -2,6 +2,8 @@
 
 Status: implementation, automated verification and deployment preservation checks complete. Bounded actual-model checks pass supported isolated recovery and a previously rejected larger saved envelope after constraining evidence choices; advisory screenshot cases also pass. General capture compatibility is not established. Numbered specification chapters describe the implemented contracts; rollout evidence stays in private instance notes.
 
+Update 2026-11-10 (plan 01, `docs/plans/01-parser-fail-open.md`): the model-assisted recovery, the `.recovery` overlays, the attempt table and the visual diagnosis described in step 5 and acceptance criterion 5 are removed. Steps 1 to 4 (context, classification, grouping, parser audit) stay. A parser-blocked capture now keeps the run and the visit status the browser produced, and three silent home collects in a row raise an attention issue.
+
 ## Outcome
 
 Reduce recurring false alarms from platform metadata while retaining evidence of missing posts and real collection failures. Repeated instances of one compatibility problem should produce one understandable issue group with affected-capture counts and inspectable evidence. Unknown responses must not become successful or informational solely to reduce the attention count.

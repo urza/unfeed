@@ -1,6 +1,6 @@
 # Plan 01: Make parser uncertainty non-fatal and remove model-assisted capture recovery
 
-Status: reviewed 2026-11-10 (`.work/01-parser-fail-open/plan-review.md`, step back: CHANGE COURSE, adopted). The parser classes do not change. The run and the visit stop failing on a blocked raw, and the model paths go. No per-operation health query, no fixture swap, no supersession removal, no config notice. Ready to implement.
+Status: implemented 2026-11-10 on branch `01-parser-fail-open` (`.work/01-parser-fail-open/`). Reviewed the same day; the step-back course (CHANGE COURSE) was adopted: the parser classes do not change, the run and the visit stop failing on a blocked raw, and the model paths go.
 
 ## Outcome
 
@@ -93,3 +93,16 @@ Live instance, 2026-11-09 (counts updated 2026-11-10 from a copy of the database
 ## Out of scope
 
 Checkpoint detection (review finding 6), like-back, the scheduler tick, cookie export, the fixture swap and the sanitizer fix (open question 4), supersession removal (open question 3).
+
+## Notes from implement
+
+Implemented on 2026-11-10 on branch `01-parser-fail-open`. Differences from the text above:
+
+- `IngestResult.Blocked` is a subset of `Failed`, not a separate outcome: a blocked parse returns `Failed = 1, Blocked = 1`. Existing tests and the CLI `reparse` exit code keep their meaning, and `Capture.Collect` subtracts `Blocked` from the failures that turn the run to `error`. The process worker still counts a blocked replay as a failed stage, as before.
+- `Maintenance` did not get `.page` in its suffix lists. The `.page` sidecar sits next to the screenshot under `media/diagnostics/<platform>/<run dir>/`, and raw retention deletes that directory with the run directory (`Maintenance.cs` L149). `.recovery` stays in the raw list with a comment.
+- `ParserAudit` reports `Native` only. The `Effective` field was the `.recovery` overlay view and would now repeat `Native`.
+- The run and visit status rules in `Capture.Collect` have no offline test. They run inside the Playwright flow, and the existing suite never tested them either. The reviewer and the owner check them on the first live collects.
+- The migration is `20261110112057_RemoveCaptureRecovery`, scaffolded with `dotnet ef`. It drops the table, the index on `RecoveryKey`, six `RawSnapshots` columns and four `TimelineVisits` columns.
+- The `SchedulerTests` case `CaptureRecoveryHonorsPauseReloginAndStartupBackoff` tested the sweep recovery dispatch, not the model queue. It is renamed `SweepRecoveryHonorsPauseReloginAndStartupBackoff`.
+- Live-copy check (copy of `data/feed.db` with its WAL, plus the instance files, in the scratchpad): the CLI `status` applied `RemoveCaptureRecovery`, the live `config.json` with its `capture_recovery` section loaded, and the copy holds 36,703 raws with 0 unparsed. `reparse --failed` would select nothing.
+- Checks: 390 fast tests and 28 browser tests pass; `./build.sh` passes.

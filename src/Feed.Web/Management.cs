@@ -9,13 +9,11 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Feed.Web;
 
-public sealed record RecoveryAttemptSummary(long Id, long RawId, string State, string? Validation, string? Error, DateTime At);
 public sealed record ProcessingCompletion(long PostId, string Platform, string Task, DateTime At);
 public sealed record PersonRow(Author Author, bool Close, bool Muted, bool Always, int Posts, int Hidden, DateTime? Latest, TimelineVisit? Visit, string? Retry);
 public sealed record PlatformOverview(string Platform, int Friends, int Posts, int Hidden, PlatformState? State, Run? Collection, Run? Import, Run[] Running, RunRequest[] Requests, string Next, Dictionary<string, string>? ModeNext = null);
 public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnapshot Instance, PlatformOverview[] Platforms, PersonRow[] People, int PeopleCount, int Page, string Query, string Platform, string Filter, string Section, string Disk, string? DiskAt, int Pending, int Failures)
 {
-    public RecoveryAttemptSummary[] RecoveryAttempts { get; init; } = [];
     public string? RecoverySignature { get; init; }
     public int RecoveryPage { get; init; } = 1;
     public RecoveryIssue[] RecoverySummary { get; init; } = [];
@@ -63,7 +61,6 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         var kv = await db.Kv.AsNoTracking().Where(k => k.Key.StartsWith("slot:")).ToDictionaryAsync(k => k.Key, k => k.Value, ct);
         var overviews = Platforms.All.Select(p => new PlatformOverview(p, authors.Count(a => a.Platform == p && a.IsFriend), postCounts.FirstOrDefault(c => c.Platform == p)?.Total ?? 0, postCounts.FirstOrDefault(c => c.Platform == p)?.Hidden ?? 0, states.FirstOrDefault(x => x.Platform == p), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "collect"), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "friends"), runs.Where(r => r.Platform == p && r.Status == "running").ToArray(), requests.Where(r => r.Platform == p).ToArray(), NextRun(s.Config, p, Clock.Now, kv), Platforms.Modes.ToDictionary(m => m, m => NextRun(s.Config, p, Clock.Now, kv, m)))).ToArray();
         return new(docs, s, overviews, visiblePeople.Skip((page - 1) * 40).Take(40).ToArray(), visiblePeople.Length, page, query, platform, filter, section, await db.Get("disk:summary", ct) ?? "Not measured yet", await db.Get("disk:at", ct), await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct), await db.Posts.CountAsync(p => p.LlmError != null || p.SummaryError != null, ct)) {
-            RecoveryAttempts = section == "recovery" ? await db.CaptureRecoveryAttempts.AsNoTracking().OrderByDescending(a => a.Id).Take(10).Select(a => new RecoveryAttemptSummary(a.Id, a.RawSnapshotId, a.State, a.Validation, a.Error, a.StartedAt)).ToArrayAsync(ct) : [],
             RecoverySignature = signature, RecoveryPage = Math.Max(1, page),
             Coverage = section == "coverage" ? await CoverageQuery.Read(db, s, ct: ct) : [],
             RecoverySummary = await RecoveryQuery.Read(db, s, ct: ct, grouped: true, summaryOnly: true),

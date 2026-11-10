@@ -146,3 +146,8 @@ Facebook renamed the post reaction control from `Like` to `React with Like to <a
 ## Derived visibility
 
 Implemented one visibility engine (`Visibility.Decide`) for ingest, identity merge, verdict apply and both refilters, and one shared reapply operation (`VisibilityStore.Reapply`) for Manage and CLI `refilter`. The hide threshold and the always-show bypass list left the verdict version (format 2, with a one-time restamp at startup); only the `llm` bypass flag stays, because it changes the prompt. A threshold save in Manage reapplies stored scores with no model call and never fails on a busy lock. An owner unhide now holds against the model until the content changes (`OwnerUnhiddenRevision`). A bulk pass resolves always-show and close-friend entries once (`ResolvedRules`). Plan and review: `docs/plans/02-derived-visibility.md`, `.work/02-derived-visibility/plan-review.md`.
+
+## Parser fail-open
+
+Implemented plan 01 (`docs/plans/01-parser-fail-open.md`) on the step-back course. The parser and its version do not change. A parser-blocked raw no longer turns a collect run into `error`, a visit with observed posts into `incomplete` or starts browser retries; `IngestResult.Blocked` separates it from real ingest failures and `StatsJson` records `parser_blocked`. Three consecutive silent home collects raise an attention issue (`CaptureHealth.SilentHomeCollects`). Model-assisted capture recovery, visual diagnosis, their table and columns (`RemoveCaptureRecovery` migration), the `capture-recover` command, the audit route and the Manage panel are removed; `capture_recovery` in `config.json` is accepted and ignored. All 390 non-browser tests and 28 browser tests pass.
+

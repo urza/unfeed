@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Net;
 using System.Text.Json;
 using Feed.Core.Application;
 using Feed.Core.Domain;
@@ -34,39 +33,18 @@ public sealed class CollectionReliabilityTests
         db.RawSnapshots.Add(new(){Platform="facebook",RunId=2,Path="recurrence.json",Error="new error",BlockedParserVersion=PayloadParser.Version});await db.SaveChangesAsync();
         Assert.Contains(await RecoveryQuery.Read(db,s),r=>r.Problem=="new error" && r.Disposition==RecoveryDisposition.Compatibility);
     }
-    [Fact] public void EvidenceChoicesAreExactEscapedAndRootScoped()
-    {
-        var choices=RecoveryEvidence.Choices("{\"a/b~\":true}\n{\"other\":1}");
-        var a=Assert.Single(choices,c=>c.Path=="/a~1b~0");
-        var p=RecoveryEvidence.Resolve(new([new(0,"auxiliary","reason",[a.Id])]),choices);
-        Assert.Equal("/a~1b~0",p.Decisions[0].Evidence[0]);
-        Assert.Throws<FormatException>(()=>RecoveryEvidence.Resolve(new([new(1,"auxiliary","reason",[a.Id])]),choices));
-        Assert.Throws<FormatException>(()=>RecoveryEvidence.Resolve(new([new(0,"auxiliary","reason",["/a~1b~0"])]),choices));
-        Assert.Throws<FormatException>(()=>RecoveryEvidence.Resolve(new([new(0,"auxiliary","reason",["#99999"])]),choices));
-    }
-    [Fact] public void JsonWrapperDoesNotSalvageProseOrTrailingData()
-    {
-        Assert.Equal("{}", RecoveryEvidence.Json("```json\n{}\n```"));
-        Assert.ThrowsAny<JsonException>(()=>JsonDocument.Parse(RecoveryEvidence.Json("Explanation: {}")));
-        Assert.ThrowsAny<JsonException>(()=>JsonDocument.Parse(RecoveryEvidence.Json("```json\n{}\n```\nextra")));
-    }
-    sealed class VisualHandler(string response,HttpStatusCode status=HttpStatusCode.OK):HttpMessageHandler
-    {
-        public int Calls;
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage r,CancellationToken ct){Calls++;return Task.FromResult(new HttpResponseMessage(status){Content=new StringContent(JsonSerializer.Serialize(new{choices=new[]{new{finish_reason="stop",message=new{content=response}}}}))});}
-    }
-    [Theory][InlineData("posts_visible")][InlineData("empty_message_visible")][InlineData("login_or_checkpoint")]
-    public async Task ScreenshotVerdictNeverChangesPostsCoverageOrLogin(string decision)
+    [Fact] public async Task ThreeSilentHomeCollectsRaiseAttentionUntilOneFindsPosts()
     {
         await using var i=new TestInstance();await i.Init();await using var db=i.Factory.Open();
-        var file=i.Paths.Get("media","diagnostic.png");Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        await File.WriteAllBytesAsync(file,Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="));
-        db.Runs.Add(new(){Id=1,Kind="collect",Status="error",FinishedAt=Clock.Now});db.TimelineVisits.Add(new(){Id=1,RunId=1,Platform="facebook",Screenshot="media/diagnostic.png"});await db.SaveChangesAsync();
-        var s=new InstanceSnapshot(new(){Llm=new(){Enabled=true,BaseUrl="http://model.example.test/v1"},CaptureRecovery=new(){Mode="apply",VisualDiagnosis=true}},new(),Preferences.Parse(""));
-        using var handler=new VisualHandler("```json\n"+JsonSerializer.Serialize(new VisualDiagnosis(decision,"Visible evidence"))+"\n```");using var http=new HttpClient(handler);
-        Assert.Equal(1,await new VisitDiagnosis(i.Paths,i.Factory,new(http)).Run(s,["facebook"],1,default));
-        Assert.Equal(0,await new VisitDiagnosis(i.Paths,i.Factory,new(http)).Run(s,["facebook"],1,default));
-        await db.Entry(await db.TimelineVisits.SingleAsync()).ReloadAsync();var v=await db.TimelineVisits.SingleAsync();
-        Assert.Contains(decision,v.VisualDiagnosisJson);Assert.Equal("incomplete",v.CaptureStatus);Assert.Empty(await db.Posts.ToArrayAsync());Assert.Empty(await db.PlatformStates.ToArrayAsync());Assert.Equal(1,handler.Calls);
+        var s=new InstanceSnapshot(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("facebook",new())},new(),Preferences.Parse(""));
+        static Run Collect(long id,int found,string mode="home",string status="ok")=>new(){Id=id,Platform="facebook",Kind="collect",Mode=mode,Status=status,PostsFound=found,FinishedAt=Clock.Now};
+        db.Runs.AddRange(Collect(1,0),Collect(2,0));await db.SaveChangesAsync();
+        Assert.Equal(2,await CaptureHealth.SilentHomeCollects(db,"facebook"));Assert.DoesNotContain(await RecoveryQuery.Read(db,s),r=>r.Item=="home collects");
+        // A close-friends check and a failed browser run are not home collects: they neither count nor break the sequence.
+        db.Runs.AddRange(Collect(3,0,"close_friends"),Collect(4,0,status:"error"),Collect(5,0));await db.SaveChangesAsync();
+        Assert.Equal(3,await CaptureHealth.SilentHomeCollects(db,"facebook"));
+        var issue=Assert.Single(await RecoveryQuery.Read(db,s),r=>r.Item=="home collects");Assert.Equal(RecoveryDisposition.Attention,issue.Disposition);Assert.Equal(DiagnosticLevel.Alert,await RecoveryQuery.Level(db,s));
+        db.Runs.Add(Collect(6,4));await db.SaveChangesAsync();
+        Assert.Equal(0,await CaptureHealth.SilentHomeCollects(db,"facebook"));Assert.DoesNotContain(await RecoveryQuery.Read(db,s),r=>r.Item=="home collects");
     }
 }

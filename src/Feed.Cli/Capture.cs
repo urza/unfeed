@@ -63,13 +63,15 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
                     var association = context with { BodyHash = hash };
                     if (!visits.Contains(association)) { visits.Add(association); InstancePaths.AtomicWrite(existing + ".visits", JsonSerializer.Serialize(visits)); }
                     // The bytes already have a raw ledger entry; the visit still observed them.
-                    var replay = PayloadParser.Parse(platform, body, friends, context); if (context.Visit == activeVisit) { explicitEmpty |= replay.ExplicitEmpty; listenerErrors += replay.Diagnostics.Count; parserErrors += replay.Issues.Count(i => i.Code == "unknown_response"); }
+                    var replay = PayloadParser.Parse(platform, body, friends, context); if (context.Visit == activeVisit) { explicitEmpty |= replay.ExplicitEmpty; parserErrors += replay.Issues.Count(i => i.Code == "unknown_response"); }
                     foreach (var observation in replay.Posts.Where(_ => context.Visit == activeVisit)) surfaceObservations.AddOrUpdate(observation.Post.PlatformPostId, observation, (_, existing) => existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(observation.TimelineOwnerIds).Distinct().ToArray() });
                     return;
                 }
                 var path = Path.Combine(directory, $"{++batches:000}{(platform == "facebook" ? ".jsonl" : ".json")}"); CaptureContext.Publish(path, body, context); hashes[hash] = path; await ingest.Register(platform, path, run.Id, ct);
                 var parsed = PayloadParser.Parse(platform, await File.ReadAllTextAsync(path, ct), friends, context); if (context.Visit == activeVisit) { explicitEmpty |= parsed.ExplicitEmpty; parserErrors += parsed.Issues.Count(i => i.Code == "unknown_response"); }
-                foreach (var diagnostic in parsed.Diagnostics) { if (context.Visit == activeVisit) listenerErrors++; Console.Error.WriteLine("parser warning: " + diagnostic); }
+                // A parser diagnostic blocks its raw at ingest until a parser upgrade replays it. It is not a listener
+                // error: the browser did its job, so the run and the visit are judged on the posts they observed.
+                foreach (var diagnostic in parsed.Diagnostics) Console.Error.WriteLine("parser warning: " + diagnostic);
                 foreach (var observation in parsed.Posts) { captured.TryAdd(observation.Post.PlatformPostId, observation); if (context.Visit == activeVisit) surfaceObservations.AddOrUpdate(observation.Post.PlatformPostId, observation, (_, existing) => existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(observation.TimelineOwnerIds).Distinct().ToArray() }); }
             }
             catch (Exception e) when (e is not OperationCanceledException) { Interlocked.Increment(ref listenerErrors); Console.Error.WriteLine("capture warning: " + e.Message); }
@@ -129,19 +131,19 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
                 catch (Exception e) { outcome = ("error", "error"); failure = e; }
                 visited++;
                 var observed = surfaceObservations.Values.Where(x => Site.TimelineAuthorMatches(platform, url, author, x)).Select(x => x.Post).ToArray();
-                var visit = new TimelineVisit { Platform = platform, AuthorId = author?.Id, Url = url.TrimEnd('/'), Name = author?.DisplayName ?? "", RunId = run.Id, CaptureToken = activeVisit, Status = outcome.Status, CaptureStatus = outcome.Status == "empty" ? "empty" : outcome.Status == "rendered" && observed.Length > 0 && listenerErrors == errorsBefore ? "captured" : "incomplete", PostsFound = observed.Length, NewestPostedAt = observed.Select(p => p.PostedAt).Max(), OldestPostedAt = observed.Select(p => p.PostedAt).Min(), StopReason = outcome.Stop, Note = failure?.Message ?? (listenerErrors > errorsBefore ? $"{listenerErrors - errorsBefore} capture/parser error(s); inspect raw diagnostics for run #{run.Id}" : observed.Length == 0 && outcome.Status == "rendered" ? "Page rendered, but no post payload matched the target author; not evidence of an empty timeline" : null) };
-                if (failure is null && outcome.Status == "rendered" && listenerErrors > errorsBefore
-                    && listenerErrors - errorsBefore == parserErrors - parserErrorsBefore)
+                var visit = new TimelineVisit { Platform = platform, AuthorId = author?.Id, Url = url.TrimEnd('/'), Name = author?.DisplayName ?? "", RunId = run.Id, CaptureToken = activeVisit, Status = outcome.Status, CaptureStatus = outcome.Status == "empty" ? "empty" : outcome.Status == "rendered" && observed.Length > 0 && listenerErrors == errorsBefore ? "captured" : "incomplete", PostsFound = observed.Length, NewestPostedAt = observed.Select(p => p.PostedAt).Max(), OldestPostedAt = observed.Select(p => p.PostedAt).Min(), StopReason = outcome.Stop, Note = failure?.Message ?? (listenerErrors > errorsBefore ? $"{listenerErrors - errorsBefore} capture error(s); inspect run #{run.Id}" : parserErrors > parserErrorsBefore ? $"{parserErrors - parserErrorsBefore} saved response(s) wait for a parser update; inspect raw diagnostics for run #{run.Id}" : observed.Length == 0 && outcome.Status == "rendered" ? "Page rendered, but no post payload matched the target author; not evidence of an empty timeline" : null) };
+                // No posts and a blocked response: the shape, not the browser, is the gap. A browser retry
+                // cannot change the shape, so the sweep keeps the gap without retrying (TimelineCoverage).
+                if (failure is null && outcome.Status == "rendered" && observed.Length == 0 && listenerErrors == errorsBefore && parserErrors > parserErrorsBefore)
                 {
                     visit.StopReason = "parser_blocked";
-                    visit.Note = $"Saved response needs parser/model recovery; browser stopped at {outcome.Stop}. No automatic browser retry for this shape. " + visit.Note;
+                    visit.Note = $"Saved response needs a parser update; browser stopped at {outcome.Stop}. No automatic browser retry for this shape. " + visit.Note;
                 }
-                if (visit.CaptureStatus == "incomplete" && (outcome.Status == "unrendered" || s.Config.CaptureRecovery.VisualDiagnosis && outcome.Status == "rendered"))
+                if (visit.CaptureStatus == "incomplete" && outcome.Status == "unrendered")
                 {
                     try {
                     var text = await page.Locator("body").InnerTextAsync(); visit.Note ??= (await page.TitleAsync()) + " | " + page.Url + " | " + text[..Math.Min(200, text.Length)];
                     var name = "timeline-" + activeVisit + "-" + Identity.Safe(author?.PlatformAuthorId ?? new Uri(url).AbsolutePath.Trim('/')) + ".png"; await page.ScreenshotAsync(new() { Path = Path.Combine(directory, name) }); visit.Screenshot = $"media/diagnostics/{platform}/{run.RawDir}/{name}"; Directory.CreateDirectory(Path.GetDirectoryName(paths.Get(visit.Screenshot))!); File.Copy(Path.Combine(directory, name), paths.Get(visit.Screenshot), true);
-                    InstancePaths.AtomicWrite(paths.Get(visit.Screenshot) + ".page", JsonSerializer.Serialize(new { title = await page.TitleAsync(), url = page.Url, text = text[..Math.Min(16000, text.Length)], truncated = text.Length > 16000 }));
                     } catch (Exception e) { visit.Note = "diagnostic failed: " + e.Message; }
                 }
                 if (visit.CaptureStatus == "incomplete") incomplete++; if (visit.CaptureStatus == "empty") emptyVisits++; if (visit.Status == "unrendered") unrendered++;
@@ -196,15 +198,17 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
         catch (ResourceBusyException) { status = "refused"; error = "platform busy"; }
         catch (Exception e) when (e is not OperationCanceledException) { status = "error"; error = e.Message; }
         finally { try { await Drain(); } catch (Exception e) when (e is not OperationCanceledException) { listenerErrors++; error ??= e.Message; } }
-        await ledger.Phase(run.Id, "ingest", ct); string ingestStatus = "pending"; int ingestFailures = 0;
+        await ledger.Phase(run.Id, "ingest", ct); string ingestStatus = "pending"; int ingestFailures = 0, ingestBlocked = 0;
         using (var ingestLock = ResourceLock.Try(paths, "ingest-" + platform)) if (ingestLock is not null)
         {
-            foreach (var file in Directory.EnumerateFiles(directory).Where(f => Path.GetExtension(f) is ".json" or ".jsonl").Order()) { var result = await ingest.File(platform, file, s, false, ct); run.PostsFound += result.Found; run.PostsNew += result.New; ingestFailures += result.Failed; }
-            ingestStatus = ingestFailures == 0 ? "done" : "failed";
+            foreach (var file in Directory.EnumerateFiles(directory).Where(f => Path.GetExtension(f) is ".json" or ".jsonl").Order()) { var result = await ingest.File(platform, file, s, false, ct); run.PostsFound += result.Found; run.PostsNew += result.New; ingestFailures += result.Failed - result.Blocked; ingestBlocked += result.Blocked; }
+            ingestStatus = ingestFailures > 0 ? "failed" : ingestBlocked > 0 ? "blocked" : "done";
         }
-        if (status is "ok" or "capped" && (ingestFailures > 0 || listenerErrors > 0)) { status = "error"; error ??= $"capture/ingest incomplete: {listenerErrors} listener/parser warning(s), {ingestFailures} failed raw file(s)"; }
-        run.Error = error; run.StatsJson = JsonSerializer.Serialize(new { scope = options.Person is not null ? "person" : options.RetryIncomplete ? "retry" : options.Mode, scrolls, batches, visited, incomplete, empty = emptyVisits, unrendered, listener_errors = listenerErrors, ingest = ingestStatus, complete = false, prune_skipped_reason = friends ? "adapter has no proven live completion evidence; add-only" : null });
-        Console.WriteLine($"{(friends ? "friends" : "collect")} {platform} {options.Mode}: {status} run=#{run.Id} (found={run.PostsFound}, new={run.PostsNew}, scrolls={scrolls}, batches={batches}, visited={visited}, incomplete={incomplete}, empty={emptyVisits}, unrendered={unrendered}); ingest={ingestStatus}; coverage={(friends ? "complete=false; pruned=0" : "bounded observations")} [error={error}]");
+        // A raw that only waits for a parser upgrade keeps the browser's status: its posts are stored, the
+        // scheduler replays it after the upgrade, and Manage shows it as a compatibility notice.
+        if (status is "ok" or "capped" && (ingestFailures > 0 || listenerErrors > 0)) { status = "error"; error ??= $"capture/ingest incomplete: {listenerErrors} listener error(s), {ingestFailures} failed raw file(s)"; }
+        run.Error = error; run.StatsJson = JsonSerializer.Serialize(new { scope = options.Person is not null ? "person" : options.RetryIncomplete ? "retry" : options.Mode, scrolls, batches, visited, incomplete, empty = emptyVisits, unrendered, listener_errors = listenerErrors, parser_blocked = ingestBlocked, ingest = ingestStatus, complete = false, prune_skipped_reason = friends ? "adapter has no proven live completion evidence; add-only" : null });
+        Console.WriteLine($"{(friends ? "friends" : "collect")} {platform} {options.Mode}: {status} run=#{run.Id} (found={run.PostsFound}, new={run.PostsNew}, scrolls={scrolls}, batches={batches}, visited={visited}, incomplete={incomplete}, empty={emptyVisits}, unrendered={unrendered}, blocked={ingestBlocked}); ingest={ingestStatus}; coverage={(friends ? "complete=false; pruned=0" : "bounded observations")} [error={error}]");
         return status;
     }
     sealed class CheckpointException : Exception;

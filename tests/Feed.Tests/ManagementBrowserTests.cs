@@ -25,8 +25,7 @@ public sealed class ManagementBrowserTests
             db.Add(new RawSnapshot {Platform="instagram",Path="raw/synthetic-warning.json",Parsed=true,Warning="location/profile_pic_url unavailable"});
             db.Add(new RawSnapshot {Platform="facebook",Path="raw/synthetic-compatibility.json",Error="Unrecognized response",BlockedParserVersion=PayloadParser.Version});
             await db.SaveChangesAsync();
-            for(int n=0;n<55;n++) { var raw=new RawSnapshot {Platform="facebook",Path=$"raw/synthetic-group-{n}.json",Parsed=true,Warning="Synthetic auxiliary warning"};db.Add(raw);await db.SaveChangesAsync();db.RawDiagnostics.Add(new(){RawSnapshotId=raw.Id,Code="upstream_error",Fingerprint="fixture-signature",Impact="auxiliary",Evidence="Synthetic auxiliary warning"});
-                if(n==0) db.CaptureRecoveryAttempts.Add(new(){RawSnapshotId=raw.Id,State="observed",Validation="accepted",Model="synthetic",Response="Synthetic decision <script>doNotExecute()</script>",RequestJson="Synthetic capture input"}); }
+            for(int n=0;n<55;n++) { var raw=new RawSnapshot {Platform="facebook",Path=$"raw/synthetic-group-{n}.json",Parsed=true,Warning="Synthetic auxiliary warning"};db.Add(raw);await db.SaveChangesAsync();db.RawDiagnostics.Add(new(){RawSnapshotId=raw.Id,Code="upstream_error",Fingerprint="fixture-signature",Impact="auxiliary",Evidence="Synthetic auxiliary warning"}); }
             await db.SaveChangesAsync();
         }
         var listener=new TcpListener(IPAddress.Loopback,0);listener.Start();var port=((IPEndPoint)listener.LocalEndpoint).Port;listener.Stop();
@@ -57,9 +56,8 @@ public sealed class ManagementBrowserTests
             await page.ScreenshotAsync(new(){Path=$"/tmp/feed-recovery-phone-{javascript}.png"});await page.SetViewportSizeAsync(1280,900);
             await page.GotoAsync(url+"/manage?section=recovery&signature=fixture-signature");Assert.Equal(50,await page.Locator(".recovery-item").CountAsync());
             await page.GetByRole(AriaRole.Link,new(){Name="Next",Exact=true}).ClickAsync();Assert.Equal(5,await page.Locator(".recovery-item").CountAsync());
-            await page.GetByRole(AriaRole.Link,new(){Name="Inspect model decision and evidence",Exact=true}).ClickAsync();Assert.Contains("Synthetic decision <script>",await page.Locator("pre").First.InnerTextAsync());
             await page.SetViewportSizeAsync(390,844);await page.EvaluateAsync("document.querySelector('.background').style.background = 'repeating-linear-gradient(35deg,white 0 24px,#ffdf00 24px 48px,#ee4499 48px 72px)'");
-            Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));Assert.NotEqual("rgba(0, 0, 0, 0)",await page.Locator(".manage-panel").EvaluateAsync<string>("e => getComputedStyle(e).backgroundColor"));
+            Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));Assert.NotEqual("rgba(0, 0, 0, 0)",await page.Locator(".manage-panel").First.EvaluateAsync<string>("e => getComputedStyle(e).backgroundColor"));
             await page.ScreenshotAsync(new(){Path=$"/tmp/feed-capture-audit-phone-{javascript}.png"});await page.SetViewportSizeAsync(1280,900);
             var bad=await http.PostAsync(url+"/manage/settings/scheduler",new FormUrlEncodedContent(new Dictionary<string,string>{{"enabled","true"}}));Assert.Equal(HttpStatusCode.BadRequest,bad.StatusCode);
             await page.GotoAsync(url+"/manage?section=people&q=Synthetic&platform=instagram");var stale=await context.NewPageAsync();await stale.GotoAsync(page.Url);

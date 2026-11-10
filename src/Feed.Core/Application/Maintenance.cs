@@ -134,6 +134,7 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
                     var run = snapshot.RunId is null ? null : await db.Runs.FindAsync([snapshot.RunId], ct); if (run?.Status == "running") continue;
                     var cutoff = before ?? Clock.Now.AddDays(-c.RawRetentionDays * (run?.Status is "capped" or "checkpoint" ? 2 : 1)); if (snapshot.CapturedAt > cutoff) continue;
                     var file = paths.SafeFile("raw", snapshot.Path.StartsWith("raw/") ? snapshot.Path[4..] : snapshot.Path); if (file is not null) { files++; bytes += new FileInfo(file).Length; if (!dryRun) { File.Delete(file); foreach (var suffix in new[] { ".context", ".recovery", ".visits" }) File.Delete(file + suffix); } }
+                    // .recovery stays in the list above: the model recovery writer is gone (plan 01), the overlays it left are not.
                     if (!dryRun) snapshot.Deleted = true;
                 }
                 if (!dryRun) await db.SaveChangesAsync(ct);

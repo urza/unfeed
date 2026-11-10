@@ -69,7 +69,6 @@ public sealed class StorageCleanup(InstancePaths paths, DbFactory factory)
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
         foreach (var file in files) { ct.ThrowIfCancellationRequested(); File.Delete(file); }
         await db.RawDiagnostics.ExecuteDeleteAsync(ct);
-        await db.CaptureRecoveryAttempts.ExecuteDeleteAsync(ct);
         await db.RawSnapshots.ExecuteDeleteAsync(ct);
         await db.TimelineVisits.ExecuteDeleteAsync(ct);
         await db.SweepTargets.ExecuteDeleteAsync(ct);

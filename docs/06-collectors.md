@@ -126,7 +126,9 @@ The table gives the named adapter defaults. Scope limits, explicit overrides, no
 | in-flight drain | 30 s |
 | viewport | 1280 by 900 |
 
-The summary line: `collect <platform> <mode>: <status> run=#<id> (found=, new=, scrolls=, batches=, visited=, skipped=, empty=, media=); ingest=done|pending|failed; coverage=<summary> [error=...]`. The exit code is 1 on `error` or `checkpoint` or an unsupported mode, else 0.
+The summary line: `collect <platform> <mode>: <status> run=#<id> (found=, new=, scrolls=, batches=, visited=, skipped=, empty=, media=, blocked=); ingest=done|pending|blocked|failed; coverage=<summary> [error=...]`. The exit code is 1 on `error` or `checkpoint` or an unsupported mode, else 0.
+
+A raw that the parser rejects is `blocked`, not failed: the run keeps the status the browser produced, the posts the parser did recognize are stored, and the scheduler replays the raw after a parser upgrade (6.17). Only listener and save exceptions, and ingest failures other than a blocked parse, turn an `ok` or `capped` run into `error`. `StatsJson` records `listener_errors` and `parser_blocked`.
 
 ## 6.7 The raw store
 
@@ -242,7 +244,7 @@ A visit in `close_friends`, `all_followed` or a `--person` collect:
 1. Navigate to the timeline URL (60 seconds). Check for a checkpoint.
 2. Poll every 2 seconds for up to 60 seconds. The timeline selectors present means `rendered`. The empty-timeline flag means `empty`. Otherwise `unrendered`.
 3. `rendered`: harvest the embedded payloads, then scroll to the timeline depth. `empty`: log it, done in seconds. `unrendered`: record what the page showed (title, final URL, the first 200 characters of the page text) and save a screenshot `timeline-<handle>.png` in the run directory.
-4. Write a TimelineVisits row with author id, render status, capture status, distinct observed count, oldest/newest observed date and stop reason. `captured` requires usable saved post observations; a rendered grid with no usable payload is `incomplete`, not proof of no posts. `empty` requires the explicit empty answer. Count skipped, empty and incomplete separately. For a sweep, commit the terminal visit and target advancement together.
+4. Write a TimelineVisits row with author id, render status, capture status, distinct observed count, oldest/newest observed date and stop reason. `captured` requires usable saved post observations and no listener exception; a rendered grid with no usable payload is `incomplete`, not proof of no posts. A parser diagnostic on a saved response does not make a visit with observed posts `incomplete`. A rendered visit with no observed posts and a blocked response gets stop reason `parser_blocked`: the sweep keeps the gap without a browser retry. `empty` requires the explicit empty answer. Count skipped, empty and incomplete separately. For a sweep, commit the terminal visit and target advancement together.
 5. Pause 3 to 8 seconds.
 
 One blank page is noise: Instagram serves them under fast navigation. The signal is two unrendered visits in a row on the same profile, within the last 60 days. The status command prints one `WARNING timeline:` line per such profile, with the note and the screenshot path. The Manage Coverage tab shows the per-profile table. A rendered or empty visit clears the streak. There are no retries inside a run: pacing stays human.
@@ -346,19 +348,13 @@ Instagram/people identical-body deduplication remains in place. Duplicate observ
 
 Parsing classifies each JSONL root independently as posts, auxiliary, explicit empty or unknown and records structured diagnostics. Independent unknown `data` siblings beside valid posts also remain diagnostic. Usable observations survive other failed roots; neither a neighboring post nor a model decision proves an empty timeline. Compatibility fingerprints use platform, operation, stable diagnostic code, normalized paths, impact and bounded structural shape, excluding scalar values and array positions. They identify shared signatures rather than proving one root cause. Existing narrowly recognized auxiliary and partial-content rules remain supported.
 
-### Model-assisted capture recovery
+### Blocked captures and run status
 
-A failed capture can receive a bounded primary-model inspection after ordinary processing. The response must choose `auxiliary`, `post`, `incomplete`, `authentication` or `unknown` per root and cite JSON pointers. Captured text is data, never executable instructions. The model cannot change rules, execute code, establish empty coverage, send hearts or initiate login.
+A response the parser rejects (invalid JSON, a GraphQL error on a post branch, or no recognized posts and no explicit empty answer) blocks its raw: `BlockedParserVersion` is set, the recognized posts of the same file are stored first, and the scheduler replays the raw after a parser upgrade. The block is a compatibility notice, not a run failure. The run keeps the status the browser produced, a visit that observed posts stays `captured`, and no browser retry is scheduled for a shape. There is no model-assisted recovery: fixing the parser and replaying is the one repair loop.
 
-Auxiliary clearance requires a supported profile-header/deferred-control boundary and no detected content fields or GraphQL errors. Post recovery currently supports a single simple text/image post per root with source pointers for identity, author, caption, permalink and Unix time, plus explicit false sponsored/suggested/reel/event flags. Instagram also requires an evidenced username/shortcode. Identity must match the platform permalink, pointers must stay within the same post object, and complex shared/video/carousel content is rejected for native parser repair. No missing media or caption is invented. Recovered observations are partial, cannot replace existing posts, and pass normal ingestion/filtering; they do not get a LikeRef.
-
-Model confidence alone cannot clear a failure. Invalid or unsupported decisions remain unresolved compatibility notices; transport/time-limit failures use the shared cooldown described below without consuming a decision attempt. Observation mode changes no post/capture outcome. Successful or partially successful apply writes a hash-bound `.recovery` overlay and replays through normal ingestion; recovered roots persist while unresolved siblings keep the capture failed. A partial improvement may use another delayed attempt within the existing per-capture budget; raw bytes and historical visit outcomes remain unchanged. Byte-and-context-identical accepted/unresolved proposals can be reused, but a matching shape alone never reuses a model verdict.
-
-Known limitation: this is constrained recovery, not an autonomous parser-code generator. Novel metadata outside supported boundaries and complex/missing content still require engineering work. Recovery selects intact unresolved JSONL roots, retaining their path/label envelopes and mapping subset indices to original roots. Known roots are handled natively. Requests including evidence and context must fit the configured input bound; oversized roots remain unresolved. No slicing inside a root, text truncation, or policy-field removal is permitted. A large single-root envelope remains a known limitation.
+Capture health is judged on positive evidence. Three consecutive finished home collects (`ok` or `capped`) on one platform with no posts found raise a Needs-your-attention issue on the Manage page; one collect that finds posts ends it. This covers a changed feed that passes nothing through the capture gate, where no raw exists to block.
 
 Known feed-envelope scalar cursor/ranking fields and scalar-only backend metadata do not constitute independent post branches; unknown nested content remains diagnostic. Instagram's exact viewer-ID-only envelope is auxiliary. Facebook Discover units are recognized as story-tray metadata only with the explicit stories-tray category, bucket types and no post/attachment fields. They neither yield posts nor establish empty coverage.
-
-Endpoint connection/time-limit/server-unavailable responses produce no model decision. They share an endpoint-wide cooldown, stop the current recovery batch, and do not consume a capture's decision budget. The next bounded processing opportunity retries after that cooldown; an extended model outage therefore does not permanently exhaust every capture. Each failed transport attempt remains audited. Truncated model output consumes the decision budget and stops automatic attempts at the configured ceiling.
 
 ### Current alerts and later clean visits
 
@@ -366,9 +362,7 @@ Raw capture issues, parse errors and upstream warnings alike, stop contributing 
 
 Parser-blocked responses requiring engineering investigation appear as **Collection compatibility**, with possible coverage loss stated explicitly, rather than asking the owner to repair the parser. Supported auxiliary warnings remain informational. Model tasks with actionable configuration failures retain their existing attention state.
 
-Model recovery prompt version 3 supplies up to 256 existing evidence choices per root, breadth-first to depth 16, with exact escaped source paths. The model selects IDs for evidence and extracted fields; unknown or cross-root IDs are rejected before normal source validation. Each selected root is sent intact within the input bound; missing candidates require an unresolved decision. Request size including evidence choices is bounded. Older validated version-1 and version-2 overlays remain replayable.
-
-When visual diagnosis is enabled, an unresolved rendered timeline visit also saves one viewport screenshot and bounded DOM text (16,000 characters, marked when truncated), title and page URL before leaving the page. No extra visit or scroll is initiated. Existing unrendered-visit screenshots remain supported. After normal processing, a bounded model pass may classify saved PNGs (at most 2 MB) as `posts_visible`, `empty_message_visible`, `login_or_checkpoint`, `loading_or_error` or `unknown`. Requests, responses and errors are audited privately. Results explain a gap only: they cannot create posts, mark captures parsed, establish an empty timeline, change login state, or authorize clicks. A later verified clean same-person visit makes old visual diagnosis unnecessary. Transport outages use the shared model cooldown without exhausting the per-visit decision budget.
+An unrendered timeline visit saves one viewport screenshot as plain evidence. No model classifies it.
 
 ### Structured historical stories (parser version 13)
 
