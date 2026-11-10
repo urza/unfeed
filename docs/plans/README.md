@@ -8,7 +8,7 @@ Standalone implementation plans from the step-back review of 2026-11-09. Each pl
 | [02 Derived visibility, prompt-only verdict version](02-derived-visibility.md) | The verdict version includes inputs the model never sees | none |
 | [03 Media identity from platform ids](03-media-identity.md) | Media identity follows the CDN URL and drives re-judging | none |
 | [04 Author identity with id-only merges](04-author-identity.md) | Identity merges on a blocklist, destructively, with no log | none |
-| [08 Storage lifecycle and bounded read path](08-storage-lifecycle.md) | Storage and the read path have no lifecycle plan | 02 for the category write helper |
+| [08 Storage lifecycle](08-storage-lifecycle.md) | Storage and the read path have no lifecycle plan | none (02 decided against the category write helper) |
 | [09 Judge-quality loop](09-judge-quality-loop.md) | The learning loop the UI promises does not exist | 02 recommended first |
 | [10 Stop silent feature failure](10-silent-failures.md) | Features fail silently | 02 removes video context from the verdict version |
 
