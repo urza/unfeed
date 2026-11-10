@@ -176,6 +176,14 @@ public sealed class ParserTests
         var manifestsOnly = raw.Replace("\"progressive_urls\"", "\"unknown_urls\"");
         Assert.Equal("permalink:101", Assert.Single(Assert.Single(PayloadParser.Parse("facebook", manifestsOnly).Posts).Media).SourceKey);
     }
+    [Fact]
+    public void FacebookWalkKeepsTheWidestRenditionPerAsset()
+    {
+        const string raw = """{"__typename":"Story","post_id":"101","creation_time":1700000000,"message":{"text":"Synthetic album"},"url":"https://facebook.com/fixture/posts/101","attachments":[{"image":{"uri":"https://scontent-a.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_p526x296&oh=1","width":526,"height":296}},{"image":{"uri":"https://scontent-a.xx.fbcdn.net/v/t39/4_5_6_n.jpg?stp=dst-jpg_p526x296&oh=2","width":526,"height":296}},{"image":{"uri":"https://scontent-b.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_s1080x1080&oh=3","width":1080,"height":1080}}]}""";
+        var media = Assert.Single(PayloadParser.Parse("facebook", raw).Posts).Media;
+        Assert.Equal(new[] { "file:1_2_3_n.jpg", "file:4_5_6_n.jpg" }, media.Select(m => m.SourceKey));
+        Assert.Contains("s1080x1080", media[0].Url);
+    }
     [Theory]
     [InlineData("{\"data\":{\"xdt_api__v1__feed__user_timeline_graphql_connection\":{\"edges\":[],\"page_info\":{\"has_next_page\":false}}}}", true)]
     [InlineData("{\"data\":{\"xdt_api__v1__feed__user_timeline_graphql_connection\":{\"edges\":[],\"page_info\":{\"has_next_page\":true}}}}", false)]

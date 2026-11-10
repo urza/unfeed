@@ -26,15 +26,20 @@ public static class PayloadParser
     static DateTime? Date(string? value) => long.TryParse(value, out var n) && n >= -62135596800 && n < 253402300800 && n != 0 ? DateTimeOffset.FromUnixTimeSeconds(n).UtcDateTime : null;
     static string? Url(string? s, string platform) { if (s is null) return null; if (s.StartsWith('/')) s = Platforms.Home(platform).TrimEnd('/') + s; return Uri.TryCreate(s, UriKind.Absolute, out var u) && u.Scheme is "http" or "https" ? new UriBuilder(u) { Scheme = "https", Port = -1 }.Uri.ToString() : null; }
     // Media identity, never a fetch URL. Meta CDN links rotate most query parameters per request
-    // (signatures, cache ids, delivery hints such as _nc_gid or efg), so a denylist of transient names
-    // could never be complete and every new name re-identified unchanged images: new downloads, new
-    // content revisions, new model verdicts. Keep only what selects a different picture: the rendition
-    // (stp) and the proxied origin of an external preview (url). Changing this rule needs a key version
-    // bump in MediaKeys so stored rows and content hashes are normalized once instead of churning.
+    // (signatures, cache ids, delivery hints such as _nc_gid or efg), and also the host and the rendition
+    // (stp): on 2026-11-10 the live instance held 1,216 groups of one asset under several keys, 948 of them
+    // host rotations. Each one re-identified an unchanged picture: a new download, a new content revision,
+    // a new model verdict. Meta names an asset once (<n>_<n>_<n>_n.jpg, <token>.mp4), so on a Meta host the
+    // filename is the identity. A proxied external preview (url=) is identified by its origin, and any other
+    // URL keeps scheme, host, path and the stp/url parameters. Changing this rule needs a key version bump
+    // in MediaKeys so stored rows and content hashes are normalized once instead of churning.
     public static string SourceKey(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var u)) return url;
-        var kept = u.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries).Where(x => x.Split('=')[0].ToLowerInvariant() is "stp" or "url").Order(StringComparer.Ordinal);
+        var query = u.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries); var file = u.AbsolutePath[(u.AbsolutePath.LastIndexOf('/') + 1)..];
+        // The host condition keeps a generic name such as image.jpg on a third-party host from joining two pictures.
+        if (file.Contains('.') && !query.Any(x => x.Split('=')[0].ToLowerInvariant() == "url") && (u.Host.EndsWith(".fbcdn.net", StringComparison.OrdinalIgnoreCase) || u.Host.EndsWith(".cdninstagram.com", StringComparison.OrdinalIgnoreCase))) return "file:" + file;
+        var kept = query.Where(x => x.Split('=')[0].ToLowerInvariant() is "stp" or "url").Order(StringComparer.Ordinal);
         return new UriBuilder(u) { Query = string.Join('&', kept), Fragment = "" }.Uri.ToString();
     }
     public static ParsedCapture Parse(string platform, string body, bool people = false, CaptureContext? context = null)
@@ -514,12 +519,20 @@ public static class PayloadParser
         }
         p.IsReel = p.Permalink?.Contains("/reel/") == true || p.Permalink?.Contains("/reels/") == true; p.IsEvent = p.Permalink?.Contains("/events/") == true;
         p.IsSuggested = parents.Concat(Walk(n).Select(x => x.Node)).Any(x => (Get(At(x, "badge"), "text") ?? "").Contains("suggested", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(Get(x, "tracking") ?? "", "\"originated_from_recommendation\"\\s*:\\s*\"?1"));
-        var media = new List<MediaSource>(); bool videoHint = false;
+        var media = new List<MediaSource>(); var widths = new Dictionary<string, int>(); bool videoHint = false;
+        void AddImage(string url, string? width)
+        {
+            var source = new MediaSource("image", url, SourceKey(url)); int.TryParse(width, out var w);
+            // Two renditions of one asset share a key (SourceKey). The wider one takes the first-seen slot: in 100 of the 156
+            // live posts that listed two renditions (2026-11-10) the thumbnail came first, and the card shows the slot at full width.
+            var index = media.FindIndex(m => m.Kind == "image" && m.SourceKey == source.SourceKey);
+            if (index < 0) { media.Add(source); widths[source.SourceKey] = w; } else if (w > widths[source.SourceKey]) { media[index] = source; widths[source.SourceKey] = w; }
+        }
         void MediaWalk(JsonElement x)
         {
             if (x.ValueKind == JsonValueKind.Array) { foreach (var a in x.EnumerateArray()) MediaWalk(a); return; } if (x.ValueKind != JsonValueKind.Object) return;
             var image = Get(At(x, "image"), "uri") ?? (At(x, "width").ValueKind != JsonValueKind.Undefined || At(x, "height").ValueKind != JsonValueKind.Undefined ? Get(x, "uri") : null);
-            if (image is not null && !image.Contains("/rsrc.php/")) media.Add(new("image", image, SourceKey(image)));
+            if (image is not null && !image.Contains("/rsrc.php/")) AddImage(image, Get(At(x, "image"), "width") ?? Get(x, "width"));
             var progressive = Array(At(x, "videoDeliveryResponseFragment", "videoDeliveryResponseResult", "progressive_urls"))
                 .Where(v => At(v, "failure_reason").ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
                 .OrderByDescending(v => Get(At(v, "metadata"), "quality") == "HD")

@@ -9,7 +9,19 @@ namespace Feed.Tests;
 public sealed class MediaTests
 {
     static byte[] Png(int width,int height){var b=new byte[24];new byte[]{137,80,78,71,13,10,26,10}.CopyTo(b,0);BinaryPrimitives.WriteInt32BigEndian(b.AsSpan(16,4),width);BinaryPrimitives.WriteInt32BigEndian(b.AsSpan(20,4),height);return b;}
-    [Fact]public void SigningTokensDoNotChangeMediaIdentityButRenditionsDo(){Assert.Equal(PayloadParser.SourceKey("https://cdn.test/a.jpg?oh=old&oe=1"),PayloadParser.SourceKey("https://cdn.test/a.jpg?oh=new&oe=2"));Assert.NotEqual(PayloadParser.SourceKey("https://cdn.test/a.jpg?stp=small"),PayloadParser.SourceKey("https://cdn.test/a.jpg?stp=large"));}
+    [Fact]public void SigningTokensDoNotChangeMediaIdentityButRenditionsDoOffMetaHosts(){Assert.Equal(PayloadParser.SourceKey("https://cdn.test/a.jpg?oh=old&oe=1"),PayloadParser.SourceKey("https://cdn.test/a.jpg?oh=new&oe=2"));Assert.NotEqual(PayloadParser.SourceKey("https://cdn.test/a.jpg?stp=small"),PayloadParser.SourceKey("https://cdn.test/a.jpg?stp=large"));}
+    [Fact]public void MetaFilenameIsTheMediaIdentity()
+    {
+        // Key version 3: the same asset came back from another CDN edge, path prefix or rendition in 1,216 live groups; the filename is what Meta keeps.
+        Assert.Equal("file:1_2_3_n.jpg",PayloadParser.SourceKey("https://scontent-prg1-1.xx.fbcdn.net/v/t39.30808-6/1_2_3_n.jpg?stp=dst-jpg_p526x296&_nc_gid=a&oh=1&oe=2"));
+        Assert.Equal(PayloadParser.SourceKey("https://scontent-prg1-1.xx.fbcdn.net/v/t39.30808-6/1_2_3_n.jpg?stp=dst-jpg_p526x296&oh=1"),PayloadParser.SourceKey("https://scontent.fprg2-1.fna.fbcdn.net/v/t1.6435-9/1_2_3_n.jpg?stp=dst-jpg_s1080x1080&oh=2"));
+        Assert.Equal("file:token.mp4",PayloadParser.SourceKey("https://scontent-a.cdninstagram.com/o1/v/t16/f2/m86/token.mp4?efg=x&_nc_ht=y"));
+        Assert.NotEqual(PayloadParser.SourceKey("https://scontent.xx.fbcdn.net/v/t39/1_2_3_n.jpg"),PayloadParser.SourceKey("https://scontent.xx.fbcdn.net/v/t39/1_2_4_n.jpg"));
+        // A proxied preview is its origin, a path without a filename and a third-party host keep the URL key, and a parser key is never a URL.
+        Assert.Equal("https://external.xx.fbcdn.net/emg1/v/t13/1?stp=c0&url=https%3A%2F%2Fa.example%2Fsafe_image.jpg",PayloadParser.SourceKey("https://external.xx.fbcdn.net/emg1/v/t13/1?url=https%3A%2F%2Fa.example%2Fsafe_image.jpg&stp=c0&ccb=1"));
+        Assert.Equal("https://video.xx.fbcdn.net/o1/v/t2/f2/m69/token",PayloadParser.SourceKey("https://video.xx.fbcdn.net/o1/v/t2/f2/m69/token?efg=x"));
+        Assert.Equal("https://cdn.example.test/image.jpg",PayloadParser.SourceKey("https://cdn.example.test/image.jpg?v=2"));
+    }
     [Fact]public void OnlyRenditionAndProxiedOriginSurviveInMediaIdentity()
     {
         // Parameters never seen before (here _nc_gid, efg, ig_cache_key) must not create a new identity; a denylist cannot know them.
@@ -23,17 +35,22 @@ public sealed class MediaTests
     {
         await using var i=new TestInstance();await i.Init();using var handler=new PngHandler(Png(640,480));using var http=new HttpClient(handler);var ingest=new Ingest(i.Paths,i.Factory,new(i.Paths,http));
         var snapshot=new InstanceSnapshot(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("instagram",new())},new(),Preferences.Parse(""));
-        string Raw(string dir,string gid){var file=i.Paths.Get("raw","instagram",dir,"001.json");Directory.CreateDirectory(Path.GetDirectoryName(file)!);File.WriteAllText(file,$$$"""{"items":[{"pk":"101","code":"synthetic","user":{"pk":"501","username":"synthetic.person"},"caption":{"text":"Synthetic caption"},"image_versions2":{"candidates":[{"url":"https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid={{{gid}}}&oh=sig{{{gid}}}&oe=1","width":640}]}}]}""");return file;}
-        var first=Raw("20260101T000000","one");var second=Raw("20260102T000000","two");File.SetLastWriteTimeUtc(second,File.GetLastWriteTimeUtc(first).AddMinutes(1));
+        string Raw(string dir,string gid,string host="scontent-a.cdninstagram.com",string name="a_n.jpg"){var file=i.Paths.Get("raw","instagram",dir,"001.json");Directory.CreateDirectory(Path.GetDirectoryName(file)!);File.WriteAllText(file,$$$"""{"items":[{"pk":"101","code":"synthetic","user":{"pk":"501","username":"synthetic.person"},"caption":{"text":"Synthetic caption"},"image_versions2":{"candidates":[{"url":"https://{{{host}}}/v/{{{name}}}?stp=dst-jpg_e35&_nc_gid={{{gid}}}&oh=sig{{{gid}}}&oe=1","width":640}]}}]}""");return file;}
+        var first=Raw("20260101T000000","one");var second=Raw("20260102T000000","two","scontent-b.cdninstagram.com");File.SetLastWriteTimeUtc(second,File.GetLastWriteTimeUtc(first).AddMinutes(1));
         Assert.Equal(1,(await ingest.File("instagram",first,snapshot,false,default)).New);
         var replay=await ingest.File("instagram",second,snapshot,false,default);Assert.Equal(0,replay.Revised);Assert.Equal(1,handler.Calls);
-        await using var db=i.Factory.Open();var post=await db.Posts.SingleAsync();Assert.Equal(1,post.ContentRevision);var media=await db.Media.SingleAsync();Assert.True(media.IsCurrent);Assert.Equal("https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35",media.SourceKey);Assert.Contains("_nc_gid=two",media.OriginalUrl);
+        await using(var db=i.Factory.Open()){var post=await db.Posts.SingleAsync();Assert.Equal(1,post.ContentRevision);var media=await db.Media.SingleAsync();Assert.True(media.IsCurrent);Assert.Equal("file:a_n.jpg",media.SourceKey);Assert.Contains("scontent-b",media.OriginalUrl);}
+        // A different filename is a different picture: one revision bump, one new row, the old row retired.
+        var third=Raw("20260103T000000","three","scontent-b.cdninstagram.com","b_n.jpg");File.SetLastWriteTimeUtc(third,File.GetLastWriteTimeUtc(first).AddMinutes(2));
+        Assert.Equal(1,(await ingest.File("instagram",third,snapshot,false,default)).Revised);Assert.Equal(2,handler.Calls);
+        await using(var db=i.Factory.Open()){Assert.Equal(2,(await db.Posts.SingleAsync()).ContentRevision);var rows=await db.Media.OrderBy(m=>m.Id).ToListAsync();Assert.Equal(2,rows.Count);Assert.False(rows[0].IsCurrent);Assert.True(rows[1].IsCurrent);Assert.Equal("file:b_n.jpg",rows[1].SourceKey);}
     }
-    [Fact]public async Task KeyVersionTwoNormalizesStoredIdentitiesWithoutAdvancingRevisions()
+    [Fact]public async Task KeyVersionThreeNormalizesStoredIdentitiesWithoutAdvancingRevisions()
     {
         await using var i=new TestInstance();await i.Init();var kept="media/instagram/101/01.png";var duplicate="media/instagram/101/01-abcdef123456.png";
         foreach(var rel in new[]{kept,duplicate}){Directory.CreateDirectory(Path.GetDirectoryName(i.Paths.Get(rel))!);await File.WriteAllBytesAsync(i.Paths.Get(rel),Png(128,128));}
-        const string urlA="https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=one&oh=1",urlB="https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=two&oh=2",oldKeyA="https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=one",oldKeyB="https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=two";
+        // Version 2 keys of one asset from two CDN edges.
+        const string urlA="https://scontent-a.cdninstagram.com/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=one&oh=1",urlB="https://scontent-b.cdninstagram.com/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=two&oh=2",oldKeyA="https://scontent-a.cdninstagram.com/v/a_n.jpg?stp=dst-jpg_e35",oldKeyB="https://scontent-b.cdninstagram.com/v/a_n.jpg?stp=dst-jpg_e35";
         await using(var db=i.Factory.Open())
         {
             var p=new Post{Platform="instagram",PlatformPostId="101",Text="Synthetic",ContentRevision=7,ContentHash="stale",MediaManifestJson=System.Text.Json.JsonSerializer.Serialize(new[]{new MediaSource("image",urlB,oldKeyB)})};db.Add(p);await db.SaveChangesAsync();
@@ -43,9 +60,29 @@ public sealed class MediaTests
         }
         await i.Init();
         await using var check=i.Factory.Open();var post=await check.Posts.SingleAsync();var row=await check.Media.SingleAsync();var manifest=System.Text.Json.JsonSerializer.Deserialize<MediaSource[]>(post.MediaManifestJson)!;
-        Assert.Equal("https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35",row.SourceKey);Assert.True(row.IsCurrent);Assert.Equal(duplicate,row.Path);Assert.Equal(row.SourceKey,manifest.Single().SourceKey);
+        Assert.Equal("file:a_n.jpg",row.SourceKey);Assert.True(row.IsCurrent);Assert.Equal(duplicate,row.Path);Assert.Equal(row.SourceKey,manifest.Single().SourceKey);
         Assert.Equal(7,post.ContentRevision);Assert.Equal(Ingest.ContentHash(post,manifest,[row]),post.ContentHash);
         Assert.True(File.Exists(i.Paths.Get(duplicate)));Assert.False(File.Exists(i.Paths.Get(kept)));Assert.Equal(MediaKeys.Version,await check.Get(MediaKeys.Marker));
+    }
+    [Fact]public async Task NormalizationKeepsTheWiderRenditionAndPermalinkKeys()
+    {
+        await using var i=new TestInstance();await i.Init();var wide="media/facebook/102/01.jpg";var thumb="media/facebook/102/02.jpg";
+        foreach(var rel in new[]{wide,thumb}){Directory.CreateDirectory(Path.GetDirectoryName(i.Paths.Get(rel))!);await File.WriteAllBytesAsync(i.Paths.Get(rel),Png(128,128));}
+        const string urlWide="https://scontent-a.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_s1080x1080&oh=1",urlThumb="https://scontent-b.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_p526x296&oh=2",permalink="https://www.facebook.com/reel/102/";
+        await using(var db=i.Factory.Open())
+        {
+            var p=new Post{Platform="facebook",PlatformPostId="102",Text="Synthetic",ContentRevision=3,ContentHash="stale",Permalink=permalink,MediaManifestJson=System.Text.Json.JsonSerializer.Serialize(new[]{new MediaSource("image",urlWide,PayloadParser.SourceKey(urlWide)),new MediaSource("image",urlThumb,PayloadParser.SourceKey(urlThumb)),new MediaSource("video",permalink,PayloadParser.SourceKey(permalink))})};db.Add(p);await db.SaveChangesAsync();
+            db.Media.Add(new(){PostId=p.Id,Kind="image",Position=1,SourceKey="https://scontent-a.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_s1080x1080",OriginalUrl=urlWide,Path=wide,ContentHash="wide",Width=1080,Height=1080,IsCurrent=true});
+            db.Media.Add(new(){PostId=p.Id,Kind="image",Position=2,SourceKey="https://scontent-b.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_p526x296",OriginalUrl=urlThumb,Path=thumb,ContentHash="thumb",Width=526,Height=296,IsCurrent=true});
+            // Version 2 rekeyed permalink video rows from the permalink URL; version 3 restores the parser key.
+            db.Media.Add(new(){PostId=p.Id,Kind="video",Position=3,SourceKey=PayloadParser.SourceKey(permalink),OriginalUrl=permalink,IsCurrent=true});
+            await db.SaveChangesAsync();await db.Kv.Where(k=>k.Key==MediaKeys.Marker).ExecuteDeleteAsync();
+        }
+        await i.Init();
+        await using var check=i.Factory.Open();var post=await check.Posts.SingleAsync();var rows=await check.Media.OrderBy(m=>m.Position).ToListAsync();var manifest=System.Text.Json.JsonSerializer.Deserialize<MediaSource[]>(post.MediaManifestJson)!;
+        Assert.Equal(2,rows.Count);Assert.Equal(wide,rows[0].Path);Assert.Equal("file:1_2_3_n.jpg",rows[0].SourceKey);Assert.True(File.Exists(i.Paths.Get(wide)));Assert.False(File.Exists(i.Paths.Get(thumb)));
+        Assert.Equal("permalink:102",rows[1].SourceKey);Assert.Equal(new[]{"file:1_2_3_n.jpg","permalink:102"},manifest.Select(m=>m.SourceKey));Assert.All(rows,r=>Assert.True(r.IsCurrent));
+        Assert.Equal(3,post.ContentRevision);Assert.Equal(Ingest.ContentHash(post,manifest,rows),post.ContentHash);
     }
     [Theory][InlineData(32,32,true)][InlineData(1,200,false)][InlineData(128,128,false)]public async Task GlyphGuardAppliesToExistingPostImages(int w,int h,bool dropped)
     {

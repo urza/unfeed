@@ -1,6 +1,6 @@
 # Plan 03: Media identity from the CDN filename; content hash stable across URL rotation
 
-Status: proposed 2026-11-09 from the step-back review. Corrected on 2026-11-10 against main at 21e1f35 and a copy of the live database, then reviewed the same day (`.work/03-media-identity/plan-review.md`). Not started.
+Status: proposed 2026-11-09 from the step-back review. Corrected on 2026-11-10 against main at 21e1f35 and a copy of the live database, then reviewed the same day (`.work/03-media-identity/plan-review.md`). Implemented on 2026-11-10; see "Notes from implement".
 
 ## Outcome
 
@@ -102,3 +102,11 @@ Platform ids in the raws (25 newest raws per platform, read-only): Instagram car
 - Anchors corrected to main at 21e1f35.
 - The 11-09 evidence table is replaced by the 11-10 measurement; the raw sample and the parser diff of recapture pairs are added.
 - The design moved from "platform id, else filename, else URL" with a new `MediaKey` column, parser version 17, a unique index and a daily URL cleanup to the filename key alone under the existing key-version mechanism. The reasons are in decisions 1 to 3. The reviewers judged this course; the review added the `permalink:` guard, the widest-rendition rule and the host condition.
+
+## Notes from implement
+
+- The host condition in `SourceKey` matches a host that ends in `.fbcdn.net` or `.cdninstagram.com` (with the dot). Every filename-keyed row on the live instance is on a subdomain of one of the two.
+- The widest-rendition rule lives in the Facebook walk (`AddImage` with a width per key); `Limit` is unchanged, as the plan says. The width is read from `image.width`, else from the `width` next to a bare `uri`.
+- The `permalink:` rule is one function (`MediaKeys.Key`) used for rows and manifest entries. It keeps a `permalink:` key and also repairs the version 2 damage: a video row whose URL equals the post permalink gets `permalink:<post id>` back, which is the parser's rule. The first run on the copy showed that a guard alone leaves the 10 damaged live rows damaged. The planned `SourceKey` test is replaced by the normalization test, as the review asked.
+- Chapter 17 (testing) got one line for the new regression cases; the plan's spec list did not name it.
+- Verification on a copy of the live database with the media tree mirrored as empty files (`status --data <copy>`, 10 s): `media:key-migration` reads `posts=9958 duplicate rows removed=1341`; `sum(ContentRevision)` stays 85,249; 686 superseded rows and 648 duplicate files are gone; 24,219 rows carry a `file:` key; all 156 two-rendition groups kept the widest row; no `(PostId, SourceKey)` pair remains twice. Of the 10 permalink video rows that version 2 rekeyed, 3 get `permalink:<post id>` back and 7 keep a URL key because their URL is an older permalink form; all 10 are retired rows, so neither outcome changes a card or a revision.

@@ -128,7 +128,7 @@ Visibility updates have two shared semantics, named `SetHidden(owner, reason)` a
 | Path | text? | relative path under the instance directory. Write-once. |
 | Width, Height | integer? | read from the file header at download |
 | Position | integer | the slot number, from 1. It equals the number in the file name. |
-| SourceKey, ContentHash | text, text? | stable adapter media identity and SHA-256 of downloaded bytes; URL expiry tokens alone do not change identity |
+| SourceKey, ContentHash | text, text? | stable adapter media identity (7.3: the Meta CDN filename, else the URL without rotating parameters, or the parser's `permalink:<id>`) and SHA-256 of downloaded bytes; a host rotation or URL expiry tokens alone do not change identity |
 | IsCurrent | bool | whether this row belongs to the current source manifest; retired slots remain for provenance but are not rendered or judged |
 | AttemptedAt, DownloadAttempts, Error | datetime?, integer, text? | pending image or video retry state; failed automatic attempts wait 30 minutes and stop after three failures |
 | CreatedAt | datetime | |
