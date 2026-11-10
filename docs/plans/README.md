@@ -10,7 +10,7 @@ Standalone implementation plans from the step-back review of 2026-11-09. Each pl
 | [04 Author identity with id-only merges](04-author-identity.md) | Identity merges on a blocklist, destructively, with no log | none |
 | [08 Storage lifecycle](08-storage-lifecycle.md) | Storage and the read path have no lifecycle plan | none (02 decided against the category write helper) |
 | [09 Judge-quality loop](09-judge-quality-loop.md) | The learning loop the UI promises does not exist | 02 recommended first |
-| [10 Stop silent feature failure](10-silent-failures.md) | Features fail silently | 02 removes video context from the verdict version |
+| [10 Stop silent feature failure](10-silent-failures.md) | Features fail silently | none (02 kept video context in the verdict version; 10 leaves the provider version at 1) |
 
 Numbers match the review's ranking. Findings 5, 6 and 7 (security posture, checkpoint detection, cross-process coordination) have no plan here yet.
 
