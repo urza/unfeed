@@ -13,7 +13,8 @@ public sealed record FeedPage(InstanceSnapshot Instance, string View, string? Pl
 public enum DiagnosticLevel { None, Notice, Alert }
 public sealed class FeedQuery(DbFactory factory)
 {
-    public async Task<FeedPage> Read(InstanceSnapshot instance, string view, string? platform, string scope, CancellationToken ct, long? authorId = null, string? category = null)
+    // owner narrows the hidden scope to one hide owner (`?hidden=1&owner=llm`); the counts stay those of the whole scope.
+    public async Task<FeedPage> Read(InstanceSnapshot instance, string view, string? platform, string scope, CancellationToken ct, long? authorId = null, string? category = null, string? owner = null)
     {
         await using var db = factory.Open(); await db.Database.OpenConnectionAsync(ct);
         await using var readTransaction = ((Microsoft.Data.Sqlite.SqliteConnection)db.Database.GetDbConnection()).BeginTransaction(deferred: true);
@@ -109,7 +110,7 @@ public sealed class FeedQuery(DbFactory factory)
         var unsorted = await pending.CountAsync(ct);
         // Select the ids first: that query runs on the covering index alone, and only the rows that
         // reach the page are read. One query would make SQLite read every scoped row to sort it.
-        var ids = await (scope == "hidden" ? scoped.Where(p => p.Hidden) : scope == "unsorted" ? pending : live)
+        var ids = await (scope == "hidden" ? scoped.Where(p => p.Hidden && (owner == null || p.HiddenBy == owner)) : scope == "unsorted" ? pending : live)
             .OrderByDescending(p => p.PostedAt).ThenByDescending(p => p.Id).Take(instance.Config.Ui.RenderCap).Select(p => p.Id).ToArrayAsync(ct);
         // EF.Parameter sends the id list as one JSON parameter instead of one parameter per id: these four
         // lookups by primary key or PostId index are the one place where probing by id is the right plan.
@@ -151,7 +152,7 @@ public sealed class FeedQuery(DbFactory factory)
             units.Add(new(card, folded, folded.Length == 0 ? null : $"{folded.Length + 1} posts " + (stack.WindowDays == 1 ? "today" : stack.WindowDays == 7 ? "this week" : $"in {stack.WindowDays} days")));
         }
         var vdef = instance.Taxonomy.Views.FirstOrDefault(v => v.Key == view); var suffix = platform is null ? "" : " on " + platform;
-        string empty = scope == "hidden" ? "No hidden posts" + suffix + "." : scope == "unsorted" ? "Nothing is waiting for the model" + suffix + "." : vdef?.Category is not null && vdef.Authors is not null ? $"No posts from the people in the {vdef.Label} view judged as {instance.Taxonomy.Categories.Single(c => c.Key == vdef.Category).Label}{suffix} yet." : vdef?.Category is not null ? $"No posts judged as {vdef.Label}{suffix} yet." : vdef?.Rare is not null ? $"No rare voices{suffix} right now." : vdef?.Authors is not null ? $"No posts from the people in the {vdef.Label} view{suffix}." : vdef is not null ? $"Nothing in the {vdef.Label} view{suffix} yet." : platform is not null ? $"No posts on {platform} in the feed." : instance.Config.Llm.Enabled && unsorted > 0 ? "Nothing judged yet." : "The feed is empty. Nothing collected yet.";
+        string empty = scope == "hidden" ? (owner is null ? "No hidden posts" : "No posts hidden by " + owner) + suffix + "." : scope == "unsorted" ? "Nothing is waiting for the model" + suffix + "." : vdef?.Category is not null && vdef.Authors is not null ? $"No posts from the people in the {vdef.Label} view judged as {instance.Taxonomy.Categories.Single(c => c.Key == vdef.Category).Label}{suffix} yet." : vdef?.Category is not null ? $"No posts judged as {vdef.Label}{suffix} yet." : vdef?.Rare is not null ? $"No rare voices{suffix} right now." : vdef?.Authors is not null ? $"No posts from the people in the {vdef.Label} view{suffix}." : vdef is not null ? $"Nothing in the {vdef.Label} view{suffix} yet." : platform is not null ? $"No posts on {platform} in the feed." : instance.Config.Llm.Enabled && unsorted > 0 ? "Nothing judged yet." : "The feed is empty. Nothing collected yet.";
         return new(instance, view, platform, scope, units.ToArray(), visible, hidden, unsorted, authors.Count(a => a.IsFriend && (platform is null ? instance.Config.Enabled(a.Platform) : a.Platform == platform)), known.ToArray(), await db.PlatformStates.AsNoTracking().ToArrayAsync(ct), await db.Runs.AsNoTracking().Where(r => r.Status == "running" || r.Kind == "collect" && r.FinishedAt != null && !db.Runs.Any(newer => newer.Kind == "collect" && newer.Platform == r.Platform && newer.FinishedAt != null && newer.Id > r.Id) || db.Runs.OrderByDescending(x => x.Id).Take(20).Select(x => x.Id).Contains(r.Id)).OrderByDescending(r => r.Id).ToArrayAsync(ct), await db.RunRequests.AsNoTracking().Where(r => r.Status == "pending" || r.Status == "claimed").ToArrayAsync(ct), await db.Get("last_visit", ct), empty, await scoped.CountAsync(p => p.Hidden && p.IsSponsored, ct), [], await db.Get($"model:{Prompts.ConfigurationHash(instance)}:judge:not_before", ct), await db.Posts.CountAsync(p => p.Hidden, ct), await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision == null || p.VerdictContentRevision != p.ContentRevision), ct), null, await Diagnostics(db, instance, platform, ct));
     }
     // The Manage dot needs scans of Posts, RawSnapshots and TimelineVisits that can cost more than the

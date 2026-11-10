@@ -25,7 +25,7 @@ Usage: dotnet out/Feed.Cli.dll COMMAND [--data DIR] [options]
   parser-audit --platform X [--raw-ids N,N | --run-id N | --failed] [--limit N] --output FILE
   process --platform X|all [--limit N]
   refilter [--post-id N | --since DATE | --all]
-  rescore [--all] [--platform X] [--limit N] [--since DATE] [--post-id N | --post-ids N,N,...] [--author REF] [--text-only]
+  rescore [--all | --trial] [--platform X] [--limit N] [--since DATE] [--post-id N | --post-ids N,N,...] [--author REF] [--text-only]
   summarize [--limit N]
   like [--platform X] [--post-id N]
   avatars --platform X
@@ -87,6 +87,7 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
                     text = text.Insert(next, $"\n- {Clock.Now:yyyy-MM-dd}: {line.Trim().TrimEnd('.')}. (thumbs {string.Join(", ", ids.Select(id => "#" + id))})\n"); InstancePaths.AtomicWrite(path, text);
                 }
                 if (citeText is not null) { var ids = ParseIds(citeText); if (!ids.All(id => rows.Any(f => f.Id == id))) throw new ArgumentException("unknown cited signal"); await db.Feedback.Where(f => ids.Contains(f.Id)).ExecuteUpdateAsync(u => u.SetProperty(f => f.Curated, true), ct); Console.WriteLine($"curate: marked {ids.Length} cited rows; no visibility changed"); if (a.Get("author") is not null && a.Get("write") is not null) return await Run(["rescore", "--data", paths.Root, "--author", a.Get("author")!]); }
+                else if (a.Command == "curate") foreach (var text in await JudgeReport.Curate(db, s, ct)) Console.WriteLine(text);
                 else foreach (var f in rows) Console.WriteLine($"thumb #{f.Id} post=#{f.PostId} author=#{f.AuthorId} value={f.Value} view={f.ViewKey} labels={f.CategoriesAtVote} reason={f.ReasonAtVote}");
                 return 0;
             }
@@ -113,6 +114,8 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
                 platforms = [post.Platform];
             }
             if (a.Command is "rescore" or "summarize" && !s.Config.Llm.Enabled) throw new ArgumentException("model is disabled");
+            bool trial = a.Flag("trial"); if (trial && (a.Command != "rescore" || a.Flag("all"))) throw new ArgumentException("--trial requires rescore and cannot combine with --all");
+            if (trial) limit ??= 100;
             if (a.Command is "collect" or "friends" or "login" or "like")
             {
                 int aggregate = 0;
@@ -131,10 +134,11 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
             await ledger.Phase(run.Id, "processing", ct); int resultCode = 0;
             if (a.Command is "process" or "rescore" or "summarize")
             {
-                Console.WriteLine($"scope: {a.Command} platform={platform}, order={(a.Command == "process" ? "oldest due per stage with rotating turns" : "newest post first")}, selected limit={limit?.ToString() ?? "all eligible"}, batch={s.Config.Llm.Batch}, parallel={s.Config.Llm.Parallel}");
-                var counts = await new Processing(paths, factory, new(http), media, ingest).Run(s, new(a.Command, platform, limit, a.Flag("all"), postId, since, a.Get("author"), a.Flag("text-only"), postIds), line => { Console.WriteLine(line); }, ct, async counts => { if (run is null) return; var json = JsonSerializer.Serialize(counts, new JsonSerializerOptions { IncludeFields = true }); run.StatsJson = json; await using var progressDb = factory.Open(); await progressDb.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(u => u.SetProperty(r => r.StatsJson, json)); });
+                Console.WriteLine($"scope: {a.Command}{(trial ? " --trial (judged posts only; nothing is written)" : "")} platform={platform}, order={(a.Command == "process" ? "oldest due per stage with rotating turns" : "newest post first")}, selected limit={limit?.ToString() ?? "all eligible"}, batch={s.Config.Llm.Batch}, parallel={s.Config.Llm.Parallel}");
+                var counts = await new Processing(paths, factory, new(http), media, ingest).Run(s, new(a.Command, platform, limit, a.Flag("all"), postId, since, a.Get("author"), a.Flag("text-only"), postIds, trial), line => { Console.WriteLine(line); }, ct, async counts => { if (run is null) return; var json = JsonSerializer.Serialize(counts, new JsonSerializerOptions { IncludeFields = true }); run.StatsJson = json; await using var progressDb = factory.Open(); await progressDb.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(u => u.SetProperty(r => r.StatsJson, json)); });
                 run.StatsJson = JsonSerializer.Serialize(counts, new JsonSerializerOptions { IncludeFields = true });
                 foreach (var stage in counts.Stages.OrderBy(x => x.Key)) Console.WriteLine($"process {stage.Key}: selected={stage.Value.Selected}, completed={stage.Value.Completed}, failed={stage.Value.Failed}, superseded={stage.Value.Superseded}, selected-but-not-dispatched={stage.Value.Undispatched}, remaining={stage.Value.Remaining}");
+                if (counts.Trial is { } t) Console.WriteLine($"trial {platform}: sampled={counts.Selected}, would hide={t.WouldHide}, would unhide={t.WouldUnhide}, labels changed={t.LabelsChanged}, unchanged={t.Unchanged}, failed={counts.Failed}, superseded={counts.Superseded}; compared verdicts under the current policy version={t.CurrentVersion} (differences there are model noise, not the policy edit); nothing was written");
                 Console.WriteLine($"{a.Command} {platform}: {counts}"); resultCode = counts.Failed > 0 ? 1 : 0;
             }
             else if (a.Command == "reparse")

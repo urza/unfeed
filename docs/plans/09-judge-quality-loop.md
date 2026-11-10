@@ -1,6 +1,6 @@
 # Plan 09: Build the judge-quality loop
 
-Status: proposed 2026-11-09 from the step-back review. Reviewed and reduced on 2026-11-10 (plan review: CHANGE COURSE, smaller course taken with one adjustment; report: `.work/09-judge-quality-loop/plan-review.md`). Not started.
+Status: proposed 2026-11-09 from the step-back review. Reviewed and reduced on 2026-11-10 (plan review: CHANGE COURSE, smaller course taken with one adjustment; report: `.work/09-judge-quality-loop/plan-review.md`). Implemented on 2026-11-10 on branch `09-judge-quality-loop`; see "Notes from implement".
 
 ## Outcome
 
@@ -90,3 +90,12 @@ The owner edits policy often (12 versions, three of them with more than 900 post
 ## Out of scope
 
 Prompt redesign, structured output decoding, summary merging, automatic policy edits from thumbs, any change to how thumbs reach the prompt, verdict history, a policy ledger, a stored trial summary, a Judge tab on Manage and a `JudgeQuery` projection (deferred until the thumbs reach a count that a page helps with), a trial button on Manage (the trial is a model run and belongs to the CLI like `rescore`).
+
+## Notes from implement
+
+- The trial lives inside `Processing.Run` as a `WorkScope.Trial` flag: the selection takes judged posts for their current content, `Stamp` becomes a read-only eligibility check, a failed result writes no `LlmError`, a dead batch sets no backoff marker, and a verdict goes to `Compare` instead of the apply block. `WorkCounts.Trial` carries the five trial counts; the CLI prints the summary line from them.
+- `Compare` loads the post untracked and sets the trial score on that copy, so `Visibility.Model` runs the full rule (owner unhide, `llm` shield) and nothing reaches the database.
+- The curate report is `JudgeReport.Curate` in `Feed.Core/Queries`, next to the two predicates, so the unit test checks the lines without the console. The memory sentences shown per author are those a new post by the author would carry (no post excluded, curated rows included), which is what `Processing` passes to `Prompts.Memory`.
+- The owner filter is validated against `ClosedValues.HideOwners` in the route; the counts of the hidden scope stay unfiltered, as the plan says.
+- `--trial` refuses `--all` (the stale condition has no meaning in a trial) and takes a default limit of 100 only when `--limit` is absent.
+- No browser test was added: the plan has no page any more, and the chip title and the empty message are plain strings covered by the fast tests.

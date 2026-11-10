@@ -154,7 +154,7 @@ A thumb records a feedback row with its context (chapter 5) and hides nothing. I
 
 **Curation.** The operator reads the uncurated thumbs with their posts and writes what the owner meant as a plain sentence:
 
-- `curate` without flags reports every uncurated signal grouped by author, with the memory the model would see.
+- `curate` without flags reports every uncurated signal grouped by author, with the memory the model would see. A signal that disagrees with the current verdict is marked: a thumb down on a visible post judged at or above the threshold, or a thumb up on a post hidden by `llm` or judged below the threshold. After the groups, the report lists the owner unhides that disagree: posts the owner unhid for their current content whose score is below the threshold. The marks and the list are information for the curator; nothing in them changes visibility (rule 11).
 - `curate --write "<line>" --cites 3,5 [--author <ref>] [--approved]` appends `- <date>: <line>. (thumbs #3, #5)` under `## Learned from thumbs feedback` (the heading is created at the end of the file when absent), marks the cited signals curated, and with `--author` re-judges that author's posts with the freshly reloaded preferences. A line that reads like a person mute needs `--approved`: mutes belong to the owner.
 - `curate --dismiss 3,5` marks signals curated without a line.
 
@@ -203,3 +203,9 @@ The fixed reply guidance identifies video context as untrusted material to class
 A missing yt-dlp is reported by the tool check of each `process` run (12.9) as a recovery row that needs attention while `video_context.enabled` is true; until the tool is installed each eligible item carries the `tool_missing` error as incomplete context.
 
 Generation 6 adds this guidance. Enrichment configuration/version enter model provenance when enabled. Previous valid judgments remain until explicit rescoring or content revision changes, as with other model configuration changes. Summaries are unchanged and do not imply video inspection.
+
+## 9.11 Trial judging
+
+`rescore --trial` tests the current policy, taxonomy and model settings on posts that already hold a verdict for their current content, and writes nothing. It selects the newest judged posts (default 100; `--limit`, `--since`, `--platform` and `--author` narrow the sample; `--all` is refused), visible or hidden by `llm`, and runs them through the ordinary judge path under the processing lock and `llm.parallel`. Nothing on the post row changes: no attempt stamp, no verdict column, no hide, no failure count, and no backoff marker.
+
+For each post the trial computes what a rescore would do: the restricted category set and the hide state from `Visibility.Model` with the trial score (so an owner unhide and the `llm` shield hold, as in 8.5), and compares them with what the owner sees now. One line per post whose hide state or label set differs: `trial post #<id> <platform>: score <old> -> <new>, would hide | would unhide | labels changed [<old>] -> [<new>]; stored verdict under the current | an older policy version`. The summary line gives sampled, would hide, would unhide, labels changed, unchanged, failed and superseded, and the number of compared verdicts that were made under the current version. Differences in that last group are model noise, not the effect of a policy edit; a trial run before an edit gives the noise floor. The trial stores nothing; the console output is the report. A rescore stays an explicit, separate command.

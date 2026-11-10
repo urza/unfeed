@@ -6,13 +6,16 @@ using Feed.Core.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 namespace Feed.Core.Application;
 
-public sealed record WorkScope(string Kind = "process", string Platform = "all", int? Limit = null, bool All = false, long? PostId = null, DateTime? Since = null, string? Author = null, bool TextOnly = false, long[]? PostIds = null);
+// Trial: judge already-judged posts under the current policy and compare, writing nothing to the post (plan 09).
+public sealed record WorkScope(string Kind = "process", string Platform = "all", int? Limit = null, bool All = false, long? PostId = null, DateTime? Since = null, string? Author = null, bool TextOnly = false, long[]? PostIds = null, bool Trial = false);
+public sealed class TrialCounts { public int WouldHide; public int WouldUnhide; public int LabelsChanged; public int Unchanged; public int CurrentVersion; }
 public sealed class StageCounts { public int Selected; public int Completed; public int Failed; public int Superseded; public int Undispatched; public int Remaining; }
 public sealed class WorkCounts
 {
     public ConcurrentDictionary<string, StageCounts> Stages { get; } = new();
     public StageCounts Stage(string platform, string task) => Stages.GetOrAdd(platform + "/" + task, _ => new());
     public int Selected; public int Completed; public int Failed; public int Superseded; public int Undispatched; public int Active; public int Prepared; public int Unapplied; public int Enriching;
+    public TrialCounts? Trial { get; set; }
     public override string ToString() => $"selected={Selected}, completed={Completed}, failed={Failed}, superseded={Superseded}, selected-but-not-dispatched={Undispatched}, active={Active}, enriching={Enriching}, prepared={Prepared}, unapplied={Unapplied}";
 }
 public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClient model, MediaFiles media, Ingest ingest, IVideoContextProvider? videoContext = null)
@@ -25,7 +28,7 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
         using var ownership = ResourceLock.Try(paths, "processing") ?? throw new ResourceBusyException("processing busy");
         using var ownedVideoContext = videoContext is null ? new VideoContextProvider(paths) : null;
         var enrichment = videoContext ?? ownedVideoContext!;
-        var counts = new WorkCounts();
+        var counts = new WorkCounts { Trial = scope.Trial ? new() : null };
         // A process run (scheduled, the Manage button or the CLI command) is the one place that checks the external
         // tools, so a tool installed or removed on a direct Linux host shows after the next run. Rescore and summarize
         // runs skip it: they run inside tests and from the CLI, where two extra spawns per invocation buy nothing.
@@ -116,8 +119,11 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                     if (scope.Kind == "process" && DateTime.TryParse(backoff, out var until) && until.ToUniversalTime() > Clock.Now) { empty++; continue; }
                     var query = db.Posts.AsNoTracking().Where(p => p.Platform == turn.Platform && p.IngestReadyAt != null);
                     if (turn.Task == "judge") query = query.Where(p => !p.Hidden || p.HiddenBy == "llm"); else query = query.Where(p => !p.Hidden);
+                    // A trial compares a new verdict with the stored one, so only posts judged for their current content qualify (fail-open, rule 12).
+                    if (scope.Trial) query = query.Where(p => p.CategoriesJson != null && p.VerdictContentRevision == p.ContentRevision);
                     if (scope.PostId is { } id) query = query.Where(p => p.Id == id);
                     else if (scope.PostIds is { } selectedIds) query = query.Where(p => selectedIds.Contains(p.Id));
+                    else if (scope.Trial) { }
                     else if (turn.Task == "judge") query = query.Where(p => p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision || p.LlmTokenLimit != null || (scope.All || scope.Author != null) && p.PrefsVersion != version);
                     else query = query.Where(p => p.SummaryContentRevision != p.ContentRevision || p.Summary == null);
                     if (scope.Since is { } since) query = query.Where(p => p.PostedAt >= since);
@@ -171,6 +177,8 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
         async Task<bool> Stamp(Prepared work, CancellationToken cancel)
         {
             await using var db = factory.Open(); var p = work.Post; var eligible = db.Posts.Where(x => x.Id == p.Id && x.ContentRevision == p.ContentRevision && x.VisibilityRevision == p.VisibilityRevision && x.IngestReadyAt != null && (!x.Hidden || work.Task == "judge" && x.HiddenBy == "llm"));
+            // A trial never writes to the post: the attempt stamp would already change the row the owner compares against.
+            if (scope.Trial) return await eligible.AnyAsync(cancel);
             return (work.Task == "judge" ? await eligible.ExecuteUpdateAsync(s => s.SetProperty(x => x.LlmAttemptedAt, Clock.Now).SetProperty(x => x.LlmTokenLimit, x => scope.Kind == "process" ? x.LlmTokenLimit : null), cancel) : await eligible.ExecuteUpdateAsync(s => s.SetProperty(x => x.SummaryAttemptedAt, Clock.Now), cancel)) == 1;
         }
         async Task Worker()
@@ -218,6 +226,23 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
             }
             catch { cancellation.Cancel(); recoveryCancellation.Cancel(); throw; }
         }
+        // Trial apply: what a rescore would do to this post, against what the owner sees now. The post is loaded untracked and
+        // the trial verdict is set on that copy only, so Visibility.Model runs the full model rule (owner unhide, llm shield)
+        // and nothing reaches the database.
+        async Task Compare(Prepared w, Verdict verdict)
+        {
+            await using var db = factory.Open(); var trial = counts.Trial!; var stage = counts.Stage(w.Post.Platform, w.Task);
+            var p = await db.Posts.AsNoTracking().SingleAsync(p => p.Id == w.Post.Id, token);
+            if (p.ContentRevision != w.Post.ContentRevision || p.VisibilityRevision != w.Post.VisibilityRevision || p.Hidden && p.HiddenBy != "llm") { counts.Superseded++; stage.Superseded++; return; }
+            bool hiddenNow = p.Hidden && p.HiddenBy == "llm"; int oldScore = p.LlmScore ?? 0; var oldLabels = JsonSerializer.Deserialize<string[]>(p.CategoriesJson ?? "[]") ?? [];
+            bool current = p.PrefsVersion == version; if (current) trial.CurrentVersion++;
+            var newLabels = Filters.Restrict(verdict.Categories, w.Rules, p.Platform); p.LlmScore = verdict.Score; p.LlmReason = verdict.Reason;
+            bool hiddenAfter = Visibility.Model(p, w.Rules) is not null; bool labels = !oldLabels.Order().SequenceEqual(newLabels.Order());
+            string change = hiddenAfter && !hiddenNow ? "would hide" : !hiddenAfter && hiddenNow ? "would unhide" : labels ? "labels changed" : "unchanged";
+            if (change == "would hide") trial.WouldHide++; else if (change == "would unhide") trial.WouldUnhide++; else if (labels) trial.LabelsChanged++; else trial.Unchanged++;
+            counts.Completed++; stage.Completed++;
+            if (change != "unchanged") progress?.Invoke($"trial post #{p.Id} {p.Platform}: score {oldScore} -> {verdict.Score}, {change}{(labels ? $" [{string.Join(", ", oldLabels)}] -> [{string.Join(", ", newLabels)}]" : "")}; stored verdict under {(current ? "the current" : "an older")} policy version");
+        }
         async Task Apply()
         {
             try
@@ -228,13 +253,18 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                     if (result.Error is not null)
                     {
                         counts.Failed++; stage.Failed++; batch.Failure++; if (w.Task == "judge" && result.TokenLimit is not null) batch.TokenFailure++;
+                        if (scope.Trial) progress?.Invoke($"post #{w.Post.Id} trial failed: {result.Error}");
+                        else
+                        {
                         await using var db = factory.Open();
                         var current = db.Posts.Where(p => p.Id == w.Post.Id && p.ContentRevision == w.Post.ContentRevision && p.VisibilityRevision == w.Post.VisibilityRevision);
                         if (w.Task == "judge") await current.ExecuteUpdateAsync(u => u.SetProperty(p => p.LlmError, result.Error).SetProperty(p => p.LlmFailures, p => p.LlmFailures + 1).SetProperty(p => p.LlmTokenLimit, p => result.TokenLimit ?? p.LlmTokenLimit), token);
                         else await current.ExecuteUpdateAsync(u => u.SetProperty(p => p.SummaryError, result.Error).SetProperty(p => p.SummaryFailures, p => p.SummaryFailures + 1), token);
                         progress?.Invoke($"post #{w.Post.Id} {w.Task} failed; {(w.Task == "judge" && (result.TokenLimit is not null || w.Post.LlmTokenLimit is not null) ? "token retry governed by configured budget ladder and delay" : "retry after 30 minutes")}: {result.Error}");
+                        }
                     }
                     else if (result.Value is null) { counts.Superseded++; stage.Superseded++; batch.Success++; }
+                    else if (scope.Trial) { await Compare(w, (Verdict)result.Value); batch.Success++; }
                     else
                     {
                         await using var db = factory.Open(); await using var tx = await db.Database.BeginTransactionAsync(token);
@@ -257,7 +287,8 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                     batch.Settled++;
                     if (batch.Settled == batch.Count)
                     {
-                        if (batch.Failure > batch.TokenFailure && batch.Success == 0) { await dispatchGate.WaitAsync(token); try { stopped[batch.Task] = true; } finally { dispatchGate.Release(); } await using var db = factory.Open(); await db.Put($"model:{configHash}:{batch.Task}:not_before", Clock.Now.AddMinutes(30).ToString("O"), token); }
+                        // A failed trial batch stops further dispatch but leaves no backoff marker: a trial writes nothing.
+                        if (batch.Failure > batch.TokenFailure && batch.Success == 0) { await dispatchGate.WaitAsync(token); try { stopped[batch.Task] = true; } finally { dispatchGate.Release(); } if (!scope.Trial) { await using var db = factory.Open(); await db.Put($"model:{configHash}:{batch.Task}:not_before", Clock.Now.AddMinutes(30).ToString("O"), token); } }
                         progress?.Invoke($"batch #{batch.Id} {batch.Platform}/{batch.Task}: {counts}");
                     }
                 }

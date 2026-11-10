@@ -135,6 +135,8 @@ Automatic processing requests have Platform null and coalesce work from all enab
 
 **Operations and measurements.** Concurrent CLI log append/rotation preserves parseable lines without changing operation outcomes when logging fails. Required log formats and operator entry points remain stable even with a different sink or source layout. Benchmark representative render/query and model workloads under documented conditions; compare memory, latency and throughput before accepting a tuning change. Functional tests do not pin nonunique index names, SQLite cache sizes or an unqualified wall-clock threshold.
 
+**Judge quality.** A trial rescore (9.11) leaves every post column byte-identical, reports would hide, would unhide and label changes from the fake model's verdict, and honors an owner unhide. The disagreement predicates cover a thumb in each direction and an owner unhide; the `curate` report groups by author with the memory sentences, marks the disagreeing thumb, lists the disagreeing unhide, and names both empty states. The hidden feed with `owner=llm` lists only the model's hides.
+
 ## 17.3 What only a live pass can verify
 
 The browser sessions, the login, a real collect and scroll, the like sender, profile staging, the virtual display, the video and image tools, the real model endpoint, the background fetch, and the scheduler spawning children. Before a platform counts as live, run the checklist:
