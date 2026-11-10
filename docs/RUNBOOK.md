@@ -72,7 +72,7 @@ For duplicate-looking cards inspect original post ids and downloaded image hashe
 
 Use a bounded `parser-audit` report first, then `capture-index` to backfill grouping for legacy diagnostic rows without replaying posts. A parser-blocked capture is a compatibility notice, not a run failure: its posts are stored, the run keeps the browser's status, and the scheduler replays the raw after `PayloadParser.Version` changes. Fix the parser with sanitized fixtures, bump the version, and let the scheduler or `reparse --platform X --failed` replay. Do not clear a notice by editing Parsed or by deleting captures.
 
-Three consecutive home collects with no posts found raise a Needs-your-attention issue per platform. Inspect the raw diagnostics of those runs and the browser session through noVNC; a feed that passes nothing through the capture gate leaves no raw to block.
+Three consecutive home collects with no posts found raise a Needs-your-attention issue per platform, linked to the latest silent run. Inspect the raw diagnostics of those runs and the browser session through noVNC; a feed that passes nothing through the capture gate leaves no raw to block.
 
 For rollout, take an online backup and preserve binaries/settings, stop supervision and drain independent workers, migrate under processing/platform ownership, run the reviewed index/replay scope, verify data preservation, then restore supervision. The `RemoveCaptureRecovery` migration drops columns and a table; a rollback to an older binary needs the pre-migration backup. Never replace a live database with an older backup after newer user activity without reconciliation.
 

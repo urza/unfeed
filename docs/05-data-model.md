@@ -251,7 +251,7 @@ One row per profile visit in a close-friends, all-followed or explicit person co
 | Status | text | `rendered`, `empty`, `unrendered` |
 | CaptureStatus | text | `captured`, `empty`, `incomplete` or `failed`; rendering alone does not prove a usable capture |
 | PostsFound, NewestPostedAt, OldestPostedAt | integer, datetime?, datetime? | observed distinct posts and their date range; never an assertion of full history coverage |
-| StopReason | text | `depth`, `no_new`, `explicit_empty`, `checkpoint`, `timeout`, `capture_error`, `parser_blocked` (rendered, no observed posts, a blocked response; no browser retry) or `interrupted` |
+| StopReason | text | `depth`, `no_new`, `explicit_empty`, `checkpoint`, `timeout`, `capture_error`, `parser_blocked` (rendered, no observed posts, an unrecognized response shape; no browser retry) or `interrupted` |
 | Note | text? | page title, final URL and the first 200 characters of text, for an unrendered visit |
 | Screenshot | text? | published copy at `media/diagnostics/<platform>/<run dir>/timeline-<handle>.png`; original remains in the raw run directory |
 

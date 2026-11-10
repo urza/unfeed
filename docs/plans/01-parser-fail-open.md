@@ -105,4 +105,6 @@ Implemented on 2026-11-10 on branch `01-parser-fail-open`. Differences from the 
 - The migration is `20261110112057_RemoveCaptureRecovery`, scaffolded with `dotnet ef`. It drops the table, the index on `RecoveryKey`, six `RawSnapshots` columns and four `TimelineVisits` columns.
 - The `SchedulerTests` case `CaptureRecoveryHonorsPauseReloginAndStartupBackoff` tested the sweep recovery dispatch, not the model queue. It is renamed `SweepRecoveryHonorsPauseReloginAndStartupBackoff`.
 - Live-copy check (copy of `data/feed.db` with its WAL, plus the instance files, in the scratchpad): the CLI `status` applied `RemoveCaptureRecovery`, the live `config.json` with its `capture_recovery` section loaded, and the copy holds 36,703 raws with 0 unparsed. `reparse --failed` would select nothing.
-- Checks: 390 fast tests and 28 browser tests pass; `./build.sh` passes.
+- Checks: 391 fast tests and 28 browser tests pass; `./build.sh` passes.
+- Code review fixes (`.work/01-parser-fail-open/code-review.md`): `SilentHomeCollects` skips person collects through `StatsJson.scope` and returns the run ids of the streak, the Manage page shows the alert under its own `silent` category with a link to the latest silent run, the visit note counts every blocked response while `parser_blocked` still needs an unrecognized shape, and `ingest=` is `done` or `failed` again.
+

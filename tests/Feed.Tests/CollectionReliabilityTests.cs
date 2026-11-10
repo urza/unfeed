@@ -37,14 +37,15 @@ public sealed class CollectionReliabilityTests
     {
         await using var i=new TestInstance();await i.Init();await using var db=i.Factory.Open();
         var s=new InstanceSnapshot(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("facebook",new())},new(),Preferences.Parse(""));
-        static Run Collect(long id,int found,string mode="home",string status="ok")=>new(){Id=id,Platform="facebook",Kind="collect",Mode=mode,Status=status,PostsFound=found,FinishedAt=Clock.Now};
+        static Run Collect(long id,int found,string mode="home",string status="ok",string scope="home")=>new(){Id=id,Platform="facebook",Kind="collect",Mode=mode,Status=status,PostsFound=found,FinishedAt=Clock.Now,StatsJson=$"{{\"scope\":\"{scope}\"}}"};
         db.Runs.AddRange(Collect(1,0),Collect(2,0));await db.SaveChangesAsync();
-        Assert.Equal(2,await CaptureHealth.SilentHomeCollects(db,"facebook"));Assert.DoesNotContain(await RecoveryQuery.Read(db,s),r=>r.Item=="home collects");
-        // A close-friends check and a failed browser run are not home collects: they neither count nor break the sequence.
-        db.Runs.AddRange(Collect(3,0,"close_friends"),Collect(4,0,status:"error"),Collect(5,0));await db.SaveChangesAsync();
-        Assert.Equal(3,await CaptureHealth.SilentHomeCollects(db,"facebook"));
-        var issue=Assert.Single(await RecoveryQuery.Read(db,s),r=>r.Item=="home collects");Assert.Equal(RecoveryDisposition.Attention,issue.Disposition);Assert.Equal(DiagnosticLevel.Alert,await RecoveryQuery.Level(db,s));
-        db.Runs.Add(Collect(6,4));await db.SaveChangesAsync();
-        Assert.Equal(0,await CaptureHealth.SilentHomeCollects(db,"facebook"));Assert.DoesNotContain(await RecoveryQuery.Read(db,s),r=>r.Item=="home collects");
+        Assert.Equal(2,(await CaptureHealth.SilentHomeCollects(db,"facebook")).Length);Assert.DoesNotContain(await RecoveryQuery.Read(db,s),r=>r.Item=="home collects");
+        // A close-friends check, a failed browser run and a person collect (Mode "home", scope "person") are not
+        // home collects: they neither count nor break the sequence.
+        db.Runs.AddRange(Collect(3,0,"close_friends"),Collect(4,0,status:"error"),Collect(5,7,scope:"person"),Collect(6,0));await db.SaveChangesAsync();
+        Assert.Equal(new long[]{6,2,1},await CaptureHealth.SilentHomeCollects(db,"facebook"));
+        var issue=Assert.Single(await RecoveryQuery.Read(db,s),r=>r.Item=="home collects");Assert.Equal(RecoveryDisposition.Attention,issue.Disposition);Assert.Equal(6,issue.RunId);Assert.Equal(DiagnosticLevel.Alert,await RecoveryQuery.Level(db,s));
+        db.Runs.Add(Collect(7,4));await db.SaveChangesAsync();
+        Assert.Empty(await CaptureHealth.SilentHomeCollects(db,"facebook"));Assert.DoesNotContain(await RecoveryQuery.Read(db,s),r=>r.Item=="home collects");
     }
 }

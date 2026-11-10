@@ -8,11 +8,14 @@ public static class CaptureHealth
     // Three silent home collects in a row point at a feed shape or a capture gate the parser no longer
     // recognizes. One collect with posts ends the alert: health is judged on positive evidence only.
     public const int SilentCollects = 3;
-    public static async Task<int> SilentHomeCollects(FeedDb db, string platform, CancellationToken ct = default)
+    // Returns the ids of the silent streak, newest first. A person collect also runs with Mode "home" (the
+    // Run row stores no person), so StatsJson.scope is the only mark that keeps it out of the count.
+    public static async Task<long[]> SilentHomeCollects(FeedDb db, string platform, CancellationToken ct = default)
     {
-        var recent = await db.Runs.AsNoTracking().Where(r => r.Platform == platform && r.Kind == "collect" && r.Mode == "home" && (r.Status == "ok" || r.Status == "capped"))
-            .OrderByDescending(r => r.Id).Take(SilentCollects).Select(r => r.PostsFound).ToArrayAsync(ct);
-        return recent.TakeWhile(found => found == 0).Count();
+        var recent = await db.Runs.AsNoTracking().Where(r => r.Platform == platform && r.Kind == "collect" && r.Mode == "home" && (r.Status == "ok" || r.Status == "capped")
+                && (r.StatsJson == null || !r.StatsJson.Contains("\"scope\":\"person\"")))
+            .OrderByDescending(r => r.Id).Take(SilentCollects).Select(r => new { r.Id, r.PostsFound }).ToArrayAsync(ct);
+        return recent.TakeWhile(r => r.PostsFound == 0).Select(r => r.Id).ToArray();
     }
     // A subsequent successful visit ends the current alert, not the historical gap.
     // No association is inferred from a multi-person run or a display name.

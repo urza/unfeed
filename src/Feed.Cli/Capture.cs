@@ -49,7 +49,7 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
         run.RawDir = prefix + Clock.Now.ToString("yyyyMMddTHHmmss") + "-" + run.Id;
         var directory = paths.Get("raw", platform, run.RawDir); Directory.CreateDirectory(directory);
         await using (var db = factory.Open()) await db.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(u => u.SetProperty(r => r.RawDir, run.RawDir), ct);
-        var pending = new ConcurrentBag<Task>(); var hashes = new Dictionary<string, string>(); string? activeVisit = null; var captured = new ConcurrentDictionary<string, Observation>(); var surfaceObservations = new ConcurrentDictionary<string, Observation>(); var seen = new HashSet<string>(); var serial = new SemaphoreSlim(1); int batches = 0, listenerErrors = 0, parserErrors = 0, scrolls = 0, visited = 0, incomplete = 0, emptyVisits = 0, unrendered = 0; bool explicitEmpty = false;
+        var pending = new ConcurrentBag<Task>(); var hashes = new Dictionary<string, string>(); string? activeVisit = null; var captured = new ConcurrentDictionary<string, Observation>(); var surfaceObservations = new ConcurrentDictionary<string, Observation>(); var seen = new HashSet<string>(); var serial = new SemaphoreSlim(1); int batches = 0, listenerErrors = 0, parserErrors = 0, blockedResponses = 0, scrolls = 0, visited = 0, incomplete = 0, emptyVisits = 0, unrendered = 0; bool explicitEmpty = false;
         await using (var db = factory.Open()) foreach (var id in await db.Posts.Where(p => p.Platform == platform).Select(p => p.PlatformPostId).ToListAsync(ct)) seen.Add(id);
         async Task Save(string body, CaptureContext context)
         {
@@ -63,14 +63,16 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
                     var association = context with { BodyHash = hash };
                     if (!visits.Contains(association)) { visits.Add(association); InstancePaths.AtomicWrite(existing + ".visits", JsonSerializer.Serialize(visits)); }
                     // The bytes already have a raw ledger entry; the visit still observed them.
-                    var replay = PayloadParser.Parse(platform, body, friends, context); if (context.Visit == activeVisit) { explicitEmpty |= replay.ExplicitEmpty; parserErrors += replay.Issues.Count(i => i.Code == "unknown_response"); }
+                    var replay = PayloadParser.Parse(platform, body, friends, context); if (context.Visit == activeVisit) { explicitEmpty |= replay.ExplicitEmpty; blockedResponses += replay.Diagnostics.Count; parserErrors += replay.Issues.Count(i => i.Code == "unknown_response"); }
                     foreach (var observation in replay.Posts.Where(_ => context.Visit == activeVisit)) surfaceObservations.AddOrUpdate(observation.Post.PlatformPostId, observation, (_, existing) => existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(observation.TimelineOwnerIds).Distinct().ToArray() });
                     return;
                 }
                 var path = Path.Combine(directory, $"{++batches:000}{(platform == "facebook" ? ".jsonl" : ".json")}"); CaptureContext.Publish(path, body, context); hashes[hash] = path; await ingest.Register(platform, path, run.Id, ct);
-                var parsed = PayloadParser.Parse(platform, await File.ReadAllTextAsync(path, ct), friends, context); if (context.Visit == activeVisit) { explicitEmpty |= parsed.ExplicitEmpty; parserErrors += parsed.Issues.Count(i => i.Code == "unknown_response"); }
+                var parsed = PayloadParser.Parse(platform, await File.ReadAllTextAsync(path, ct), friends, context); if (context.Visit == activeVisit) { explicitEmpty |= parsed.ExplicitEmpty; blockedResponses += parsed.Diagnostics.Count; parserErrors += parsed.Issues.Count(i => i.Code == "unknown_response"); }
                 // A parser diagnostic blocks its raw at ingest until a parser upgrade replays it. It is not a listener
                 // error: the browser did its job, so the run and the visit are judged on the posts they observed.
+                // blockedResponses counts every diagnostic for the visit note; parserErrors counts only unrecognized
+                // shapes, because a GraphQL error on a post branch can be transient and still deserves a browser retry.
                 foreach (var diagnostic in parsed.Diagnostics) Console.Error.WriteLine("parser warning: " + diagnostic);
                 foreach (var observation in parsed.Posts) { captured.TryAdd(observation.Post.PlatformPostId, observation); if (context.Visit == activeVisit) surfaceObservations.AddOrUpdate(observation.Post.PlatformPostId, observation, (_, existing) => existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(observation.TimelineOwnerIds).Distinct().ToArray() }); }
             }
@@ -124,15 +126,15 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
             async Task Visit(Author? author, string url, int cap, SweepTarget? target = null)
             {
                 (string Status, string Stop) outcome;
-                Exception? failure = null; var errorsBefore = listenerErrors; var parserErrorsBefore = parserErrors;
+                Exception? failure = null; var errorsBefore = listenerErrors; var parserErrorsBefore = parserErrors; var blockedBefore = blockedResponses;
                 try { outcome = await Surface(url, true, cap); }
                 catch (CheckpointException e) { outcome = ("checkpoint", "checkpoint"); failure = e; }
                 catch (OperationCanceledException e) { outcome = ("interrupted", "interrupted"); failure = e; }
                 catch (Exception e) { outcome = ("error", "error"); failure = e; }
                 visited++;
                 var observed = surfaceObservations.Values.Where(x => Site.TimelineAuthorMatches(platform, url, author, x)).Select(x => x.Post).ToArray();
-                var visit = new TimelineVisit { Platform = platform, AuthorId = author?.Id, Url = url.TrimEnd('/'), Name = author?.DisplayName ?? "", RunId = run.Id, CaptureToken = activeVisit, Status = outcome.Status, CaptureStatus = outcome.Status == "empty" ? "empty" : outcome.Status == "rendered" && observed.Length > 0 && listenerErrors == errorsBefore ? "captured" : "incomplete", PostsFound = observed.Length, NewestPostedAt = observed.Select(p => p.PostedAt).Max(), OldestPostedAt = observed.Select(p => p.PostedAt).Min(), StopReason = outcome.Stop, Note = failure?.Message ?? (listenerErrors > errorsBefore ? $"{listenerErrors - errorsBefore} capture error(s); inspect run #{run.Id}" : parserErrors > parserErrorsBefore ? $"{parserErrors - parserErrorsBefore} saved response(s) wait for a parser update; inspect raw diagnostics for run #{run.Id}" : observed.Length == 0 && outcome.Status == "rendered" ? "Page rendered, but no post payload matched the target author; not evidence of an empty timeline" : null) };
-                // No posts and a blocked response: the shape, not the browser, is the gap. A browser retry
+                var visit = new TimelineVisit { Platform = platform, AuthorId = author?.Id, Url = url.TrimEnd('/'), Name = author?.DisplayName ?? "", RunId = run.Id, CaptureToken = activeVisit, Status = outcome.Status, CaptureStatus = outcome.Status == "empty" ? "empty" : outcome.Status == "rendered" && observed.Length > 0 && listenerErrors == errorsBefore ? "captured" : "incomplete", PostsFound = observed.Length, NewestPostedAt = observed.Select(p => p.PostedAt).Max(), OldestPostedAt = observed.Select(p => p.PostedAt).Min(), StopReason = outcome.Stop, Note = failure?.Message ?? (listenerErrors > errorsBefore ? $"{listenerErrors - errorsBefore} capture error(s); inspect run #{run.Id}" : blockedResponses > blockedBefore ? $"{blockedResponses - blockedBefore} saved response(s) wait for a parser update; inspect raw diagnostics for run #{run.Id}" : observed.Length == 0 && outcome.Status == "rendered" ? "Page rendered, but no post payload matched the target author; not evidence of an empty timeline" : null) };
+                // No posts and an unrecognized shape: the parser, not the browser, is the gap. A browser retry
                 // cannot change the shape, so the sweep keeps the gap without retrying (TimelineCoverage).
                 if (failure is null && outcome.Status == "rendered" && observed.Length == 0 && listenerErrors == errorsBefore && parserErrors > parserErrorsBefore)
                 {
@@ -202,7 +204,7 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
         using (var ingestLock = ResourceLock.Try(paths, "ingest-" + platform)) if (ingestLock is not null)
         {
             foreach (var file in Directory.EnumerateFiles(directory).Where(f => Path.GetExtension(f) is ".json" or ".jsonl").Order()) { var result = await ingest.File(platform, file, s, false, ct); run.PostsFound += result.Found; run.PostsNew += result.New; ingestFailures += result.Failed - result.Blocked; ingestBlocked += result.Blocked; }
-            ingestStatus = ingestFailures > 0 ? "failed" : ingestBlocked > 0 ? "blocked" : "done";
+            ingestStatus = ingestFailures == 0 ? "done" : "failed";
         }
         // A raw that only waits for a parser upgrade keeps the browser's status: its posts are stored, the
         // scheduler replays it after the upgrade, and Manage shows it as a compatibility notice.

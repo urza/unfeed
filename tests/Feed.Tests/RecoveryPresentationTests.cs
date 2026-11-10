@@ -8,6 +8,13 @@ using Xunit;
 namespace Feed.Tests;
 public sealed class RecoveryPresentationTests
 {
+    [Fact] public void SilentHomeCollectsGetTheirOwnTitleAndExplanation()
+    {
+        var issue = new RecoveryIssue("facebook", "home collects", "The last 3 home collects found no posts", 3, null, null, "Inspect the raw diagnostics") { RunId = 6 };
+        Assert.Equal("silent", RecoveryPresentation.Category(issue));
+        Assert.Equal("Home collects found no posts", RecoveryPresentation.Title("silent"));
+        Assert.Contains("One collect that finds posts ends this alert", RecoveryPresentation.Explanation("silent"));
+    }
     [Fact] public void PartialMetadataNoticeExplainsMissingLinksAndStoredPostProtection()
     {
         var issue = new RecoveryIssue("instagram", "saved capture", "partial metadata unavailable", 0, null, null, "Recorded warning", true);

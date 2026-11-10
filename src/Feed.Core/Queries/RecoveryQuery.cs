@@ -70,8 +70,8 @@ public static class RecoveryQuery
         // Positive evidence of capture health. A blocked raw has its own row above; this row covers the case
         // where a changed feed passes nothing through the capture gate, so there is no raw to show.
         if (fingerprint is null) foreach (var p in Platforms.All.Where(p => (platform == null || p == platform) && s.Config.Enabled(p)))
-            if (await CaptureHealth.SilentHomeCollects(db, p, ct) >= CaptureHealth.SilentCollects)
-                issues.Add(new(p, "home collects", $"The last {CaptureHealth.SilentCollects} home collects found no posts", CaptureHealth.SilentCollects, null, null, "The feed shape or the capture gate may have changed. Inspect the raw diagnostics of the last collect runs and the browser session through noVNC."));
+            if (await CaptureHealth.SilentHomeCollects(db, p, ct) is { Length: >= CaptureHealth.SilentCollects } silent)
+                issues.Add(new(p, "home collects", $"The last {silent.Length} home collects found no posts", silent.Length, null, null, "The feed shape or the capture gate may have changed. Inspect the raw diagnostics of the last collect runs and the browser session through noVNC.") { RunId = silent[0] });
         var superseded = CaptureHealth.Superseded(db);
         var eligible = db.RawSnapshots.AsNoTracking().Where(r => !superseded.Any(old => old.Id == r.Id) && !r.Deleted && (platform == null || r.Platform == platform) && (!r.Parsed && r.Error != null || r.Parsed && r.Warning != null) && r.CapturedAt > Clock.Now.AddDays(-RawIssueDays));
         var groupedRows = await db.RawDiagnostics.Join(eligible, d => d.RawSnapshotId, r => r.Id, (d, r) => new { d, r })
