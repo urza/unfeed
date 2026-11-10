@@ -25,7 +25,8 @@ public static class Identity
         else if (platform == "facebook" && segments[0] == "people") key = segments.Length == 3 && IsPlatformId(segments[2]) ? segments[2] : null;
         // Allowlist, not blocklist: a shape the parser has not seen yields no key instead of a key shared by everyone with that shape.
         else if (segments.Length == 1 || segments.Length == 2 && (platform == "facebook" ? FacebookTabs : InstagramTabs).Contains(segments[1])) key = segments[0].TrimStart('@');
-        if (string.IsNullOrWhiteSpace(key) || NonProfiles.Contains(key) || !Regex.IsMatch(key, @"^[a-z0-9_.-]+$")) return null;
+        // A ".php" segment is a page, never a profile (photo.php, video.php); profile.php was handled above.
+        if (string.IsNullOrWhiteSpace(key) || key.EndsWith(".php") || NonProfiles.Contains(key) || !Regex.IsMatch(key, @"^[a-z0-9_.-]+$")) return null;
         return Platforms.Prefix(platform) + ":" + key;
     }
     public static string[] Refs(string platform, string? id, string? url)

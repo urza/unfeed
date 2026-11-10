@@ -16,11 +16,13 @@ public static class IdentityStore
         var authors = await db.Authors.Where(a => ownerIds.Contains(a.Id)).ToListAsync(ct);
         // Rows that are one account with this observation: the owner of the id key, and alias owners that carry no platform
         // id of their own (created from an observation without an id, or from a slug fallback). A slug or handle never joins
-        // two rows that both have a platform id: a reclaimed handle would merge two people. The unique (Platform,
-        // PlatformAuthorId) row joins too, so the id fill below cannot collide. Without an id in the observation the alias
-        // owner is all the evidence there is.
+        // two rows that both have a platform id: a reclaimed handle would merge two people. The id key's owner joins whatever
+        // its own PlatformAuthorId: a numeric key comes only from a platform id or from the platform's own profile URL
+        // (profile.php?id=N, /people/<x>/<N>), and a Facebook delegate page carries two ids for one person. The row with
+        // PlatformAuthorId N always owns the key for N (Resolve is the only writer), so no second lookup is needed and the id
+        // fill below cannot collide with the unique index. Without an id in the observation the alias owner is all the
+        // evidence there is; both parser fallbacks derive a slug from the same URL, so such an observation has one alias.
         var candidates = authors.Where(a => owners.Any(k => k.AuthorId == a.Id && (k.Key == idKey || !Identity.IsPlatformId(a.PlatformAuthorId)))).ToList();
-        if (idKey is not null && await db.Authors.SingleOrDefaultAsync(a => a.Platform == platform && a.PlatformAuthorId == person.Id, ct) is { } byId && candidates.All(a => a.Id != byId.Id)) candidates.Add(byId);
         if (candidates.Count == 0 && idKey is null && authors.Count > 0) candidates.Add(authors.MinBy(a => a.Id)!);
         Author? author = null; var movedPosts = new List<Post>(); var removed = new List<long>();
         if (candidates.Count > 0)
@@ -83,10 +85,16 @@ public static class IdentityStore
         var events = await db.IdentityEvents.AsNoTracking().Where(e => kind == null || e.Kind == kind).OrderByDescending(e => e.LastAt).ThenByDescending(e => e.Id).Take(take).ToArrayAsync(ct);
         var ids = events.Select(e => e.KeptAuthorId).Distinct().ToList();
         var kept = await db.Authors.AsNoTracking().Where(a => ids.Contains(a.Id)).ToDictionaryAsync(a => a.Id, ct);
-        return events.Select(e => new IdentityEventRow(e, kept.GetValueOrDefault(e.KeptAuthorId), JsonSerializer.Deserialize<JsonElement>(e.DetailJson).TryGetProperty("Name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null)).ToArray();
+        return events.Select(e =>
+        {
+            var detail = JsonSerializer.Deserialize<JsonElement>(e.DetailJson);
+            string? Text(string name) => detail.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+            // A merge's other side is the removed row (its own id is in the snapshot; ObservedId is the kept row's). A conflict's other side is the observation's author.
+            return new IdentityEventRow(e, kept.GetValueOrDefault(e.KeptAuthorId), Text("Name"), e.Kind == "merge" ? Text("PlatformAuthorId") : e.ObservedId, e.Kind == "merge" ? null : detail.TryGetProperty("AuthorId", out var id) && id.ValueKind == JsonValueKind.Number ? id.GetInt64() : null);
+        }).ToArray();
     }
 }
-public sealed record IdentityEventRow(IdentityEvent Event, Author? Kept, string? OtherName);
+public sealed record IdentityEventRow(IdentityEvent Event, Author? Kept, string? OtherName, string? OtherId, long? OtherAuthorId);
 public sealed record CompletionEvidence(string ListId, string? Cursor, string? NextCursor, bool Terminal, int? ExactTotal, bool ParseFailed = false);
 public static class FriendsCompleteness
 {
