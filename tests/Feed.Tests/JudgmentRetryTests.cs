@@ -35,7 +35,8 @@ public sealed class JudgmentRetryTests
         {
             var p = await db.Posts.SingleAsync(); Assert.False(p.Hidden); Assert.Equal("[]", p.CategoriesJson); Assert.Equal(16000, p.LlmTokenLimit);
             Assert.False(await db.Posts.AnyAsync(JudgmentRetry.Due(s.Config.Llm, Clock.Now)));
-            Assert.Contains("exhausted", Assert.Single(await RecoveryQuery.Read(db, s)).Recovery);
+            // The process scope also probes the host tools; their notice rows are not part of the ladder under test.
+            Assert.Contains("exhausted", Assert.Single(await RecoveryQuery.Read(db, s), r => r.Platform != "tools").Recovery);
             Assert.Null(await db.Get($"model:{Prompts.ConfigurationHash(s)}:judge:not_before"));
         }
         s = s with { Config = s.Config with { Llm = s.Config.Llm with { TokenRetryBudgets = [8000, 16000, 24000] } } }; fail = false;

@@ -11,14 +11,14 @@ namespace Feed.Tests;
 
 public sealed class VideoContextTests
 {
-    sealed class Tool(Func<VideoSource, string?, CancellationToken, Task<string>> extract) : IVideoMetadataTool
+    sealed class Tool(Func<VideoSource, CancellationToken, Task<string>> extract) : IVideoMetadataTool
     {
         public int Calls;
-        public Task<string> Extract(VideoSource source, string? cookies, CancellationToken ct) { Interlocked.Increment(ref Calls); return extract(source, cookies, ct); }
+        public Task<string> Extract(VideoSource source, CancellationToken ct) { Interlocked.Increment(ref Calls); return extract(source, ct); }
     }
     sealed class Handler(Func<HttpRequestMessage, Task<HttpResponseMessage>> send) : HttpMessageHandler
     { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => send(request); }
-    static readonly VideoSource Source = new("https://www.youtube.com/watch?v=synthetic", "shared", null);
+    static readonly VideoSource Source = new("https://www.youtube.com/watch?v=synthetic", "shared");
     static readonly VideoContextConfig Config = new() { Enabled = true, CaptionLanguages = ["cs", "en"] };
     static string Metadata => """{"id":"synthetic","title":"Synthetic lesson","description":"A useful explanation","uploader":"Original creator","duration":125,"chapters":[{"title":"Intro","start_time":0}],"subtitles":{"en":[{"ext":"vtt","url":"https://captions.example.test/manual.vtt"}]},"automatic_captions":{"cs-orig":[{"ext":"json3","url":"https://captions.example.test/auto.json3"}]}}""";
 
@@ -29,27 +29,26 @@ public sealed class VideoContextTests
     [InlineData("https://www.youtube.com/playlist?list=ignored", false)]
     [InlineData("https://vimeo.com/12345", true)]
     [InlineData("https://youtube.com.evil.test/watch?v=synthetic", false)]
-    [InlineData("https://www.facebook.com/person/videos/12345/", true)]
-    [InlineData("https://www.instagram.com/reel/synthetic/", true)]
+    [InlineData("https://www.facebook.com/person/videos/12345/", false)]
+    [InlineData("https://www.instagram.com/reel/synthetic/", false)]
     [InlineData("file:///private/video.mp4", false)]
     public void SelectsVideoDestinationsNotArbitraryLinks(string url, bool eligible)
     {
-        Assert.Equal(eligible, VideoContextProvider.Source(new() { SharedUrl = url }, []) is not null);
-        Assert.Null(VideoContextProvider.Source(new() { Text = url }, []));
+        Assert.Equal(eligible, VideoContextProvider.Source(new() { SharedUrl = url }) is not null);
+        Assert.Null(VideoContextProvider.Source(new() { Text = url }));
     }
-    [Fact] public void NativeVideoNeedsCurrentMediaAndMatchingPlatformPermalink()
+    // A native platform video gets no source, whatever its permalink: the extractor would need the owner's session.
+    [Fact] public void NativePlatformVideoGetsNoSource()
     {
         var p = new Post { Platform = "instagram", Permalink = "https://www.instagram.com/p/synthetic/" };
-        Assert.Null(VideoContextProvider.Source(p, [new() { Kind = "image" }]));
-        Assert.Null(VideoContextProvider.Source(p, [new() { Kind = "video", IsCurrent = false }]));
-        Assert.Equal(new(p.Permalink, "post", "instagram"), VideoContextProvider.Source(p, [new() { Kind = "video" }]));
-        p.Permalink = "https://www.youtube.com/watch?v=synthetic";
-        Assert.Null(VideoContextProvider.Source(p, [new() { Kind = "video" }]));
+        Assert.Null(VideoContextProvider.Source(p));
+        p.SharedUrl = "https://www.youtube.com/watch?v=synthetic";
+        Assert.Equal(new(p.SharedUrl, "shared"), VideoContextProvider.Source(p));
     }
     [Fact] public async Task ManualCaptionsWinAndSuccessfulContextIsCachedAcrossInstances()
     {
         await using var i = new TestInstance();
-        var tool = new Tool((s, c, ct) => { Assert.Null(c); return Task.FromResult(Metadata); });
+        var tool = new Tool((s, ct) => Task.FromResult(Metadata));
         using var http = new HttpClient(new Handler(r => { Assert.Equal("https://captions.example.test/manual.vtt", r.RequestUri!.AbsoluteUri); Assert.Null(r.Headers.Authorization); Assert.False(r.Headers.Contains("Cookie")); return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n<v Speaker>Hello &amp; welcome</v>\n\n00:00:02.000 --> 00:00:03.000\nHello &amp; welcome again") }); }));
         VideoContext first;
         using (var provider = new VideoContextProvider(i.Paths, http, tool)) first = await provider.Get(Source, Config, default);
@@ -61,7 +60,7 @@ public sealed class VideoContextTests
     [Fact] public async Task AutomaticCaptionsAreLabeledAndTranslationsAreNotSilentlySelected()
     {
         await using var i = new TestInstance();
-        var tool = new Tool((s, c, ct) => Task.FromResult("""{"id":"synthetic","automatic_captions":{"en":[{"ext":"json3","url":"https://captions.example.test/translation"}],"cs-orig":[{"ext":"json3","url":"https://captions.example.test/original"}]}}"""));
+        var tool = new Tool((s, ct) => Task.FromResult("""{"id":"synthetic","automatic_captions":{"en":[{"ext":"json3","url":"https://captions.example.test/translation"}],"cs-orig":[{"ext":"json3","url":"https://captions.example.test/original"}]}}"""));
         using var http = new HttpClient(new Handler(r => { Assert.EndsWith("/original", r.RequestUri!.AbsoluteUri); return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"events":[{"segs":[{"utf8":"Ahoj "},{"utf8":"světe"}]}]}""") }); }));
         using var provider = new VideoContextProvider(i.Paths, http, tool);
         var result = await provider.Get(Source, Config, default); Assert.True(result.Captions!.Automatic); Assert.Equal("cs-orig", result.Captions.Language); Assert.Equal("Ahoj světe", result.Captions.Text);
@@ -77,7 +76,7 @@ public sealed class VideoContextTests
     }
     [Fact] public async Task FailedCaptionFetchPreservesMetadataAndHasShortCacheTtl()
     {
-        await using var i = new TestInstance(); var tool = new Tool((s,c,ct) => Task.FromResult(Metadata));
+        await using var i = new TestInstance(); var tool = new Tool((s,ct) => Task.FromResult(Metadata));
         using var http = new HttpClient(new Handler(r => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden))));
         using var provider = new VideoContextProvider(i.Paths,http,tool);
         var result = await provider.Get(Source,Config,default); Assert.Equal("available",result.Status); Assert.Equal("Synthetic lesson",result.Title); Assert.Equal("unavailable",result.Captions!.Status);
@@ -90,22 +89,22 @@ public sealed class VideoContextTests
     [InlineData("not json")]
     public async Task PlaylistRedirectOrMalformedMetadataFailsOpen(string body)
     {
-        await using var i = new TestInstance(); var tool = new Tool((s,c,ct) => Task.FromResult(body));
+        await using var i = new TestInstance(); var tool = new Tool((s,ct) => Task.FromResult(body));
         using var provider = new VideoContextProvider(i.Paths,tool:tool);
         var result = await provider.Get(Source,Config,default); Assert.Equal("unavailable",result.Status); Assert.Null(result.Title);
     }
-    [Fact] public async Task CancellationPropagatesAndCleansPrivateCookieSnapshot()
+    [Fact] public async Task CancellationPropagatesAndWritesNoCacheEntry()
     {
         await using var i = new TestInstance(); Directory.CreateDirectory(i.Paths.Get("profiles","facebook")); File.WriteAllText(i.Paths.Get("profiles","facebook","cookies.txt"),"synthetic cookie");
-        using var cancel = new CancellationTokenSource(); string? copy = null;
-        var tool = new Tool(async(s,c,ct) => { copy=c; Assert.NotNull(c); Assert.Equal("synthetic cookie",File.ReadAllText(c)); cancel.Cancel(); await Task.Delay(Timeout.Infinite,ct);return ""; });
+        using var cancel = new CancellationTokenSource();
+        var tool = new Tool(async(s,ct) => { cancel.Cancel(); await Task.Delay(Timeout.Infinite,ct);return ""; });
         using var provider = new VideoContextProvider(i.Paths,tool:tool);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(()=>provider.Get(new("https://www.facebook.com/person/videos/123/","post","facebook"),Config,cancel.Token));
-        Assert.False(File.Exists(copy)); Assert.Empty(Directory.GetFiles(i.Paths.Get("video-context"),"*.json"));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(()=>provider.Get(Source,Config,cancel.Token));
+        Assert.False(Directory.Exists(i.Paths.Get("video-context")));
     }
     [Fact] public async Task MissingToolIsCachedAndOversizedResponsesAreRejected()
     {
-        await using var i = new TestInstance();var tool=new Tool((s,c,ct)=>throw new System.ComponentModel.Win32Exception());
+        await using var i = new TestInstance();var tool=new Tool((s,ct)=>throw new System.ComponentModel.Win32Exception());
         using var provider=new VideoContextProvider(i.Paths,tool:tool);
         Assert.Equal("tool_missing",(await provider.Get(Source,Config,default)).Error);await provider.Get(Source,Config,default);Assert.Equal(1,tool.Calls);
         await Assert.ThrowsAsync<IOException>(()=>VideoContextProvider.ReadBounded(new MemoryStream(new byte[11]),10,default));
@@ -116,7 +115,7 @@ public sealed class VideoContextTests
     { public Task<VideoContext> Get(VideoSource s,VideoContextConfig c,CancellationToken ct)=>callback(ct); }
     [Fact] public async Task EnrichmentTimeoutIsIncompleteEvidenceNotCancellationOfJudgment()
     {
-        await using var i=new TestInstance();var tool=new Tool(async(s,c,ct)=>{await Task.Delay(Timeout.Infinite,ct);return "";});
+        await using var i=new TestInstance();var tool=new Tool(async(s,ct)=>{await Task.Delay(Timeout.Infinite,ct);return "";});
         using var provider=new VideoContextProvider(i.Paths,tool:tool);
         var result=await provider.Get(Source,Config with{TimeoutSeconds=5},default);
         Assert.Equal("unavailable",result.Status);Assert.Equal("timeout",result.Error);

@@ -17,6 +17,7 @@ public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnaps
     public string? RecoverySignature { get; init; }
     public int RecoveryPage { get; init; } = 1;
     public string Backup { get; init; } = "";
+    public string Tools { get; init; } = "";
     public RecoveryIssue[] RecoverySummary { get; init; } = [];
     public CoverageRow[] Coverage { get; init; } = [];
     public IdentityEventRow[] Events { get; init; } = [];
@@ -29,7 +30,7 @@ public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnaps
 
 public sealed class Management(InstancePaths paths, DbFactory factory, ManagementFiles documents)
 {
-    public static string PlatformName(string p) => p == "facebook" ? "Facebook" : "Instagram";
+    public static string PlatformName(string p) => p switch { "facebook" => "Facebook", "tools" => "Tools", _ => "Instagram" };
     public static string ModeName(string mode) => mode switch { "home" => "Home feed", "close_friends" => "Home + close friends", _ => "Everyone followed" };
     public static string RelativeTime(DateTime at, DateTime now)
     {
@@ -68,7 +69,7 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         var kv = await db.Kv.AsNoTracking().Where(k => k.Key.StartsWith("slot:")).ToDictionaryAsync(k => k.Key, k => k.Value, ct);
         var overviews = Platforms.All.Select(p => new PlatformOverview(p, authors.Count(a => a.Platform == p && a.IsFriend), postCounts.FirstOrDefault(c => c.Platform == p)?.Total ?? 0, postCounts.FirstOrDefault(c => c.Platform == p)?.Hidden ?? 0, states.FirstOrDefault(x => x.Platform == p), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "collect"), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "friends"), runs.Where(r => r.Platform == p && r.Status == "running").ToArray(), requests.Where(r => r.Platform == p).ToArray(), NextRun(s.Config, p, Clock.Now, kv), Platforms.Modes.ToDictionary(m => m, m => NextRun(s.Config, p, Clock.Now, kv, m)))).ToArray();
         return new(docs, s, overviews, visiblePeople.Skip((page - 1) * 40).Take(40).ToArray(), visiblePeople.Length, page, query, platform, filter, section, await db.Get("disk:summary", ct) ?? "Not measured yet", await db.Get("disk:at", ct), await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct), await db.Posts.CountAsync(p => p.LlmError != null || p.SummaryError != null, ct)) {
-            RecoverySignature = signature, RecoveryPage = Math.Max(1, page), Backup = await Maintenance.BackupLine(paths, db, ct),
+            RecoverySignature = signature, RecoveryPage = Math.Max(1, page), Backup = await Maintenance.BackupLine(paths, db, ct), Tools = await ToolHealth.Line(db, ct),
             Coverage = section == "coverage" ? await CoverageQuery.Read(db, s, ct: ct) : [],
             Events = section == "people" ? await IdentityStore.Events(db, 20, ct: ct) : [],
             RecoverySummary = await RecoveryQuery.Read(db, s, ct: ct, grouped: true, summaryOnly: true),

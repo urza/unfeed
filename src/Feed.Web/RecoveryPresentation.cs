@@ -5,14 +5,14 @@ namespace Feed.Web;
 
 public static class RecoveryPresentation
 {
-    public static string Category(RecoveryIssue issue) => issue.Informational ? issue.Problem.Contains("partial metadata unavailable", StringComparison.Ordinal) ? "partial" : "notice"
+    public static string Category(RecoveryIssue issue) => issue.Platform == "tools" ? "tools" : issue.Informational ? issue.Problem.Contains("partial metadata unavailable", StringComparison.Ordinal) ? "partial" : "notice"
         : issue.Problem.Contains("token budget exhausted", StringComparison.OrdinalIgnoreCase) ? "tokens"
         : issue.Item == "home collects" ? "silent"
         : issue.Item.EndsWith("· judge") ? "classification"
         : issue.Item.EndsWith("· summary") ? "summary" : "capture";
     public static string Title(string category) => category switch {
         "partial" => "Some post metadata was unavailable", "tokens" => "AI reached its response limit", "classification" => "Classification did not finish",
-        "summary" => "Summary did not finish", "notice" => "Upstream notices recorded", "silent" => "Home collects found no posts", _ => "Saved capture needs processing"
+        "summary" => "Summary did not finish", "notice" => "Upstream notices recorded", "silent" => "Home collects found no posts", "tools" => "An external tool is not available", _ => "Saved capture needs processing"
     };
     public static string Explanation(string category) => category switch {
         "partial" => "Usable captions and media were parsed, but missing fields may include links. Existing stored posts were protected. A later complete capture can supply missing metadata.",
@@ -20,6 +20,7 @@ public static class RecoveryPresentation
         "classification" => "The post is stored. Classification needs another attempt; collecting the post again is not necessary.",
         "summary" => "The post is stored. Its summary needs another attempt.",
         "notice" => "These captures were processed. No replay is needed for these recorded warnings.",
+        "tools" => "The processing child checks yt-dlp and ffmpeg at the start of each scheduled run. Install the tool as deployment 16.2 describes, or turn off the feature that needs it. The next run clears this row.",
         "silent" => "The last home collects in a row found no posts. The feed shape or the capture gate may have changed. Inspect the raw diagnostics of the linked collect run and the browser session through noVNC. One collect that finds posts ends this alert.",
         _ => "Feed kept the captured data. Inspect the recovery instructions before collecting again."
     };

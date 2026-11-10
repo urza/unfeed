@@ -1,6 +1,6 @@
 # Plan 10: Stop silent feature failure
 
-Status: proposed 2026-11-09 from the step-back review. Reviewed 2026-11-10 (`.work/10-silent-failures/plan-review.md`, step back: CHANGE COURSE, smaller course taken with one adjustment); scope reduced. Not started.
+Status: proposed 2026-11-09 from the step-back review. Reviewed 2026-11-10 (`.work/10-silent-failures/plan-review.md`, step back: CHANGE COURSE, smaller course taken with one adjustment); scope reduced. Implemented 2026-11-10 on the reduced course.
 
 ## Outcome
 
@@ -94,3 +94,13 @@ yt-dlp runs with the owner's `cookies.txt` for metadata (`VideoContext.cs` L113-
 ## Out of scope
 
 Verdict version contents (plan 02), frame sampling or transcription (`docs/VIDEO-UPGRADES.md`), the like-back cookie export after likes, a Manage toggle for `video_context.enabled`, an automatic yt-dlp update.
+
+## Notes from implement
+
+- The Dockerfile smoke `RUN` checks `yt-dlp --version` and `ffmpeg -version` only. `Feed.Cli --help` opens an instance before it prints the usage (`Program.cs` L47-L65), so it cannot run in the image build; the `browser install-deps` step already proves the CLI starts.
+- The tool check runs for the scheduled `process` kind only, not for manual `rescore` and `summarize` runs: those run inside the test suite and from the CLI, where two extra spawns buy nothing. The spec puts the check in 12.9 (independent processing), not 12.5 (the daily job has no step).
+- `Maintenance.Videos` treats a missing yt-dlp the same whether the probe said so or the spawn failed: the row keeps its attempt count, records the error and waits 30 minutes. A row that never moved its attempt stamp would head every batch and keep the processing loop selecting it, so the stamp moves.
+- `VideoContextProvider.Source` takes the post only; the media list served the native branch that is gone. `IVideoMetadataTool.Extract` lost its cookies parameter.
+- The `tools` pseudo-platform renders through the existing `PlatformGlyph` text fallback; only `Management.PlatformName` needed the value.
+- The workflow `test` job runs in the SDK container. It is validated by a YAML parse and a dry read only; the first real run is the next push to `main`. The image was not built in the sandbox (no Docker build, no external binary fetch); the yt-dlp hash was read once from the release's `SHA2-256SUMS` for 2026.10.26.
+- A recovery-row test stores the Kv states directly instead of probing, because a developer machine may have both tools installed.

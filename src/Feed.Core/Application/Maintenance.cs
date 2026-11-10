@@ -45,6 +45,7 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
     public async Task<MediaTurn> Videos(InstanceSnapshot s, string[] platforms, int? limit, CancellationToken ct)
     {
         int completed = 0, failed = 0; await using var db = factory.Open(); var retry = Clock.Now.AddMinutes(-30);
+        var fallbackReady = await ToolHealth.Available(db, "yt-dlp", ct);
         var rows = await db.Media.Where(m => m.Kind == "video" && m.IsCurrent && m.Path == null && m.PrunedAt == null && (m.AttemptedAt == null || m.AttemptedAt <= retry)).Join(db.Posts.Where(p => platforms.Contains(p.Platform)), m => m.PostId, p => p.Id, (m, p) => new { Media = m, Post = p }).Where(x => x.Post.Hidden || !s.Config.Llm.Enabled || x.Post.CategoriesJson != null && x.Post.VerdictContentRevision == x.Post.ContentRevision).OrderBy(x => x.Media.AttemptedAt ?? x.Media.CreatedAt).ThenBy(x => x.Media.Id).Take(limit ?? s.Config.Llm.Batch).ToListAsync(ct);
         foreach (var item in rows)
         {
@@ -67,9 +68,9 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
                         await using var input = await response.Content.ReadAsStreamAsync(timeout.Token); await using var output = File.Create(temp); var buffer = new byte[65536]; long total = 0; int n;
                         while ((n = await input.ReadAsync(buffer, timeout.Token)) > 0) { total += n; if (total > cap) throw new OversizeException(); await output.WriteAsync(buffer.AsMemory(0, n), timeout.Token); }
                     }
-                    catch (Exception e) when ((e is HttpRequestException or TaskCanceledException) && !ct.IsCancellationRequested && p.Permalink is not null) { temp = await DownloadTool(p, temp, cap, ct); }
+                    catch (Exception e) when ((e is HttpRequestException or TaskCanceledException) && !ct.IsCancellationRequested && p.Permalink is not null) { temp = fallbackReady ? await DownloadTool(p, temp, cap, ct) : throw new System.ComponentModel.Win32Exception("yt-dlp is not installed"); }
                 }
-                else temp = await DownloadTool(p, temp, cap, ct);
+                else temp = fallbackReady ? await DownloadTool(p, temp, cap, ct) : throw new System.ComponentModel.Win32Exception("yt-dlp is not installed");
                 await db.Entry(m).ReloadAsync(ct); await db.Entry(p).ReloadAsync(ct);
                 if (!m.IsCurrent || p.Hidden) { File.Delete(temp); m.PrunedAt = Clock.Now; m.Error = "source superseded or post hidden"; }
                 else {
@@ -77,7 +78,11 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
                     m.Path = rel; m.ContentHash = MediaFiles.Hash(await File.ReadAllBytesAsync(full, ct)); (m.Width, m.Height) = await VideoSize(full, ct); m.Error = null; completed++;
                 }
             }
-            catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested) { failed++; m.Error = e.Message; if (m.DownloadAttempts >= 3 || e is OversizeException or System.ComponentModel.Win32Exception) m.PrunedAt = Clock.Now; }
+            // A missing yt-dlp (Win32Exception, or the probe's verdict above) is the host's state, not the video's: the
+            // row keeps its attempts and waits, and the attempt stamp alone spaces the retries 30 minutes apart. Before
+            // plan 10 the first such failure pruned the row for good; the recovery rows now show the missing tool.
+            catch (System.ComponentModel.Win32Exception) { failed++; m.Error = "yt-dlp is not installed; the row waits for the tool"; m.DownloadAttempts--; }
+            catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested) { failed++; m.Error = e.Message; if (m.DownloadAttempts >= 3 || e is OversizeException) m.PrunedAt = Clock.Now; }
             finally { foreach (var partial in Directory.EnumerateFiles(Path.GetDirectoryName(originalTemp)!, Path.GetFileName(originalTemp) + "*")) File.Delete(partial); }
             await db.SaveChangesAsync(ct);
         }
@@ -86,12 +91,11 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
     async Task<string> DownloadTool(Post p, string output, long cap, CancellationToken ct)
     {
         if (p.Permalink is null) throw new IOException("no permalink for video fallback");
-        var cookie = paths.Get("profiles", p.Platform, "cookies.txt"); var copy = Path.Combine(Path.GetTempPath(), "feed-cookies-" + Guid.NewGuid().ToString("N"));
-        try
+        // No cookies on purpose (plan 10): the owner's exported session must not be replayed by a second client with
+        // another fingerprint. A permalink that needs a login fails here and the row is pruned after three attempts.
         {
-            if (File.Exists(cookie)) File.Copy(cookie, copy);
             var start = new ProcessStartInfo("yt-dlp") { UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
-            var args = new List<string> { "--no-playlist", "--no-progress", "--max-filesize", cap.ToString(), "-f", "best[ext=mp4]/best", "--print", "after_move:filepath", "-o", output + ".%(ext)s" }; if (File.Exists(copy)) args.AddRange(["--cookies", copy]); args.Add(p.Permalink); foreach (var a in args) start.ArgumentList.Add(a);
+            var args = new List<string> { "--no-playlist", "--no-progress", "--max-filesize", cap.ToString(), "-f", "best[ext=mp4]/best", "--print", "after_move:filepath", "-o", output + ".%(ext)s", "--", p.Permalink }; foreach (var a in args) start.ArgumentList.Add(a);
             using var process = Process.Start(start)!; using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(300)); var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token); var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
             try {
                 await process.WaitForExitAsync(timeout.Token); var printed = await stdout; var error = await stderr;
@@ -100,9 +104,7 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
                 if (new FileInfo(result).Length > cap) throw new OversizeException(); return result;
             }
             finally { if (!process.HasExited) process.Kill(true); await process.WaitForExitAsync(); try { await Task.WhenAll(stdout, stderr); } catch (OperationCanceledException) { } }
-
         }
-        finally { if (File.Exists(copy)) File.Delete(copy); }
     }
     static async Task<(int? Width, int? Height)> VideoSize(string path, CancellationToken ct)
     {

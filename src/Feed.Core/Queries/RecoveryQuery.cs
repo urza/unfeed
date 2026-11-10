@@ -72,6 +72,20 @@ public static class RecoveryQuery
         if (fingerprint is null) foreach (var p in Platforms.All.Where(p => (platform == null || p == platform) && s.Config.Enabled(p)))
             if (await CaptureHealth.SilentHomeCollects(db, p, ct) is { Length: >= CaptureHealth.SilentCollects } silent)
                 issues.Add(new(p, "home collects", $"The last {silent.Length} home collects found no posts", silent.Length, null, null, "The feed shape or the capture gate may have changed. Inspect the raw diagnostics of the last collect runs and the browser session through noVNC.") { RunId = silent[0] });
+        // A tool the processing child could not start (plan 10). An absent key means no scheduled run yet, which is
+        // not an alarm. yt-dlp missing is an attention row only while video context needs it; the download fallback
+        // waits for the tool and is a notice. ffmpeg missing is a notice while vision is on: vision still sends the
+        // original image.
+        if (fingerprint is null && platform is null) foreach (var tool in ToolHealth.Tools)
+            if (await ToolHealth.Read(db, tool, ct) is { Status: not "ok" } state)
+            {
+                bool attention = tool == "yt-dlp" && s.Config.VideoContext.Enabled, notice = tool == "yt-dlp" || s.Config.Llm.Vision;
+                if (!attention && !notice) continue;
+                var problem = $"{tool} {(state.Status == "missing" ? "is not installed or not on PATH" : "did not answer a version call: " + state.Error)}";
+                var recovery = tool == "yt-dlp" ? "Install yt-dlp (deployment 16.2) or set video_context.enabled to false. Pending video fallbacks wait for the tool. The next processing run clears this row."
+                    : "Install ffmpeg (deployment 16.2). Until then vision sends the original image. The next processing run clears this row.";
+                issues.Add(new("tools", tool, problem, 1, state.At, null, recovery, !attention) { Disposition = attention ? RecoveryDisposition.Attention : RecoveryDisposition.Informational });
+            }
         var superseded = CaptureHealth.Superseded(db);
         var eligible = db.RawSnapshots.AsNoTracking().Where(r => !superseded.Any(old => old.Id == r.Id) && !r.Deleted && (platform == null || r.Platform == platform) && (!r.Parsed && r.Error != null || r.Parsed && r.Warning != null) && r.CapturedAt > Clock.Now.AddDays(-RawIssueDays));
         var groupedRows = await db.RawDiagnostics.Join(eligible, d => d.RawSnapshotId, r => r.Id, (d, r) => new { d, r })

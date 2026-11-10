@@ -110,6 +110,15 @@ public sealed class MediaTests
         await using(var db=i.Factory.Open()){var p=new Post{Platform="facebook",PlatformPostId="fixture",IngestReadyAt=Clock.Now};db.Add(p);await db.SaveChangesAsync();db.Media.Add(new(){PostId=p.Id,Kind="video",Position=1,SourceKey="synthetic",OriginalUrl="https://unused.invalid/video.mp4"});await db.SaveChangesAsync();}
         using var http=new HttpClient(new NoNetwork());var turn=await new Maintenance(i.Paths,i.Factory,http).Videos(new(new(),new(),Preferences.Parse("")),["facebook"],1,default);Assert.Equal(1,turn.Completed);Assert.Equal(0,turn.Failed);await using var check=i.Factory.Open();var row=await check.Media.SingleAsync();Assert.EndsWith("01.webm",row.Path);Assert.NotNull(row.ContentHash);
     }
+    // The probe said yt-dlp is absent: the fallback row is stamped and waits, with no attempt counted and no prune.
+    [Fact]public async Task MissingDownloadToolKeepsTheVideoRowWaiting()
+    {
+        await using var i=new TestInstance();await i.Init();
+        await using(var db=i.Factory.Open()){var p=new Post{Platform="facebook",PlatformPostId="fixture",Permalink="https://www.facebook.com/reel/synthetic/",IngestReadyAt=Clock.Now};db.Add(p);await db.SaveChangesAsync();db.Media.Add(new(){PostId=p.Id,Kind="video",Position=1,SourceKey="permalink:synthetic",OriginalUrl=p.Permalink});await db.SaveChangesAsync();
+            await db.Put(ToolHealth.Key("yt-dlp"),System.Text.Json.JsonSerializer.Serialize(new ToolHealth.State("missing",null,null,Clock.Now),InstanceValidation.Json));}
+        using var http=new HttpClient(new NoNetwork());var turn=await new Maintenance(i.Paths,i.Factory,http).Videos(new(new(),new(),Preferences.Parse("")),["facebook"],1,default);Assert.Equal(new MediaTurn(1,0,1),turn);
+        await using var check=i.Factory.Open();var row=await check.Media.SingleAsync();Assert.Null(row.PrunedAt);Assert.Null(row.Path);Assert.Equal(0,row.DownloadAttempts);Assert.NotNull(row.AttemptedAt);Assert.Contains("yt-dlp",row.Error);
+    }
     sealed class NoNetwork:HttpMessageHandler{protected override Task<HttpResponseMessage>SendAsync(HttpRequestMessage r,CancellationToken ct)=>throw new InvalidOperationException("Recovery must not fetch an already published video");}
     sealed class FlakyHandler(byte[] bytes):HttpMessageHandler{public bool Fail=true;public int Calls;protected override Task<HttpResponseMessage>SendAsync(HttpRequestMessage r,CancellationToken ct){Interlocked.Increment(ref Calls);if(Fail)throw new HttpRequestException("proxy tunnel 502");return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new ByteArrayContent(bytes)});}}
     static InstanceSnapshot Instagram()=>new(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("instagram",new())},new(),Preferences.Parse(""));

@@ -20,7 +20,7 @@ data/
   taxonomy.json          categories and views (4.3)
   preferences.md         rules and the policy the model reads (4.4)
   feed.db                the SQLite database, with its -wal and -shm files (chapter 5)
-  profiles/<platform>/   the Chromium profile, plus cookies.txt exported for yt-dlp
+  profiles/<platform>/   the Chromium profile, plus cookies.txt exported after browser sessions (no other process reads it)
   video-context/         private bounded metadata/caption cache; never served as media
   media/<platform>/<post id>/NN.ext      post images and videos (chapter 7)
   media/avatars/<platform>/<author id>.ext
@@ -81,7 +81,7 @@ The complete key list. Every key is optional. Defaults are in the table and are 
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `enabled` | bool | false | Enrich eligible video judgments through yt-dlp metadata and one available caption track. No video/audio download or transcription. |
+| `enabled` | bool | false | Enrich eligible video judgments through yt-dlp metadata and one available caption track. No video/audio download or transcription. Applies to shared external links only (YouTube, Vimeo); native and shared Facebook/Instagram videos get no call and no cookies (7.8). With yt-dlp missing, Manage shows an attention row until the tool is installed or this key is false. |
 | `timeout_seconds` | int | 30 | Total extraction plus caption-fetch budget per source; 5–120 seconds. |
 | `caption_languages` | list of strings | `["en"]` | 1–10 language codes, in preference order (for example `["cs", "sk", "en"]`). Manual tracks are preferred to automatic tracks. Regional variants match their base language; no automatic translation is requested. |
 

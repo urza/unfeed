@@ -8,6 +8,22 @@ using Xunit;
 namespace Feed.Tests;
 public sealed class RecoveryPresentationTests
 {
+    [Fact] public async Task MissingToolRowsFollowTheFeaturesThatNeedThem()
+    {
+        await using var i = new TestInstance(); await i.Init();
+        await using var db = i.Factory.Open();
+        var config = new FeedConfig { Platforms = ImmutableDictionary<string, PlatformConfig>.Empty.Add("facebook", new() { Enabled = true }), Llm = new() { Enabled = true, Vision = true, BaseUrl = "http://model.test/v1" } };
+        Assert.DoesNotContain(await RecoveryQuery.Read(db, new(config, new(), Preferences.Parse(""))), x => x.Platform == "tools");
+        // Stored states, not a real probe: a developer machine may have both tools.
+        foreach (var tool in ToolHealth.Tools) await db.Put(ToolHealth.Key(tool), System.Text.Json.JsonSerializer.Serialize(new ToolHealth.State("missing", null, null, Clock.Now), InstanceValidation.Json));
+        var rows = (await RecoveryQuery.Read(db, new(config, new(), Preferences.Parse("")))).Where(x => x.Platform == "tools").ToArray();
+        Assert.Equal(2, rows.Length); Assert.All(rows, r => Assert.Equal(RecoveryDisposition.Informational, r.Disposition));
+        Assert.Equal("tools", RecoveryPresentation.Category(rows[0])); Assert.Equal("Tools", Management.PlatformName(rows[0].Platform));
+        var enabled = config with { VideoContext = new() { Enabled = true } };
+        var alert = Assert.Single(await RecoveryQuery.Read(db, new(enabled, new(), Preferences.Parse(""))), x => x.Item == "yt-dlp");
+        Assert.Equal(RecoveryDisposition.Attention, alert.Disposition); Assert.Contains("video_context.enabled", alert.Recovery);
+        Assert.StartsWith("tools: yt-dlp missing", await ToolHealth.Line(db));
+    }
     [Fact] public void SilentHomeCollectsGetTheirOwnTitleAndExplanation()
     {
         var issue = new RecoveryIssue("facebook", "home collects", "The last 3 home collects found no posts", 3, null, null, "Inspect the raw diagnostics") { RunId = 6 };

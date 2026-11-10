@@ -13,7 +13,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The fast suite runs in the same SDK image as the Dockerfile build stage, so no further action needs a pin.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: mcr.microsoft.com/dotnet/sdk:10.0.403
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Restore
+        run: dotnet restore Feed.slnx --locked-mode
+
+      - name: Fast test suite
+        run: dotnet test tests/Feed.Tests -nologo -v q --filter 'Category!=Browser'
+
   publish:
+    needs: test
     if: github.repository == 'urza/unfeed' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45

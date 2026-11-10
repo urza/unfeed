@@ -26,6 +26,10 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
         using var ownedVideoContext = videoContext is null ? new VideoContextProvider(paths) : null;
         var enrichment = videoContext ?? ownedVideoContext!;
         var counts = new WorkCounts();
+        // The scheduled run is the one place that checks the external tools, so a tool installed or removed on a
+        // direct Linux host shows after the next run. Manual rescore and summarize runs skip it: they run inside
+        // tests and from the CLI, where two extra spawns per invocation buy nothing.
+        if (scope.Kind == "process") { await using var db = factory.Open(); await ToolHealth.Probe(db, ct); }
         await using var reporting = new WorkReporter(counts, report);
         string[] platforms = scope.Platform == "all" ? Platforms.All.Where(instance.Config.Enabled).ToArray() : [scope.Platform];
         foreach (var platform in platforms) foreach (var task in new[] { "raw", "judge", "summary", "image", "video" }) counts.Stage(platform, task);
@@ -149,7 +153,7 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                             var maxTokens = turn.Task == "judge" ? scope.Kind == "process" ? JudgmentRetry.Budget(p, instance.Config.Llm)!.Value : instance.Config.Llm.MaxTokens : instance.Config.Llm.SummaryMaxTokens;
                             var hash = Prompts.Sha(JsonSerializer.Serialize(ModelClient.RequestBody(instance.Config.Llm, messages, maxTokens, turn.Task == "summary" ? instance.Config.Llm.SummaryEnableThinking : null)));
                             var prepared = new Prepared(p, rules, turn.Task, batch, messages, hash, inline, maxTokens,
-                                turn.Task == "judge" && instance.Config.VideoContext.Enabled ? VideoContextProvider.Source(p, files) : null);
+                                turn.Task == "judge" && instance.Config.VideoContext.Enabled ? VideoContextProvider.Source(p) : null);
                             if (inline) { Interlocked.Increment(ref counts.Unapplied); await results.Writer.WriteAsync(new(prepared, "", null, null, false), token); }
                             else { Interlocked.Increment(ref counts.Prepared); await inputs.Writer.WriteAsync(prepared, token); }
                         }

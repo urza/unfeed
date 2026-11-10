@@ -8,7 +8,7 @@ using Feed.Core.Domain;
 
 namespace Feed.Core.Infrastructure;
 
-public sealed record VideoSource(string Url, string Relation, string? CookiePlatform);
+public sealed record VideoSource(string Url, string Relation);
 public sealed record VideoChapter(double StartSeconds, string Title);
 public sealed record VideoCaptions(string Status, string? Language = null, bool Automatic = false, string? Text = null, bool Truncated = false, string? Error = null);
 public sealed record VideoContext(string Url, string Relation, string Status, string? Title = null, string? Description = null,
@@ -19,17 +19,16 @@ public interface IVideoContextProvider
 }
 public interface IVideoMetadataTool
 {
-    Task<string> Extract(VideoSource source, string? cookies, CancellationToken ct);
+    Task<string> Extract(VideoSource source, CancellationToken ct);
 }
 
 // yt-dlp is an extractor only here: never download media, execute local configuration, or open a browser profile.
 public sealed class YtDlpMetadataTool : IVideoMetadataTool
 {
-    public async Task<string> Extract(VideoSource source, string? cookies, CancellationToken ct)
+    public async Task<string> Extract(VideoSource source, CancellationToken ct)
     {
         var start = new ProcessStartInfo("yt-dlp") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var a in new[] { "--ignore-config", "--no-cache-dir", "--no-playlist", "--playlist-items", "1", "--skip-download", "--dump-single-json", "--no-progress", "--no-warnings", "--socket-timeout", "10", "--retries", "0", "--extractor-retries", "0" }) start.ArgumentList.Add(a);
-        if (cookies is not null) { start.ArgumentList.Add("--cookies"); start.ArgumentList.Add(cookies); }
         start.ArgumentList.Add("--"); start.ArgumentList.Add(source.Url);
         using var process = Process.Start(start) ?? throw new IOException("extractor could not start");
         using var stop = ct.Register(() => Kill(process));
@@ -76,24 +75,17 @@ public sealed class VideoContextProvider : IVideoContextProvider, IDisposable
     public void Dispose() { slots.Dispose(); cacheGate.Dispose(); if (ownsHttp) http.Dispose(); }
     static bool Host(Uri u, string host) => u.Host.Equals(host, StringComparison.OrdinalIgnoreCase) || u.Host.EndsWith("." + host, StringComparison.OrdinalIgnoreCase);
     static bool Web(string? url, out Uri uri) => Uri.TryCreate(url, UriKind.Absolute, out uri!) && uri.Scheme is "http" or "https" && uri.UserInfo.Length == 0 && uri.IsDefaultPort;
-    public static VideoSource? Source(Post p, IReadOnlyList<Media> media)
+    public static VideoSource? Source(Post p)
     {
-        // Shared destinations only: never scan arbitrary caption links or treat a thumbnail as proof of video.
-        if (Web(p.SharedUrl, out var shared))
-        {
-            var path = shared.AbsolutePath;
-            if (Host(shared, "youtu.be") && path.Trim('/').Length > 0
-                || (Host(shared, "youtube.com") || Host(shared, "youtube-nocookie.com")) && (path == "/watch" && Regex.IsMatch(shared.Query, @"(?:[?&])v=[\w-]+") || Regex.IsMatch(path, @"^/(shorts|embed|live)/[\w-]+"))
-                || Host(shared, "vimeo.com") && Regex.IsMatch(path, @"/(?:video/)?\d+(?:/|$)"))
-                return new(shared.AbsoluteUri, "shared", null);
-            if (Host(shared, "facebook.com") && (Regex.IsMatch(path, @"/(videos|reel|share/v|share/r)/[^/]+") || path.TrimEnd('/') == "/watch" && Regex.IsMatch(shared.Query, @"(?:[?&])v=\d+")))
-                return new(shared.AbsoluteUri, "shared", "facebook");
-            if (Host(shared, "instagram.com") && Regex.IsMatch(path, @"^/reels?/[\w-]+"))
-                return new(shared.AbsoluteUri, "shared", "instagram");
-        }
-        if (media.Any(m => m.IsCurrent && m.Kind == "video") && Web(p.Permalink, out var native) && Platforms.All.Contains(p.Platform) && Host(native, p.Platform + ".com"))
-            return new(native.AbsoluteUri, "post", p.Platform);
-        return null;
+        // Shared external destinations only: never scan arbitrary caption links or treat a thumbnail as proof of video.
+        // Facebook and Instagram videos, shared or native, are left out on purpose (plan 10): the extractor would need
+        // the owner's session cookies in a second client, and the caption it returns is already in the prompt.
+        if (!Web(p.SharedUrl, out var shared)) return null;
+        var path = shared.AbsolutePath;
+        return Host(shared, "youtu.be") && path.Trim('/').Length > 0
+            || (Host(shared, "youtube.com") || Host(shared, "youtube-nocookie.com")) && (path == "/watch" && Regex.IsMatch(shared.Query, @"(?:[?&])v=[\w-]+") || Regex.IsMatch(path, @"^/(shorts|embed|live)/[\w-]+"))
+            || Host(shared, "vimeo.com") && Regex.IsMatch(path, @"/(?:video/)?\d+(?:/|$)")
+            ? new(shared.AbsoluteUri, "shared") : null;
     }
     public async Task<VideoContext> Get(VideoSource source, VideoContextConfig config, CancellationToken ct)
     {
@@ -106,18 +98,11 @@ public sealed class VideoContextProvider : IVideoContextProvider, IDisposable
         {
             if (ReadCache(cachePath) is { } again) return again;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(config.TimeoutSeconds));
-            var token = timeout.Token; string? cookieCopy = null;
+            var token = timeout.Token;
             VideoContext result;
             try
             {
-                if (source.CookiePlatform is { } platform && Platforms.All.Contains(platform) && File.Exists(paths.Get("profiles", platform, "cookies.txt")))
-                {
-                    var tempRoot = paths.Get("video-context", "private"); Directory.CreateDirectory(tempRoot);
-                    if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(tempRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-                    cookieCopy = Path.Combine(tempRoot, Guid.NewGuid().ToString("N") + ".cookies");
-                    File.Copy(paths.Get("profiles", platform, "cookies.txt"), cookieCopy);
-                }
-                using var doc = JsonDocument.Parse(await tool.Extract(source, cookieCopy, token));
+                using var doc = JsonDocument.Parse(await tool.Extract(source, token));
                 var e = doc.RootElement;
                 if (e.ValueKind != JsonValueKind.Object || PayloadParser.Get(e, "_type") is "playlist" or "multi_video" || PayloadParser.At(e, "entries").ValueKind == JsonValueKind.Array)
                     throw new FormatException("not a single video");
@@ -149,7 +134,6 @@ public sealed class VideoContextProvider : IVideoContextProvider, IDisposable
             }
             catch (Exception ex) when (Recoverable(ex) && !ct.IsCancellationRequested)
             { result = new(source.Url, source.Relation, "unavailable", Captions: new("unavailable"), Error: Failure(ex)); }
-            finally { if (cookieCopy is not null) File.Delete(cookieCopy); }
             ct.ThrowIfCancellationRequested();
             // Cache failures briefly; rejudgment remains explicit after an otherwise successful verdict.
             var ttl = result.Status == "available" && result.Captions?.Status is not "unavailable" ? TimeSpan.FromDays(7) : TimeSpan.FromMinutes(30);
