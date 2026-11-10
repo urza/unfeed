@@ -82,7 +82,7 @@ Every work run records its own process identity before work. A live collect rema
 
 ## 12.5 Daily maintenance
 
-On the first tick of each UTC day, mark `maintenance:last`, then run raw retention, media retention and disk measurement. Maintenance never removes raws from a live capture/ingest, unparsed captures, or media currently being prepared or downloaded. File deletion coordinates with ingest/processing ownership; if busy, defer that portion and record the reason. It never takes a browser lock to wait for a model.
+On the first tick of each UTC day, mark `maintenance:last`, then run, in this order: the database backup (`VACUUM INTO backups/feed-<yyyyMMdd>.db`, `integrity_check`, rotation; no lock, because the copy reads one snapshot and the processing lock is often held by a child), raw retention, media retention with the disk measurement, raw row retention (`trim`), and compaction. Compaction holds the processing lock and every ingest lock: once, when the file still has `auto_vacuum` off and the day's backup succeeded, it runs `PRAGMA auto_vacuum = INCREMENTAL`, `VACUUM` and `ANALYZE`; afterwards `incremental_vacuum`; and always `wal_checkpoint(TRUNCATE)` and `optimize=0x10002`. Each step defers on its own when a lock is busy, so a busy prune does not cost the day's compaction; a failed backup is recorded in `backup:error`, shown by `status` and on the Manage storage panel, and tried again the next day. Maintenance never removes raws from a live capture/ingest, unparsed captures, or media currently being prepared or downloaded. File deletion coordinates with ingest/processing ownership; if busy, defer that portion and record the reason. It never takes a browser lock to wait for a model.
 
 ## 12.6 Requests from the page
 

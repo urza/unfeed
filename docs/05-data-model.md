@@ -6,8 +6,12 @@ Source map: [Entities.cs](../src/Feed.Core/Domain/Entities.cs) · [FeedDb.cs](..
 
 ## 5.1 Database basics
 
-- One SQLite file, `feed.db`, in the instance directory. EF Core with migrations. The schema is created and migrated at every process start.
-- WAL journal mode, set at every start.
+- One SQLite file, `feed.db`, in the instance directory. EF Core with migrations. The schema is created and migrated at every process start; EF's migration lock serializes parallel starts.
+- Before a migration, a process whose database already has applied migrations writes a compact copy of the live data to `backups/pre-<first pending migration>.db` (`VACUUM INTO`, checked with `integrity_check`, kept if it already exists). A fresh instance gets no copy. The last two `pre-*` copies are kept.
+- WAL journal mode, set at every start. `synchronous` stays at its default (FULL): the database is the only copy of verdicts and feedback once the raws are gone.
+- Free pages: the daily job converts the file once to incremental auto-vacuum (one `VACUUM` plus `ANALYZE`, only after the day's backup succeeded) and then runs `incremental_vacuum`, `wal_checkpoint(TRUNCATE)` and `optimize=0x10002` daily (chapter 12.5).
+- Backups: the daily job writes `backups/feed-<yyyyMMdd>.db` with `VACUUM INTO` and `integrity_check`, no lock, and keeps the last 7 daily copies and the last 4 Sunday copies. The copy is a plain SQLite file; restore by copying it to `feed.db` of a stopped instance (RUNBOOK). The live file is never a backup target.
+- Operational retention: `RawSnapshots` rows already marked deleted whose capture date is older than `raw_rows_retention_days` (180; 0 never) are deleted daily with their `RawDiagnostics` (chapter 7.7). Posts, authors, media rows, feedback, likes, runs, requests, visits, sweep targets, identity events and tombstones are never deleted by retention.
 - Every connection sets a busy timeout of 30 seconds. Connections are pooled.
 - **Current connection settings:** a 64 MB page cache, a 256 MB memory map, and temporary tables in memory. These are per-connection/resource choices, not correctness rules. Maintainers may tune them or use SQLite defaults with measured memory/latency evidence for the expected connection count and dataset. The live database must be on a filesystem that supports SQLite WAL shared memory and reliable local locking. A slow supported host mount is allowed; arbitrary network filesystems are not.
 - Application timestamps are UTC, truncated to whole seconds, stored as text. OS process start times are the exception: retain the OS precision required to distinguish pid reuse (12.4).
@@ -300,7 +304,8 @@ Small meta state.
 | `last_visit` | ISO timestamp of the last "mark all read" press |
 | `slot:<platform>:<mode>:<HH:mm>` | the local date `yyyy-MM-dd` on which the slot last fired |
 | `maintenance:last` | the UTC date of the last daily maintenance run |
-| `disk:summary`, `disk:at` | the last disk measurement line and its time |
+| `disk:summary`, `disk:at` | the last disk measurement line (media, videos, raw, backups, free) and its time |
+| `backup:last`, `backup:error` | the time of the last good daily backup; the time and text of the last failed one, cleared by the next good copy |
 | `sweep:<platform>:cycle` | active all-followed cycle id |
 | `process:not_before` | next allowed automatic processing launch after unexpected worker/startup failure; no success delay between batches |
 | `process:turn` | persisted next platform/model-task admission turn |

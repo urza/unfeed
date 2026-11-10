@@ -26,6 +26,7 @@ data/
   media/avatars/<platform>/<author id>.ext
   raw/<platform>/<run dir>/NNN.json|jsonl  raw captures and timeline screenshots (chapter 6)
   logs/feed-web.log, feed-cli.log          size-rotated logs (chapter 16)
+  backups/feed-<yyyyMMdd>.db, pre-<migration>.db   daily and pre-migration database copies (chapter 5.1)
   locks/<platform>.lock                    browser ownership (chapter 12)
   locks/ingest-<platform>.lock              ingest ownership
   locks/processing.lock                     instance-wide processing/model ownership
@@ -67,6 +68,7 @@ The complete key list. Every key is optional. Defaults are in the table and are 
 | `hidden_media_retention_days` | int | 7 | every file of a post hidden longer than this is deleted. 0 means never. |
 | `hidden_video_retention_days` | int | 1 | the video of a hidden post is deleted after this shorter grace. 0 means never. |
 | `video_retention_days` | int | 180 | videos of posts older than this, by post date, are deleted. 0 means never. |
+| `raw_rows_retention_days` | int | 180 | database rows of raw captures already deleted from disk, older than this by capture date, are deleted with their diagnostics. 0 means never. |
 | `max_video_mb` | int | 50 | a video above this size is not downloaded. 0 means no cap. |
 | `video_context` | object | | optional metadata and available captions before judgment, see below |
 | `ui` | object | | see below |

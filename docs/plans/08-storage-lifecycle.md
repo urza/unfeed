@@ -1,6 +1,6 @@
 # Plan 08: Storage lifecycle
 
-Status: reviewed 2026-11-10 (`.work/08-storage-lifecycle/plan-review.md`). The step-back verdict (CHANGE COURSE) and the owner-proxy decisions reduced the scope to the lifecycle: daily backup, backup before migration, one-time VACUUM with incremental auto-vacuum, retention for deleted raw rows, and two bounded reads. No `migrate` command, no `RareRank`, no `PostCategories`, no author cache, no `Media.Bytes`, no tombstone expiry, no `synchronous = NORMAL`, no paging. Ready to implement.
+Status: reviewed 2026-11-10 (`.work/08-storage-lifecycle/plan-review.md`). The step-back verdict (CHANGE COURSE) and the owner-proxy decisions reduced the scope to the lifecycle: daily backup, backup before migration, one-time VACUUM with incremental auto-vacuum, retention for deleted raw rows, and two bounded reads. No `migrate` command, no `RareRank`, no `PostCategories`, no author cache, no `Media.Bytes`, no tombstone expiry, no `synchronous = NORMAL`, no paging. Implemented 2026-11-10 on branch `08-storage-lifecycle`; see "Notes from implement".
 
 ## Outcome
 
@@ -89,3 +89,13 @@ The raw tables carry the volume: about 800 snapshot rows a day, with their diagn
 Image retention bounds for visible posts (review finding 7), the scheduler tick frequency, LogSink fsync behavior, the multi-process coordination design (review finding 7 of the architecture list). Off-host backup copies (the runbook tells the owner to copy `backups/`). The coverage read of all timeline visits: its logic needs the per-author history, and the table is small.
 
 Dropped at plan review, with the reason in `.work/08-storage-lifecycle/plan-review.md`: `PostCategories` (the covering index already answers the category test), `RareRank` (per-view rare settings, author merges and the "why" text all break a stored rank), the author cache (no measured cost), `Media.Bytes` with a weekly reconcile walk (the sums can never match the walk), `platforms:seen` in Kv (two index probes do it), the 5,000-post benchmark step, the `migrate` command and the pending-migration guard (fresh installs would refuse `init`; Docker owners would never get the VACUUM), the tombstone expiry (it would bring deleted posts back), `synchronous = NORMAL`, the retention config keys for the backup rotation, keyset paging (a product rule says no paging), and retention for runs, requests, visits and sweep targets (small tables, an ordering invariant with the raw prune).
+
+## Notes from implement
+
+- The config key is `raw_rows_retention_days`, top-level like the other retention keys (`Configuration.cs` uses snake_case of the property name). The Manage storage form and its save handler carry it like the others.
+- `Compact` opens no transaction of its own; `PRAGMA auto_vacuum = INCREMENTAL; VACUUM; ANALYZE;` runs as one command on one connection, which SQLite requires for the mode change to take effect in the VACUUM.
+- `PRAGMA auto_vacuum` is read through `pragma_auto_vacuum()` with `SqlQueryRaw<long>`, so the check needs no raw connection.
+- The pre-migration copy also rotates the `backups/` folder, so a CLI-only instance without a scheduler still keeps the folder bounded.
+- The daily job wraps every step in its own deferral, so a busy prune no longer skips the steps after it. The scheduler test `DailyMaintenanceBacksUpThenCompacts` runs the whole chain on an empty platform set.
+- Live copy (scratchpad, 2026-11-10): `Backup` wrote 108 MB in 0.5 s; the first `Compact` took the file from 412 MB to 108 MB with `freelist_count` 0 and 34 `sqlite_stat1` rows; the second took the incremental path. All integrity checks ok; posts, authors and raw rows counts unchanged. The copy also had a pending migration, so the pre-migration path ran there too (118 MB copy, integrity ok).
+- Spec: 5.1, 5.2 (Kv), 7.7, 12.5, 13.1 and 13.2, 16.9, RUNBOOK and 04 (key and folder layout) updated; spec.html rebuilt.

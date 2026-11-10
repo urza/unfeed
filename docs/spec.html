@@ -527,6 +527,7 @@ build.sh            publishes both executables into out/
   media/avatars/&lt;platform&gt;/&lt;author id&gt;.ext
   raw/&lt;platform&gt;/&lt;run dir&gt;/NNN.json|jsonl  raw captures and timeline screenshots (chapter 6)
   logs/feed-web.log, feed-cli.log          size-rotated logs (chapter 16)
+  backups/feed-&lt;yyyyMMdd&gt;.db, pre-&lt;migration&gt;.db   daily and pre-migration database copies (chapter 5.1)
   locks/&lt;platform&gt;.lock                    browser ownership (chapter 12)
   locks/ingest-&lt;platform&gt;.lock              ingest ownership
   locks/processing.lock                     instance-wide processing/model ownership
@@ -612,6 +613,12 @@ build.sh            publishes both executables into out/
 <td>int</td>
 <td>180</td>
 <td>videos of posts older than this, by post date, are deleted. 0 means never.</td>
+</tr>
+<tr>
+<td><code>raw_rows_retention_days</code></td>
+<td>int</td>
+<td>180</td>
+<td>database rows of raw captures already deleted from disk, older than this by capture date, are deleted with their diagnostics. 0 means never.</td>
 </tr>
 <tr>
 <td><code>max_video_mb</code></td>
@@ -1334,8 +1341,12 @@ Some prose the human wrote.
 <details class="chapter" id="05-data-model" open><summary>5. Data model</summary><div class="body"><div class="intro"><p>You are here: the database. Chapter 4 described the files the owner writes. This chapter describes the one file the system writes: <code>feed.db</code>. Every later chapter reads or writes these tables. Chapter 6 fills them from captures, chapters 8 and 9 change visibility and verdicts, chapter 10 reads them for the page.</p>
 <p>Source map: <a href="../src/Feed.Core/Domain/Entities.cs">Entities.cs</a> · <a href="../src/Feed.Core/Infrastructure/FeedDb.cs">FeedDb.cs</a> · <a href="../src/Feed.Core/Infrastructure/Migrations">Migrations</a>.</p></div>
 <details class="section" id="05-data-model-5-1-database-basics" open><summary>5.1 Database basics</summary><div class="body"><ul>
-<li>One SQLite file, <code>feed.db</code>, in the instance directory. EF Core with migrations. The schema is created and migrated at every process start.</li>
-<li>WAL journal mode, set at every start.</li>
+<li>One SQLite file, <code>feed.db</code>, in the instance directory. EF Core with migrations. The schema is created and migrated at every process start; EF's migration lock serializes parallel starts.</li>
+<li>Before a migration, a process whose database already has applied migrations writes a compact copy of the live data to <code>backups/pre-&lt;first pending migration&gt;.db</code> (<code>VACUUM INTO</code>, checked with <code>integrity_check</code>, kept if it already exists). A fresh instance gets no copy. The last two <code>pre-*</code> copies are kept.</li>
+<li>WAL journal mode, set at every start. <code>synchronous</code> stays at its default (FULL): the database is the only copy of verdicts and feedback once the raws are gone.</li>
+<li>Free pages: the daily job converts the file once to incremental auto-vacuum (one <code>VACUUM</code> plus <code>ANALYZE</code>, only after the day's backup succeeded) and then runs <code>incremental_vacuum</code>, <code>wal_checkpoint(TRUNCATE)</code> and <code>optimize=0x10002</code> daily (chapter 12.5).</li>
+<li>Backups: the daily job writes <code>backups/feed-&lt;yyyyMMdd&gt;.db</code> with <code>VACUUM INTO</code> and <code>integrity_check</code>, no lock, and keeps the last 7 daily copies and the last 4 Sunday copies. The copy is a plain SQLite file; restore by copying it to <code>feed.db</code> of a stopped instance (RUNBOOK). The live file is never a backup target.</li>
+<li>Operational retention: <code>RawSnapshots</code> rows already marked deleted whose capture date is older than <code>raw_rows_retention_days</code> (180; 0 never) are deleted daily with their <code>RawDiagnostics</code> (chapter 7.7). Posts, authors, media rows, feedback, likes, runs, requests, visits, sweep targets, identity events and tombstones are never deleted by retention.</li>
 <li>Every connection sets a busy timeout of 30 seconds. Connections are pooled.</li>
 <li><strong>Current connection settings:</strong> a 64 MB page cache, a 256 MB memory map, and temporary tables in memory. These are per-connection/resource choices, not correctness rules. Maintainers may tune them or use SQLite defaults with measured memory/latency evidence for the expected connection count and dataset. The live database must be on a filesystem that supports SQLite WAL shared memory and reliable local locking. A slow supported host mount is allowed; arbitrary network filesystems are not.</li>
 <li>Application timestamps are UTC, truncated to whole seconds, stored as text. OS process start times are the exception: retain the OS precision required to distinguish pid reuse (12.4).</li>
@@ -2332,7 +2343,11 @@ Some prose the human wrote.
 </tr>
 <tr>
 <td><code>disk:summary</code>, <code>disk:at</code></td>
-<td>the last disk measurement line and its time</td>
+<td>the last disk measurement line (media, videos, raw, backups, free) and its time</td>
+</tr>
+<tr>
+<td><code>backup:last</code>, <code>backup:error</code></td>
+<td>the time of the last good daily backup; the time and text of the last failed one, cleared by the next good copy</td>
 </tr>
 <tr>
 <td><code>sweep:&lt;platform&gt;:cycle</code></td>
@@ -3019,7 +3034,7 @@ Some prose the human wrote.
 </ul>
 <p>Shrinking limits vision-input cost. Actual latency depends on the endpoint and workload; chapter 9 defines the call.</p>
 <p><strong>Implementation note.</strong> The current processor uses FFmpeg. Its subprocess choice is not a compatibility requirement. An equivalent processor may meet the same size/format/aspect contract. The current byte limit, dimensions and configured image count remain the baseline model-input policy; changes affecting judgment are versioned in model configuration and exact input provenance. Keep prepared bytes transient or in a bounded private cache keyed by source-byte digest and all preprocessing settings/processor version. Reuse never serves a different revision or overwrites the original media. Memory-only versus disk caching is an implementation choice; private cached inputs are never published by a media route. Always hash the actual bytes sent, including originals used as fallback.</p></div></details>
-<details class="section" id="07-media-7-7-retention" open><summary>7.7 Retention</summary><div class="body"><p>The scheduler runs one maintenance job on the first tick of each UTC day (chapter 12), only while the scheduler is enabled. It marks the day first, so a failing job runs once a day, then runs raw retention, media retention and the disk measurement. The CLI runs the same code by hand with <code>raw prune</code> and <code>media prune</code>, both with <code>--dry-run</code>.</p>
+<details class="section" id="07-media-7-7-retention" open><summary>7.7 Retention</summary><div class="body"><p>The scheduler runs one maintenance job on the first tick of each UTC day (chapter 12), only while the scheduler is enabled. It marks the day first, so a failing job runs once a day, then runs the database backup, raw retention, media retention and the disk measurement, raw row retention, and compaction (12.5). The CLI runs the retention code by hand with <code>raw prune</code>, <code>media prune</code> and <code>trim</code>, all with <code>--dry-run</code>.</p>
 <p><strong>Raw retention.</strong> <code>raw_retention_days</code> (60; 0 never).</p>
 <ul>
 <li>Cutoff: now minus the days. A snapshot of a run that ended <code>capped</code> or <code>checkpoint</code> uses twice the days: those captures are the most likely to be re-run. <code>--before &lt;date&gt;</code> replaces both cutoffs.</li>
@@ -3035,6 +3050,8 @@ Some prose the human wrote.
 <li><code>video_retention_days</code> (180): videos of posts older than this by post date. Images, text and permalink stay, so the card still reads. A post without a date is exempt.</li>
 <li>Orphans: under <code>media/facebook</code> and <code>media/instagram</code> only, a folder whose name matches no post id of that platform and is older than one day is removed. Avatars are never scanned.</li>
 </ol>
+<p><strong>Raw row retention.</strong> <code>raw_rows_retention_days</code> (180; 0 never). A <code>RawSnapshots</code> row marked deleted whose capture date is older than this is deleted with its <code>RawDiagnostics</code> rows. Rows outlive their files by months so that status and recovery still explain a recent capture; the files went with raw retention before, so no run lookup depends on them. Nothing else is deleted: runs, requests, visits and sweep targets are small tables, and posts keep their <code>RawRef</code>.</p>
+<p>The disk measurement after the media prune writes <code>disk:summary</code>: media, videos, raw, backups and free space.</p>
 <p>A value of 0 turns a policy off.</p>
 <p><strong>At the door.</strong> Three rules stop the weight from arriving:</p>
 <ul>
@@ -3520,7 +3537,7 @@ Some prose the human wrote.
 </ul>
 <p>Acquire processing before ingest when both are needed. Never wait for either while holding a browser lock. An explicit command that cannot acquire its required lock reports deferred (75); it does not start a second worker. Scheduled work waits for a later tick.</p>
 <p>Every work run records its own process identity before work. A live collect remains live in its ingest phase after releasing the browser lock. A dead run is reaped after the two minute grace. OS start times retain enough precision to distinguish pid reuse. Failure to inspect a process is an observable uncertainty, not proof that it died.</p></div></details>
-<details class="section" id="12-scheduler-12-5-daily-maintenance" open><summary>12.5 Daily maintenance</summary><div class="body"><p>On the first tick of each UTC day, mark <code>maintenance:last</code>, then run raw retention, media retention and disk measurement. Maintenance never removes raws from a live capture/ingest, unparsed captures, or media currently being prepared or downloaded. File deletion coordinates with ingest/processing ownership; if busy, defer that portion and record the reason. It never takes a browser lock to wait for a model.</p></div></details>
+<details class="section" id="12-scheduler-12-5-daily-maintenance" open><summary>12.5 Daily maintenance</summary><div class="body"><p>On the first tick of each UTC day, mark <code>maintenance:last</code>, then run, in this order: the database backup (<code>VACUUM INTO backups/feed-&lt;yyyyMMdd&gt;.db</code>, <code>integrity_check</code>, rotation; no lock, because the copy reads one snapshot and the processing lock is often held by a child), raw retention, media retention with the disk measurement, raw row retention (<code>trim</code>), and compaction. Compaction holds the processing lock and every ingest lock: once, when the file still has <code>auto_vacuum</code> off and the day's backup succeeded, it runs <code>PRAGMA auto_vacuum = INCREMENTAL</code>, <code>VACUUM</code> and <code>ANALYZE</code>; afterwards <code>incremental_vacuum</code>; and always <code>wal_checkpoint(TRUNCATE)</code> and <code>optimize=0x10002</code>. Each step defers on its own when a lock is busy, so a busy prune does not cost the day's compaction; a failed backup is recorded in <code>backup:error</code>, shown by <code>status</code> and on the Manage storage panel, and tried again the next day. Maintenance never removes raws from a live capture/ingest, unparsed captures, or media currently being prepared or downloaded. File deletion coordinates with ingest/processing ownership; if busy, defer that portion and record the reason. It never takes a browser lock to wait for a model.</p></div></details>
 <details class="section" id="12-scheduler-12-6-requests-from-the-page" open><summary>12.6 Requests from the page</summary><div class="body"><ul>
 <li><code>POST /collect</code> inserts a home request for each enabled platform without an active collect request/run. A claimed request counts as active.</li>
 <li><code>POST /collect/{platform}/{mode}</code> inserts one under the same guard. Normalize mode aliases; unknown modes answer 404.</li>
@@ -3565,7 +3582,7 @@ Some prose the human wrote.
 <li>Every command that mutates states its full scope: which posts, in what order, how many, from which end. Defaults are conservative. Every command prints one summary line: what it selected, how many rows, what it did.</li>
 <li>Exit codes: 0 success; 1 a failed operation or an unknown command; 2 a configuration error (printed as <code>config error: ...</code>) or an argument error (printed as its own message, such as <code>--platform is required</code> or <code>--friends-limit must be at least 1</code>); 75 deferred before work or while waiting for re-login (the request remains pending); 130 cancelled by Ctrl-C. Any other exception prints <code>fatal: &lt;type&gt;: &lt;message&gt; | cause: &lt;root cause&gt;</code> and the trace, and exits 1. A silent abort is a bug.</li>
 <li>Scheduler children accept internal <code>--request-id N --claim-token T</code> arguments together. Before work they register that claim and their run identity, then acquire only the resources they need, as specified in 12.8. A stale or incomplete claim cannot authorize work. Normal human invocations need neither argument.</li>
-<li>At start, every command except <code>browser</code> creates the instance layout, loads the three instance files, opens the log file <code>logs/feed-cli.log</code>, and migrates the database.</li>
+<li>At start, every command except <code>browser</code> creates the instance layout, loads the three instance files, opens the log file <code>logs/feed-cli.log</code>, and migrates the database (with a <code>backups/pre-&lt;migration&gt;.db</code> copy first when a migration is pending, chapter 5.1).</li>
 <li>The default scopes: reparse the newest feed-capture directory; refilter posts captured since the newest collect started; rescore/summarize ready rows without a result for the current content revision on enabled platforms, newest first. Refiltering all history or rejudging policy/configuration-stale verdicts requires --all on the applicable command. Process has its own bounded due-work scope.</li>
 </ul></div></details>
 <details class="section" id="13-cli-13-2-commands" open><summary>13.2 Commands</summary><div class="body"><table>
@@ -3594,7 +3611,7 @@ Some prose the human wrote.
 </tr>
 <tr>
 <td><code>status</code></td>
-<td>one screen from live config and the database: first the abandoned-run reaper with a <code>WARNING run #N ... closed as error</code> line per repair; per platform with posts, enabled or paused, post and visible counts, author and friend counts, the re-login state, the last finished run; one <code>WARNING timeline:</code> line per troubled close-friend profile with the note and the screenshot path; one <code>WARNING identity:</code> line per alias conflict (a handle or slug that an observation with another platform id carried; the key stays with its first owner, both names and ids are printed); pending and claimed requests with child identity, waiting reason and recovery outcome, running runs by kind/phase, pending hearts; coverage by target and sweep cycle; processing counts, oldest pending age and next retry per stage; the model and endpoint or <code>disabled</code>, the unscored visible count, the category count, the policy line count; the disk line.</td>
+<td>one screen from live config and the database: first the abandoned-run reaper with a <code>WARNING run #N ... closed as error</code> line per repair; per platform with posts, enabled or paused, post and visible counts, author and friend counts, the re-login state, the last finished run; one <code>WARNING timeline:</code> line per troubled close-friend profile with the note and the screenshot path; one <code>WARNING identity:</code> line per alias conflict (a handle or slug that an observation with another platform id carried; the key stays with its first owner, both names and ids are printed); pending and claimed requests with child identity, waiting reason and recovery outcome, running runs by kind/phase, pending hearts; coverage by target and sweep cycle; processing counts, oldest pending age and next retry per stage; the model and endpoint or <code>disabled</code>, the unscored visible count, the category count, the policy line count; the disk line; the backup line (last good copy and copy count, or <code>backup: FAILED</code> with the error).</td>
 <td>0</td>
 </tr>
 <tr>
@@ -3661,6 +3678,11 @@ Some prose the human wrote.
 <td><code>media prune [--dry-run]</code></td>
 <td>media retention by hand, then the disk measurement (chapter 7).</td>
 <td>0; 2 without <code>prune</code></td>
+</tr>
+<tr>
+<td><code>trim [--dry-run]</code></td>
+<td>raw row retention by hand (chapter 7.7): deleted raw rows older than <code>raw_rows_retention_days</code> with their diagnostics. Prints the counts.</td>
+<td>0; 75 while processing holds the lock</td>
 </tr>
 <tr>
 <td><code>browser install</code> / <code>browser install-deps</code></td>
@@ -4298,7 +4320,7 @@ dotnet out/Feed.Web.dll
 <li>After a host rebuild: install the tools, build, start noVNC when a login is needed, start the web host. Browser sessions in the instance usually survive; a checkpoint means one login.</li>
 </ul></div></details>
 <details class="section" id="16-deployment-16-9-initial-setup-and-data-durability" open><summary>16.9 Initial setup and data durability</summary><div class="body"><p>Start with a new private instance and every platform paused. Synthetic examples illustrate schema only; choose policies with the owner. The owner may work with an agent to translate preferences into instance files (4.7). Run init and rules, resolve unknown or ambiguous people, then enable the chosen platforms and model. Personal taxonomy, policy, endpoints and schedules remain outside the source tree. Defaults are a starting point, not the owner's final policy.</p>
-<p>The live database stays on a filesystem supporting SQLite WAL. Back up it with SQLite's online backup API or a stopped/checkpointed database; copying feed.db alone while writers are active is not a complete backup. Include the three instance files and whichever raw/media history the owner wants to preserve. Protect profiles as credentials and restore them deliberately. Verify a restore into a separate paused instance before relying on a backup. Never run two scheduler hosts against one restored/live instance.</p>
+<p>The live database stays on a filesystem supporting SQLite WAL. The daily job writes a checked compact copy to <code>backups/feed-&lt;yyyyMMdd&gt;.db</code> (7 daily and 4 Sunday copies), and every migration is preceded by <code>backups/pre-&lt;migration&gt;.db</code>; the copies live next to the live file, so copy <code>backups/</code> off the host on a schedule of your own. A manual backup uses SQLite's online backup API or a stopped/checkpointed database; copying feed.db alone while writers are active is not a complete backup. Include the three instance files and whichever raw/media history the owner wants to preserve. Protect profiles as credentials and restore them deliberately. Verify a restore into a separate paused instance before relying on a backup. Never run two scheduler hosts against one restored/live instance.</p>
 <p>Bring-up validates a complete small path before a large import: capture and coverage, deterministic filtering, reading, independent processing, then restart/replay recovery. The application supports both platforms and the specified UI; this sequence limits how much state must be debugged at once.</p></div></details>
 <details class="section" id="16-deployment-16-10-docker-deployment" open><summary>16.10 Docker deployment</summary><div class="body"><p><a href="../Dockerfile">Dockerfile</a> builds both executables with the pinned SDK and packages Chromium, display/media tools and the ASP.NET runtime. <a href="../compose.yaml">compose.yaml</a> pulls <code>ghcr.io/urza/unfeed:latest</code> by default, mounts <code>./data:/data</code>, uses an init process, sets a restart policy, reserves shared memory and binds feed/noVNC ports to host loopback.</p>
 <pre><code class="language-bash">mkdir -p data

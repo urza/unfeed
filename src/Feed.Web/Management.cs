@@ -16,6 +16,7 @@ public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnaps
 {
     public string? RecoverySignature { get; init; }
     public int RecoveryPage { get; init; } = 1;
+    public string Backup { get; init; } = "";
     public RecoveryIssue[] RecoverySummary { get; init; } = [];
     public CoverageRow[] Coverage { get; init; } = [];
     public IdentityEventRow[] Events { get; init; } = [];
@@ -56,18 +57,23 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
             return new PersonRow(a, rules.CloseFriend, s.Preferences.Mutes.Any(e => Identity.Matches(e, a)), resolved.Shown(a), count?.Total ?? 0, count?.Hidden ?? 0, count?.Latest, visits.FirstOrDefault(v => v.AuthorId == a.Id), targets.FirstOrDefault(t => t.AuthorId == a.Id) is { } t ? $"Retry {t.Attempts}/{TimelineCoverage.MaxAttempts}; due {t.RetryAt:u}" : null);
         }).Where(p => filter switch { "friends" => p.Author.IsFriend, "removed" => !p.Author.IsFriend, "close" => p.Close, "muted" => p.Muted, "always" => p.Always, _ => true }).ToArray();
         page = section == "recovery" ? Math.Max(1, page) : Math.Clamp(page, 1, Math.Max(1, (visiblePeople.Length + 39) / 40));
-        var states = await db.PlatformStates.AsNoTracking().ToArrayAsync(ct); var runs = await db.Runs.AsNoTracking().OrderByDescending(r => r.Id).ToArrayAsync(ct);
+        var states = await db.PlatformStates.AsNoTracking().ToArrayAsync(ct);
+        // The overview needs the latest collect and friends run per platform and the running ones: five small
+        // queries on the Runs table instead of every run that ever happened.
+        var runs = await db.Runs.AsNoTracking().Where(r => r.Status == "running").OrderByDescending(r => r.Id).ToListAsync(ct);
+        foreach (var p in Platforms.All) foreach (var kind in new[] { "collect", "friends" }) if (await db.Runs.AsNoTracking().Where(r => r.Platform == p && r.Kind == kind).OrderByDescending(r => r.Id).FirstOrDefaultAsync(ct) is { } latest && runs.All(r => r.Id != latest.Id)) runs.Add(latest);
+        runs.Sort((a, b) => b.Id.CompareTo(a.Id));
         var requests = await db.RunRequests.AsNoTracking().Where(r => r.Status == "pending" || r.Status == "claimed").ToArrayAsync(ct);
         var postCounts = await db.Posts.GroupBy(p => p.Platform).Select(g => new { Platform = g.Key, Total = g.Count(), Hidden = g.Count(p => p.Hidden) }).ToArrayAsync(ct);
         var kv = await db.Kv.AsNoTracking().Where(k => k.Key.StartsWith("slot:")).ToDictionaryAsync(k => k.Key, k => k.Value, ct);
         var overviews = Platforms.All.Select(p => new PlatformOverview(p, authors.Count(a => a.Platform == p && a.IsFriend), postCounts.FirstOrDefault(c => c.Platform == p)?.Total ?? 0, postCounts.FirstOrDefault(c => c.Platform == p)?.Hidden ?? 0, states.FirstOrDefault(x => x.Platform == p), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "collect"), runs.FirstOrDefault(r => r.Platform == p && r.Kind == "friends"), runs.Where(r => r.Platform == p && r.Status == "running").ToArray(), requests.Where(r => r.Platform == p).ToArray(), NextRun(s.Config, p, Clock.Now, kv), Platforms.Modes.ToDictionary(m => m, m => NextRun(s.Config, p, Clock.Now, kv, m)))).ToArray();
         return new(docs, s, overviews, visiblePeople.Skip((page - 1) * 40).Take(40).ToArray(), visiblePeople.Length, page, query, platform, filter, section, await db.Get("disk:summary", ct) ?? "Not measured yet", await db.Get("disk:at", ct), await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct), await db.Posts.CountAsync(p => p.LlmError != null || p.SummaryError != null, ct)) {
-            RecoverySignature = signature, RecoveryPage = Math.Max(1, page),
+            RecoverySignature = signature, RecoveryPage = Math.Max(1, page), Backup = await Maintenance.BackupLine(paths, db, ct),
             Coverage = section == "coverage" ? await CoverageQuery.Read(db, s, ct: ct) : [],
             Events = section == "people" ? await IdentityStore.Events(db, 20, ct: ct) : [],
             RecoverySummary = await RecoveryQuery.Read(db, s, ct: ct, grouped: true, summaryOnly: true),
             Recovery = await RecoveryQuery.Read(db, s, ct: ct, grouped: signature is null, fingerprint: signature, page: page),
-            Collections = runs.Where(r => r.Kind == "collect").Take(10).Concat(runs.Where(r => r.Id == collectionId)).DistinctBy(r => r.Id).ToArray(),
+            Collections = (await db.Runs.AsNoTracking().Where(r => r.Kind == "collect").OrderByDescending(r => r.Id).Take(10).ToArrayAsync(ct)).Concat(await db.Runs.AsNoTracking().Where(r => r.Id == collectionId).ToArrayAsync(ct)).DistinctBy(r => r.Id).ToArray(),
             RecentCompletions = section == "recovery" ? (await db.Posts.AsNoTracking().Where(p => p.JudgedAt > Clock.Now.AddDays(-1) && p.VerdictContentRevision == p.ContentRevision && p.LlmError == null).OrderByDescending(p => p.JudgedAt).Take(10).Select(p => new ProcessingCompletion(p.Id, p.Platform, "Classification completed", p.JudgedAt!.Value)).ToArrayAsync(ct)) : [],
             CollectionVisits = section == "recovery" ? await db.TimelineVisits.AsNoTracking().Where(v => db.Runs.Where(r => r.Kind == "collect").OrderByDescending(r => r.Id).Take(10).Select(r => r.Id).Contains(v.RunId) || v.RunId == collectionId).ToArrayAsync(ct) : []
         };
@@ -205,7 +211,7 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
                 return d with { Taxonomy = ManagementFiles.Json(taxonomy) };
             }
             else if (action == "storage") {
-                foreach (var key in new[] { "raw_retention_days", "hidden_media_retention_days", "hidden_video_retention_days", "video_retention_days", "max_video_mb" }) ManagementFiles.Set(root, key, JsonValue.Create(Number(form, key)));
+                foreach (var key in new[] { "raw_retention_days", "hidden_media_retention_days", "hidden_video_retention_days", "video_retention_days", "raw_rows_retention_days", "max_video_mb" }) ManagementFiles.Set(root, key, JsonValue.Create(Number(form, key)));
             }
             else if (action == "processing") {
                 var llm = ManagementFiles.Object(root, "llm"); ManagementFiles.Set(llm, "enabled", JsonValue.Create(Checked(form, "enabled"))); ManagementFiles.Set(llm, "vision", JsonValue.Create(Checked(form, "vision")));

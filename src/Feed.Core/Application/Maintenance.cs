@@ -175,7 +175,103 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
     {
         long Size(string folder) => Directory.Exists(paths.Get(folder)) ? Directory.EnumerateFiles(paths.Get(folder), "*", SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length) : 0;
         await using var db = factory.Open(); var videoPaths = await db.Media.Where(m => m.Kind == "video" && m.Path != null).Select(m => m.Path!).ToListAsync(ct); var videos = videoPaths.Where(p => File.Exists(paths.Get(p))).Sum(p => new FileInfo(paths.Get(p)).Length);
-        var drive = new DriveInfo(paths.Root); await db.Put("disk:summary", $"media {Size("media") / 1e9:0.00} GB (videos {videos / 1e9:0.00} GB) · raw {Size("raw") / 1e9:0.00} GB · free {drive.AvailableFreeSpace / 1e9:0.00} GB", ct); await db.Put("disk:at", Clock.Now.ToString("O"), ct);
+        var drive = new DriveInfo(paths.Root); await db.Put("disk:summary", $"media {Size("media") / 1e9:0.00} GB (videos {videos / 1e9:0.00} GB) · raw {Size("raw") / 1e9:0.00} GB · backups {Size("backups") / 1e9:0.00} GB · free {drive.AvailableFreeSpace / 1e9:0.00} GB", ct); await db.Put("disk:at", Clock.Now.ToString("O"), ct);
+    }
+    // Rotation keeps a week of daily copies and a month of Sunday copies, so a corruption noticed late still has a
+    // good copy, and the last two pre-migration copies. Constants, not config: nobody asked for other numbers.
+    public const int DailyBackups = 7, SundayBackups = 4, PreMigrationBackups = 2;
+    // The daily backup takes no lock: VACUUM INTO reads one snapshot and never blocks a writer, and the processing
+    // lock is often held by a child when the daily job runs. A failure is recorded for status and Manage and the
+    // next day tries again; the Kv marker, not the file, is what Compact checks before its one-time VACUUM.
+    public async Task<string> Backup(CancellationToken ct)
+    {
+        var folder = paths.Get("backups"); var target = Path.Combine(folder, $"feed-{Clock.Now:yyyyMMdd}.db"); var watch = Stopwatch.StartNew();
+        await using var db = factory.Open();
+        try
+        {
+            await Snapshot(db, target, ct); Rotate(folder);
+            await db.Put("backup:last", Clock.Now.ToString("O"), ct); await db.Kv.Where(k => k.Key == "backup:error").ExecuteDeleteAsync(ct);
+            return $"backup: {Path.GetFileName(target)} ok, {new FileInfo(target).Length / 1e6:0} MB in {watch.Elapsed.TotalSeconds:0.0} s";
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            await db.Put("backup:error", $"{Clock.Now:O} {e.Message}", ct); return "backup failed: " + e.Message;
+        }
+    }
+    // Shared by the daily backup and the pre-migration copy. The copy is written under a temporary name and takes
+    // the target name only after integrity_check says ok, so a half-written or corrupt file never carries a backup
+    // name. An existing target is kept: the second process of a parallel start must not redo or replace it.
+    public static async Task Snapshot(FeedDb db, string target, CancellationToken ct)
+    {
+        // The live file is never a target. VACUUM INTO refuses an existing non-empty file anyway, but a check at the
+        // boundary beats a SQLite error text, and no caller may ever rely on that refusal.
+        if (Path.GetFullPath(target) == Path.GetFullPath(db.Paths.Database)) throw new IOException("backup target is the live database");
+        if (File.Exists(target)) return;
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!); var temp = target + "." + Environment.ProcessId + ".tmp";
+        try
+        {
+            await db.Database.ExecuteSqlAsync($"VACUUM INTO {temp}", ct);
+            await using (var copy = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={temp};Mode=ReadOnly;Pooling=False"))
+            {
+                await copy.OpenAsync(ct); using var check = copy.CreateCommand(); check.CommandText = "PRAGMA integrity_check";
+                if (await check.ExecuteScalarAsync(ct) is not "ok" and var result) throw new IOException("backup integrity check failed: " + result);
+            }
+            if (!File.Exists(target)) File.Move(temp, target);
+        }
+        finally { if (File.Exists(temp)) File.Delete(temp); }
+    }
+    public static void Rotate(string folder)
+    {
+        if (!Directory.Exists(folder)) return;
+        var daily = Directory.EnumerateFiles(folder, "feed-????????.db").Select(f => (File: f, Date: DateTime.TryParseExact(Path.GetFileNameWithoutExtension(f)[5..], "yyyyMMdd", null, System.Globalization.DateTimeStyles.None, out var d) ? d : (DateTime?)null)).Where(x => x.Date != null).OrderByDescending(x => x.Date).ToArray();
+        var keep = daily.Take(DailyBackups).Concat(daily.Where(x => x.Date!.Value.DayOfWeek == DayOfWeek.Sunday).Take(SundayBackups)).Select(x => x.File).ToHashSet();
+        foreach (var x in daily) if (!keep.Contains(x.File)) File.Delete(x.File);
+        // Migration names start with their timestamp, so the file name orders the pre-migration copies by age.
+        foreach (var file in Directory.EnumerateFiles(folder, "pre-*.db").OrderDescending().Skip(PreMigrationBackups)) File.Delete(file);
+    }
+    public static async Task<string> BackupLine(InstancePaths paths, FeedDb db, CancellationToken ct)
+    {
+        var copies = Directory.Exists(paths.Get("backups")) ? Directory.EnumerateFiles(paths.Get("backups"), "*.db").Count() : 0;
+        if (await db.Get("backup:error", ct) is { } error) return $"backup: FAILED {error}; {copies} copies in backups/";
+        return await db.Get("backup:last", ct) is { } last ? $"backup: last {last}; {copies} copies in backups/" : "backup: none yet";
+    }
+    // Deleted raw rows outlive their files by months so that status and recovery still explain a recent capture,
+    // then they go: at about 800 rows a day the table would otherwise grow for good. The files were deleted by the
+    // prune before, so no run lookup depends on these rows.
+    public async Task<string> Trim(FeedConfig c, bool dryRun, CancellationToken ct)
+    {
+        using var processing = ResourceLock.Try(paths, "processing") ?? throw new ResourceBusyException("processing busy; retention deferred");
+        if (c.RawRowsRetentionDays == 0) return "trim: raw rows retention is off";
+        await using var db = factory.Open(); var cutoff = Clock.Now.AddDays(-c.RawRowsRetentionDays);
+        var rows = db.RawSnapshots.Where(r => r.Deleted && r.CapturedAt <= cutoff); var diagnostics = db.RawDiagnostics.Where(d => rows.Any(r => r.Id == d.RawSnapshotId));
+        var rowCount = await rows.CountAsync(ct); var diagnosticCount = await diagnostics.CountAsync(ct);
+        if (!dryRun) { await diagnostics.ExecuteDeleteAsync(ct); await rows.ExecuteDeleteAsync(ct); }
+        return $"trim: {(dryRun ? "dry-run" : "done")} deleted raw rows={rowCount}, diagnostics={diagnosticCount}; rows deleted more than {c.RawRowsRetentionDays} days ago by capture date";
+    }
+    // Free pages are given back by one VACUUM that also turns on incremental auto-vacuum; after that a daily
+    // incremental_vacuum keeps the file small with no rewrite. The rewrite needs every writer parked behind the
+    // locks and a good backup from the same day, because it touches the whole live file.
+    public async Task<string> Compact(CancellationToken ct)
+    {
+        using var processing = ResourceLock.Try(paths, "processing") ?? throw new ResourceBusyException("processing busy; compaction deferred");
+        var ingest = Platforms.All.Select(p => ResourceLock.Try(paths, "ingest-" + p)).ToArray();
+        try
+        {
+            if (ingest.Any(l => l is null)) throw new ResourceBusyException("ingest busy; compaction deferred");
+            await using var db = factory.Open(); var watch = Stopwatch.StartNew(); var before = new FileInfo(paths.Database).Length;
+            var mode = await db.Database.SqlQueryRaw<long>("SELECT auto_vacuum AS Value FROM pragma_auto_vacuum()").FirstAsync(ct); string step;
+            if (mode == 2) { await db.Database.ExecuteSqlRawAsync("PRAGMA incremental_vacuum;", ct); step = "incremental vacuum"; }
+            else if (await db.Get("backup:last", ct) is { } last && DateTime.Parse(last, null, System.Globalization.DateTimeStyles.RoundtripKind).Date == Clock.Now.Date)
+            {
+                // ANALYZE once here: the daily optimize below only refreshes statistics that exist.
+                await db.Database.ExecuteSqlRawAsync("PRAGMA auto_vacuum = INCREMENTAL; VACUUM; ANALYZE;", ct); step = "converted to incremental auto-vacuum, analyzed";
+            }
+            else step = "conversion waits for a backup from today";
+            // 0x10002: look at every table, not only those this fresh connection queried, and run ANALYZE where needed.
+            await db.Database.ExecuteSqlRawAsync("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA optimize=0x10002;", ct);
+            return $"compact: {step}; {before / 1e6:0} MB -> {new FileInfo(paths.Database).Length / 1e6:0} MB in {watch.Elapsed.TotalSeconds:0.0} s";
+        }
+        finally { foreach (var l in ingest) l?.Dispose(); }
     }
     sealed class OversizeException() : IOException("video exceeds configured size cap");
 }

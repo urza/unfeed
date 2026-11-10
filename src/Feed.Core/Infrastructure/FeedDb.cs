@@ -42,7 +42,19 @@ public sealed class FeedDb(InstancePaths paths) : DbContext
         // No foreign keys: a merge event outlives the removed author, and the kept author can be removed by a later merge.
         b.Entity<IdentityEvent>().HasIndex(x => new { x.Platform, x.Key, x.ObservedId });
     }
-    public async Task Initialize(CancellationToken ct = default) { await Database.MigrateAsync(ct); await Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct); await Application.MediaKeys.Normalize(this, paths, ct); }
+    public InstancePaths Paths => paths;
+    public async Task Initialize(CancellationToken ct = default)
+    {
+        // A compact copy of the live data goes down before a schema change, so a migration that goes wrong has a restore
+        // point. A fresh instance has nothing to copy. The file carries the first pending migration's name, so the
+        // second process of a parallel start finds it and skips; EF's migration lock then serializes the migration itself.
+        var pending = (await Database.GetPendingMigrationsAsync(ct)).ToArray();
+        if (pending.Length > 0 && (await Database.GetAppliedMigrationsAsync(ct)).Any())
+        {
+            var backups = paths.Get("backups"); await Application.Maintenance.Snapshot(this, Path.Combine(backups, $"pre-{pending[0]}.db"), ct); Application.Maintenance.Rotate(backups);
+        }
+        await Database.MigrateAsync(ct); await Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct); await Application.MediaKeys.Normalize(this, paths, ct);
+    }
     public async Task Put(string key, string value, CancellationToken ct = default) => await Database.ExecuteSqlInterpolatedAsync($"INSERT INTO Kv (Key,Value) VALUES ({key},{value}) ON CONFLICT(Key) DO UPDATE SET Value=excluded.Value", ct);
     public async Task<string?> Get(string key, CancellationToken ct = default) => await Kv.Where(x => x.Key == key).Select(x => x.Value).FirstOrDefaultAsync(ct);
     sealed class Pragmas : DbConnectionInterceptor

@@ -32,7 +32,7 @@ Usage: dotnet out/Feed.Cli.dll COMMAND [--data DIR] [options]
   feedback [--limit N] [--uncurated]
   curate [--write LINE --cites N,N [--approved] [--author REF] | --dismiss N,N]
   storage clean-hidden [--dry-run]
-  raw prune [--before DATE] [--dry-run] | media prune [--dry-run]
+  raw prune [--before DATE] [--dry-run] | media prune [--dry-run] | trim [--dry-run]
   browser install|install-deps
   profile import --platform X --from DIR
 Defaults: reparse newest feed capture; refilter since latest collect; explicit model work newest first; process oldest due work, fair platform/task turns. --limit caps selected scope per stage, not successes. Every operation prints scope and result. Personal configuration lives only in the selected data directory.
@@ -92,6 +92,7 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
             }
             if (a.Command == "storage") { if (a.Positionals.FirstOrDefault() != "clean-hidden") throw new ArgumentException("storage clean-hidden is required"); Console.WriteLine(await new StorageCleanup(paths, factory).HiddenPosts(a.Flag("dry-run"), ct)); return 0; }
             if (a.Command is "raw" or "media") { if (a.Positionals.FirstOrDefault() != "prune") throw new ArgumentException("prune is required"); Console.WriteLine(await maintenance.Prune(s.Config, a.Command == "raw", a.Flag("dry-run"), a.Date("before"), ct)); return 0; }
+            if (a.Command == "trim") { Console.WriteLine(await maintenance.Trim(s.Config, a.Flag("dry-run"), ct)); return 0; }
             if (a.Command == "profile") { if (a.Positionals.FirstOrDefault() != "import" || a.Get("from") is not { } from || !Directory.Exists(from)) throw new ArgumentException("profile import --platform X --from <directory>"); var p = a.Platform(); if (Directory.EnumerateFileSystemEntries(from, "Singleton*").Any()) throw new ArgumentException("Close the source Chromium browser and remove only verified stale Singleton locks before importing"); using var held = ResourceLock.Try(paths, p) ?? throw new ResourceBusyException("platform busy"); BrowserSession.CopyProfile(from, paths.Get("profiles", p)); Console.WriteLine($"profile import {p}: copied profile with caches excluded"); return 0; }
             if (!ClosedValues.RunKinds.Contains(a.Command) && a.Command != "avatars") { Console.Error.WriteLine("unknown command: " + a.Command); return 1; }
             var platform = a.Command is "collect" or "process" ? a.Platform(true) : a.Command is "login" or "friends" or "reparse" or "avatars" ? a.Platform() : a.Platform(true, "all");

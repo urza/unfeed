@@ -27,6 +27,7 @@ public sealed record FeedConfig
     public int HiddenMediaRetentionDays { get; init; } = 7;
     public int HiddenVideoRetentionDays { get; init; } = 1;
     public int VideoRetentionDays { get; init; } = 180;
+    public int RawRowsRetentionDays { get; init; } = 180;
     public int MaxVideoMb { get; init; } = 50;
     public VideoContextConfig VideoContext { get; init; } = new();
     public UiConfig Ui { get; init; } = new();
@@ -156,7 +157,7 @@ public static class InstanceValidation
         static void Choice(string s, params string[] values) { if (!values.Contains(s)) throw new FormatException($"Unknown value: {s}"); }
         Require(c.Llm.Batch >= 1 && c.Llm.Parallel >= 1 && c.Ui.RenderCap >= 1 && c.Ui.CoverageStaleHours >= 1, "batch, parallel, render_cap and coverage_stale_hours must be at least 1");
         Require(c.Llm.Threshold is >= 0 and <= 10 && c.Llm.TimeoutSeconds >= 10 && c.Llm.MaxTokens > 0 && c.Llm.SummaryMaxTokens > 0 && c.Llm.VisionMaxImages >= 0, "Invalid model bounds");
-        Require(new[] { c.RawRetentionDays, c.HiddenMediaRetentionDays, c.HiddenVideoRetentionDays, c.VideoRetentionDays, c.MaxVideoMb, c.Scheduler.JitterMinutes, c.Scheduler.ManualCooldownMinutes, c.Scheduler.RunRequestTtlMinutes, c.Ui.Stack.MinPosts, c.Ui.Stack.WindowDays }.All(n => n >= 0), "Retention, size, cooldown and stack values cannot be negative");
+        Require(new[] { c.RawRetentionDays, c.HiddenMediaRetentionDays, c.HiddenVideoRetentionDays, c.VideoRetentionDays, c.RawRowsRetentionDays, c.MaxVideoMb, c.Scheduler.JitterMinutes, c.Scheduler.ManualCooldownMinutes, c.Scheduler.RunRequestTtlMinutes, c.Ui.Stack.MinPosts, c.Ui.Stack.WindowDays }.All(n => n >= 0), "Retention, size, cooldown and stack values cannot be negative");
         Require(c.Llm.TokenRetryDelayMinutes >= 1 && c.Llm.TokenRetryBudgets.All(n => n > 0) && c.Llm.TokenRetryBudgets.SequenceEqual(c.Llm.TokenRetryBudgets.Distinct().Order()), "Token retry budgets must be positive and strictly increasing; delay must be at least 1 minute");
         Require(c.Web.Port is >= 0 and <= 65535, "Invalid web port");
         Require(c.VideoContext.TimeoutSeconds is >= 5 and <= 120 && c.VideoContext.CaptionLanguages.Length is >= 1 and <= 10

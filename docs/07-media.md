@@ -62,7 +62,7 @@ Shrinking limits vision-input cost. Actual latency depends on the endpoint and w
 
 ## 7.7 Retention
 
-The scheduler runs one maintenance job on the first tick of each UTC day (chapter 12), only while the scheduler is enabled. It marks the day first, so a failing job runs once a day, then runs raw retention, media retention and the disk measurement. The CLI runs the same code by hand with `raw prune` and `media prune`, both with `--dry-run`.
+The scheduler runs one maintenance job on the first tick of each UTC day (chapter 12), only while the scheduler is enabled. It marks the day first, so a failing job runs once a day, then runs the database backup, raw retention, media retention and the disk measurement, raw row retention, and compaction (12.5). The CLI runs the retention code by hand with `raw prune`, `media prune` and `trim`, all with `--dry-run`.
 
 **Raw retention.** `raw_retention_days` (60; 0 never).
 
@@ -78,6 +78,10 @@ The scheduler runs one maintenance job on the first tick of each UTC day (chapte
 2. `hidden_video_retention_days` (1): the video of a hidden post after this shorter grace. A review of the hidden view needs the pictures, not the video. An unhide after the prune shows the card without its video.
 3. `video_retention_days` (180): videos of posts older than this by post date. Images, text and permalink stay, so the card still reads. A post without a date is exempt.
 4. Orphans: under `media/facebook` and `media/instagram` only, a folder whose name matches no post id of that platform and is older than one day is removed. Avatars are never scanned.
+
+**Raw row retention.** `raw_rows_retention_days` (180; 0 never). A `RawSnapshots` row marked deleted whose capture date is older than this is deleted with its `RawDiagnostics` rows. Rows outlive their files by months so that status and recovery still explain a recent capture; the files went with raw retention before, so no run lookup depends on them. Nothing else is deleted: runs, requests, visits and sweep targets are small tables, and posts keep their `RawRef`.
+
+The disk measurement after the media prune writes `disk:summary`: media, videos, raw, backups and free space.
 
 A value of 0 turns a policy off.
 

@@ -45,7 +45,9 @@ Refresh friends/following adds newly discovered people and does not remove missi
 
 ## Backup and restore
 
-Use SQLite's online backup API or `sqlite3 data/feed.db '.backup ...'`; copying only feed.db while WAL writers run loses committed data. Back up configuration, profiles as credentials, and desired raw/media history. Restore to a separate paused instance and verify health, rules, counts and files before relying on it. Never point two scheduler hosts at one database. The live database needs local WAL/shared-memory and locking semantics; arbitrary network filesystems are unsupported.
+The scheduler writes a checked compact copy of the database to `data/backups/feed-<yyyyMMdd>.db` once a day (7 daily and 4 Sunday copies are kept) and `data/backups/pre-<migration>.db` before a migration (last 2 kept). `status` and the Manage storage panel show the last good copy or `backup: FAILED` with the error. The copies are on the same disk as the live file: copy `data/backups/` off the host on your own schedule. A manual copy still works: SQLite's online backup API or `sqlite3 data/feed.db '.backup ...'`; copying only feed.db while WAL writers run loses committed data. Back up configuration, profiles as credentials, and desired raw/media history.
+
+To restore: stop the host and every CLI process, move `feed.db`, `feed.db-wal` and `feed.db-shm` aside, copy the chosen backup to `feed.db`, and start the host; it migrates the copy if the schema moved on. Restore to a separate paused instance first and verify health, rules, counts and files before relying on it. Never point two scheduler hosts at one database. The live database needs local WAL/shared-memory and locking semantics; arbitrary network filesystems are unsupported.
 
 ## Optional Docker
 

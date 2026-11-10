@@ -100,7 +100,10 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
         var utcDay = Clock.Now.ToString("yyyy-MM-dd"); if (await db.Get("maintenance:last", ct) != utcDay)
         {
             await db.Put("maintenance:last", utcDay, ct); using var http = new HttpClient(); var maintenance = new Maintenance(paths, factory, http);
-            try { log.LogInformation("{Result}", await maintenance.Prune(c, true, false, null, ct)); log.LogInformation("{Result}", await maintenance.Prune(c, false, false, null, ct)); } catch (ResourceBusyException e) { log.LogInformation("Maintenance deferred: {Reason}", e.Message); }
+            // Each step defers on its own, so a busy prune does not cost the day's compaction. The backup comes first
+            // and takes no lock; Compact converts the file only after the backup of the same day succeeded.
+            async Task Step(Func<CancellationToken, Task<string>> step) { try { log.LogInformation("{Result}", await step(ct)); } catch (ResourceBusyException e) { log.LogInformation("Maintenance deferred: {Reason}", e.Message); } }
+            await Step(maintenance.Backup); await Step(t => maintenance.Prune(c, true, false, null, t)); await Step(t => maintenance.Prune(c, false, false, null, t)); await Step(t => maintenance.Trim(c, false, t)); await Step(maintenance.Compact);
         }
     }
     async Task Dispatch(RunRequest request, string trigger, CancellationToken ct)
