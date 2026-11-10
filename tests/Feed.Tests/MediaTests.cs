@@ -71,16 +71,17 @@ public sealed class MediaTests
         const string urlWide="https://scontent-a.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_s1080x1080&oh=1",urlThumb="https://scontent-b.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_p526x296&oh=2",permalink="https://www.facebook.com/reel/102/";
         await using(var db=i.Factory.Open())
         {
-            var p=new Post{Platform="facebook",PlatformPostId="102",Text="Synthetic",ContentRevision=3,ContentHash="stale",Permalink=permalink,MediaManifestJson=System.Text.Json.JsonSerializer.Serialize(new[]{new MediaSource("image",urlWide,PayloadParser.SourceKey(urlWide)),new MediaSource("image",urlThumb,PayloadParser.SourceKey(urlThumb)),new MediaSource("video",permalink,PayloadParser.SourceKey(permalink))})};db.Add(p);await db.SaveChangesAsync();
-            db.Media.Add(new(){PostId=p.Id,Kind="image",Position=1,SourceKey="https://scontent-a.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_s1080x1080",OriginalUrl=urlWide,Path=wide,ContentHash="wide",Width=1080,Height=1080,IsCurrent=true});
-            db.Media.Add(new(){PostId=p.Id,Kind="image",Position=2,SourceKey="https://scontent-b.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_p526x296",OriginalUrl=urlThumb,Path=thumb,ContentHash="thumb",Width=526,Height=296,IsCurrent=true});
-            // Version 2 rekeyed permalink video rows from the permalink URL; version 3 restores the parser key.
-            db.Media.Add(new(){PostId=p.Id,Kind="video",Position=3,SourceKey=PayloadParser.SourceKey(permalink),OriginalUrl=permalink,IsCurrent=true});
+            var p=new Post{Platform="facebook",PlatformPostId="102",Text="Synthetic",ContentRevision=3,ContentHash="stale",Permalink=permalink,MediaManifestJson=System.Text.Json.JsonSerializer.Serialize(new[]{new MediaSource("image",urlWide,PayloadParser.SourceKey(urlWide)),new MediaSource("image",urlThumb,PayloadParser.SourceKey(urlThumb)),new MediaSource("video",permalink,"permalink:102")})};db.Add(p);await db.SaveChangesAsync();
+            // The thumbnail holds the lower slot and the newer id, as in most live two-rendition posts; the wide row must still win and take slot 1.
+            db.Media.Add(new(){PostId=p.Id,Kind="image",Position=1,SourceKey="https://scontent-b.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_p526x296",OriginalUrl=urlThumb,Path=thumb,ContentHash="thumb",Width=526,Height=296,IsCurrent=true});
+            db.Media.Add(new(){PostId=p.Id,Kind="image",Position=2,SourceKey="https://scontent-a.xx.fbcdn.net/v/t39/1_2_3_n.jpg?stp=dst-jpg_s1080x1080",OriginalUrl=urlWide,Path=wide,ContentHash="wide",Width=1080,Height=1080,IsCurrent=true});
+            // A permalink video row keeps the parser key; version 2 rekeyed it from the URL and orphaned it.
+            db.Media.Add(new(){PostId=p.Id,Kind="video",Position=3,SourceKey="permalink:102",OriginalUrl=permalink,IsCurrent=true});
             await db.SaveChangesAsync();await db.Kv.Where(k=>k.Key==MediaKeys.Marker).ExecuteDeleteAsync();
         }
         await i.Init();
         await using var check=i.Factory.Open();var post=await check.Posts.SingleAsync();var rows=await check.Media.OrderBy(m=>m.Position).ToListAsync();var manifest=System.Text.Json.JsonSerializer.Deserialize<MediaSource[]>(post.MediaManifestJson)!;
-        Assert.Equal(2,rows.Count);Assert.Equal(wide,rows[0].Path);Assert.Equal("file:1_2_3_n.jpg",rows[0].SourceKey);Assert.True(File.Exists(i.Paths.Get(wide)));Assert.False(File.Exists(i.Paths.Get(thumb)));
+        Assert.Equal(2,rows.Count);Assert.Equal(wide,rows[0].Path);Assert.Equal(1,rows[0].Position);Assert.Equal("file:1_2_3_n.jpg",rows[0].SourceKey);Assert.True(File.Exists(i.Paths.Get(wide)));Assert.False(File.Exists(i.Paths.Get(thumb)));
         Assert.Equal("permalink:102",rows[1].SourceKey);Assert.Equal(new[]{"file:1_2_3_n.jpg","permalink:102"},manifest.Select(m=>m.SourceKey));Assert.All(rows,r=>Assert.True(r.IsCurrent));
         Assert.Equal(3,post.ContentRevision);Assert.Equal(Ingest.ContentHash(post,manifest,rows),post.ContentHash);
     }
