@@ -7,24 +7,40 @@ namespace Feed.Core.Domain;
 public static class Identity
 {
     static readonly HashSet<string> NonProfiles = new("groups photo photos reel reels watch events event p tv explore stories accounts direct about help privacy policies terms login checkpoint home.php notifications messages marketplace gaming pages settings friends me profile share sharer.php story.php permalink.php plugins dialog search hashtag hashtags recover reg business ads developers saved live videos video ig_sso_users legal challenge download directory web static rsrc.php".Split(' '));
+    // The second path segment of a profile link that is still that profile: the stored friends raws carry
+    // "/<slug>/friends_mutual" links, and operators paste "/<handle>/reels/". Any other two-segment path yields no key.
+    static readonly HashSet<string> FacebookTabs = new("about photos videos reels friends friends_mutual friends_all posts tagged followers following saved map".Split(' '));
+    static readonly HashSet<string> InstagramTabs = new("reels tagged saved followers following".Split(' '));
     public static string? UrlRef(string platform, string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
         if (!Uri.TryCreate(value.Contains("://") ? value : "https://" + value, UriKind.Absolute, out var url) || url.Scheme is not ("https" or "http")) return null;
         var domains = platform == "facebook" ? new[] { "facebook.com", "fb.com" } : ["instagram.com"];
         if (!domains.Any(h => url.Host.Equals(h, StringComparison.OrdinalIgnoreCase) || url.Host.EndsWith("." + h, StringComparison.OrdinalIgnoreCase))) return null;
-        string key = Uri.UnescapeDataString(url.AbsolutePath).Trim('/').Split('/')[0].ToLowerInvariant().TrimStart('@');
-        if (platform == "facebook" && key == "profile.php") key = Regex.Match(url.Query, @"(?:\?|&)id=(\d+)").Groups[1].Value;
+        var segments = Uri.UnescapeDataString(url.AbsolutePath).Split('/', StringSplitOptions.RemoveEmptyEntries).Select(x => x.ToLowerInvariant()).ToArray();
+        if (segments.Length == 0) return null;
+        string? key = null;
+        if (platform == "facebook" && segments[0] == "profile.php") key = Regex.Match(url.Query, @"(?:\?|&)id=(\d+)").Groups[1].Value;
+        // "/people/<name>/<id>": the id is the profile id. Until 2026-11 the first segment became the key "fb:people" for every such author.
+        else if (platform == "facebook" && segments[0] == "people") key = segments.Length == 3 && IsPlatformId(segments[2]) ? segments[2] : null;
+        // Allowlist, not blocklist: a shape the parser has not seen yields no key instead of a key shared by everyone with that shape.
+        else if (segments.Length == 1 || segments.Length == 2 && (platform == "facebook" ? FacebookTabs : InstagramTabs).Contains(segments[1])) key = segments[0].TrimStart('@');
         if (string.IsNullOrWhiteSpace(key) || NonProfiles.Contains(key) || !Regex.IsMatch(key, @"^[a-z0-9_.-]+$")) return null;
         return Platforms.Prefix(platform) + ":" + key;
     }
     public static string[] Refs(string platform, string? id, string? url)
     {
         var refs = new List<string>();
-        if (!string.IsNullOrWhiteSpace(id) && id != "0" && !new[] { "unknown", "null", "none" }.Contains(id.ToLowerInvariant())) refs.Add(Platforms.Prefix(platform) + ":" + id.Trim().ToLowerInvariant().TrimStart('@'));
+        if (UsableId(id)) refs.Add(Platforms.Prefix(platform) + ":" + id!.Trim().ToLowerInvariant().TrimStart('@'));
         if (UrlRef(platform, url) is { } reference) refs.Add(reference);
         return refs.Distinct().Order().ToArray();
     }
+    static bool UsableId(string? id) => !string.IsNullOrWhiteSpace(id) && id != "0" && !new[] { "unknown", "null", "none" }.Contains(id.ToLowerInvariant());
+    // A platform id is all digits. The parsers fall back to a slug or a handle when a payload carries no id
+    // (PayloadParser PersonFrom and the Facebook actor fallback); such a value is an alias, never proof of one account.
+    public static bool IsPlatformId(string? id) => !string.IsNullOrEmpty(id) && id.All(char.IsAsciiDigit);
+    // The one ref that may join two rows: the key built from a numeric platform id. Every other ref in Refs is an alias.
+    public static string? IdRef(string platform, string? id) => UsableId(id) && IsPlatformId(id!.Trim()) ? Platforms.Prefix(platform) + ":" + id.Trim() : null;
     public static string Normalize(string value)
     {
         var b = new StringBuilder(); foreach (char c in value.Normalize(NormalizationForm.FormD)) if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark) b.Append(char.ToLowerInvariant(c));

@@ -127,6 +127,53 @@ namespace Feed.Core.Infrastructure.Migrations
                     b.ToTable("Feedback");
                 });
 
+            modelBuilder.Entity("Feed.Core.Domain.IdentityEvent", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Count")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("DetailJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("KeptAuthorId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("LastAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ObservedId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("RemovedAuthorId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Platform", "Key", "ObservedId");
+
+                    b.ToTable("IdentityEvents");
+                });
+
             modelBuilder.Entity("Feed.Core.Domain.Kv", b =>
                 {
                     b.Property<string>("Key")

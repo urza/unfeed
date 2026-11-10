@@ -166,7 +166,7 @@ mark{background:#ffe27a;color:#000;padding:0 2px;border-radius:3px}
 <li><strong>Explicit operation scope.</strong> Every mutating command states its full scope: which posts, in what order, how many, from which end. Defaults are conservative. Every command prints one summary line with what it selected and what it did.</li>
 <li><strong>One scheduler owns work dispatch.</strong> A web action never starts a browser or a collect run. It writes a request row. The scheduler claims the row and starts a child process. Background-image refresh is an independent hosted background task and never starts browser or model work.</li>
 <li><strong>Single visibility authority.</strong> Three columns on the post row decide visibility: hidden, hidden-by, hidden-reason. Feed queries never re-apply filter logic. Hide ownership changes only through the documented ingest/refilter, fresh-verdict and owner-unhide paths.</li>
-<li><strong>Identity resolved at insert.</strong> Shared identity rules decide the author identity when the observation lands. Keys are namespaced per platform. There is no identity sync pass after insert. All ingest paths use the same semantics; this does not prescribe a class count.</li>
+<li><strong>Identity resolved at insert.</strong> Shared identity rules decide the author identity when the observation lands. Keys are namespaced per platform. There is no identity sync pass after insert. All ingest paths use the same semantics; this does not prescribe a class count. Two rows merge only through a shared platform id: a handle or slug alone never joins two rows that both have one, and every merge and alias conflict is logged.</li>
 <li><strong>Pending work is independent of collection.</strong> One processing worker feeds successive bounded selections through a rolling model pool, without draining at batch boundaries. It rotates fairly across enabled platforms and model tasks, and runs without another collect and during browser re-login waits. Failures remain eligible for a later invocation after a retry delay. Rejudging an existing result for a changed policy or model remains an explicit command. An explicit limit bounds selected scope; batch size does not cap an automatic invocation.</li>
 <li><strong>Raw before parse.</strong> Every intercepted response is written to disk before any parser reads it. A broken parser is fixed and replayed. A lost capture is gone forever.</li>
 <li><strong>The feed render never writes.</strong> A page render reads database projections and one validated instance-configuration snapshot. Application writes in the web host belong to action routes and the documented background tasks. Browser and model work happens in command-line processes. Background-image downloads run off the request path (14.6); page and image GET routes only read local assets and never fetch Bing.</li>
@@ -1247,7 +1247,7 @@ build.sh            publishes both executables into out/
 </tr>
 </tbody>
 </table>
-<p>A ref is <code>fb:&lt;handle or id&gt;</code> or <code>ig:&lt;handle&gt;</code>. Always-show entries resolve against known authors, including the current observation; which gates they bypass comes from <code>filters.always_show_bypasses</code>. A mute name is matched against the display name of the post's author, friend or not, and a mute ref is compared with the author's keys. An entry with a ref prefix of another platform is skipped on this platform. Unmatched and multiply matched entries appear in the rules report so the owner can pin exact refs.</p>
+<p>A ref is <code>fb:&lt;handle or id&gt;</code> or <code>ig:&lt;handle or id&gt;</code>. A handle or slug ref is an alias: it names the person who owned that handle first. When the platform gives the handle to someone else, the <code>status</code> report and Manage People show the conflict, and the id ref (shown in the person's details) is the exact form. Always-show entries resolve against known authors, including the current observation; which gates they bypass comes from <code>filters.always_show_bypasses</code>. A mute name is matched against the display name of the post's author, friend or not, and a mute ref is compared with the author's keys. An entry with a ref prefix of another platform is skipped on this platform. Unmatched and multiply matched entries appear in the rules report so the owner can pin exact refs.</p>
 <p>Example:</p>
 <pre><code class="language-markdown"># My feed preferences
 
@@ -1430,6 +1430,70 @@ Some prose the human wrote.
 </tbody>
 </table>
 <p>Index: (AuthorId). Only the identity resolver writes this table.</p>
+<h3>IdentityEvents</h3>
+<p>The identity log, append-only. Only the identity resolver writes it. The <code>status</code> report and Manage People read it.</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Id</td>
+<td>integer, key</td>
+<td></td>
+</tr>
+<tr>
+<td>Platform</td>
+<td>text</td>
+<td></td>
+</tr>
+<tr>
+<td>Kind</td>
+<td>text</td>
+<td><code>merge</code> or <code>alias_conflict</code></td>
+</tr>
+<tr>
+<td>Key</td>
+<td>text</td>
+<td>the key or keys (space separated) through which the removed row matched; for a conflict, the alias that stays with its owner</td>
+</tr>
+<tr>
+<td>ObservedId</td>
+<td>text, null</td>
+<td>the observation's platform id</td>
+</tr>
+<tr>
+<td>KeptAuthorId</td>
+<td>integer</td>
+<td>the row that was kept, or that keeps the alias; no foreign key, so the event outlives a later merge</td>
+</tr>
+<tr>
+<td>RemovedAuthorId</td>
+<td>integer, null</td>
+<td>the merged row, deleted; null for a conflict</td>
+</tr>
+<tr>
+<td>DetailJson</td>
+<td>text</td>
+<td>a merge: the removed row's name, id, URL, friend flag, avatar, first-seen, keys and moved post ids, enough for a repair by hand; a conflict: the observed name and URL and the observation's author id</td>
+</tr>
+<tr>
+<td>At, LastAt</td>
+<td>datetime</td>
+<td>first and last occurrence</td>
+</tr>
+<tr>
+<td>Count</td>
+<td>integer</td>
+<td>occurrences; a conflict row is one per (Platform, Key, ObservedId)</td>
+</tr>
+</tbody>
+</table>
+<p>Index: (Platform, Key, ObservedId).</p>
 <h3>Posts</h3>
 <table>
 <thead>
@@ -2451,18 +2515,19 @@ Some prose the human wrote.
 <details class="section" id="05-data-model-5-6-identity" open><summary>5.6 Identity</summary><div class="body"><p>Author identity is resolved during ingest through shared rules and persisted evidence. A pure resolver plus a store is the reference decomposition; all entry points preserve the same resolution and merge semantics. There is no separate identity sync pass later.</p>
 <p><strong>Refs.</strong> A ref is <code>&lt;prefix&gt;:&lt;key&gt;</code>, lowercased.</p>
 <ul>
-<li>From a URL. Facebook hosts are <code>facebook.com</code>, <code>fb.com</code> and their subdomains. <code>profile.php?id=N</code> gives <code>fb:N</code>. A numeric first path segment gives <code>fb:N</code>. Any other first segment gives <code>fb:&lt;slug&gt;</code>, unless the segment is a known non-profile word (<code>groups</code>, <code>photo</code>, <code>reel</code>, <code>watch</code>, <code>events</code>, and about forty more). Instagram gives <code>ig:&lt;handle&gt;</code> with a leading <code>@</code> removed, unless the first segment is a non-profile word (<code>p</code>, <code>reel</code>, <code>explore</code>, <code>stories</code>, <code>accounts</code>, and others). A scheme-less URL is retried with <code>https://</code>.</li>
+<li>From a URL, by an allowlist of shapes. Facebook hosts are <code>facebook.com</code>, <code>fb.com</code> and their subdomains. <code>profile.php?id=N</code> gives <code>fb:N</code>. <code>/people/&lt;name&gt;/&lt;N&gt;</code> gives <code>fb:N</code>. A single path segment gives <code>fb:&lt;segment&gt;</code> (a numeric segment gives <code>fb:N</code>), unless the segment is a known non-profile word (<code>groups</code>, <code>photo</code>, <code>reel</code>, <code>watch</code>, <code>events</code>, and about forty more). A two-segment path gives the first segment only when the second is a known profile tab (<code>about</code>, <code>photos</code>, <code>videos</code>, <code>reels</code>, <code>friends</code>, <code>friends_mutual</code>, <code>friends_all</code>, <code>posts</code>, <code>tagged</code>, <code>followers</code>, <code>following</code>, <code>saved</code>, <code>map</code>). Instagram gives <code>ig:&lt;handle&gt;</code> with a leading <code>@</code> removed for a single segment, or a handle followed by <code>reels</code>, <code>tagged</code>, <code>saved</code>, <code>followers</code> or <code>following</code>, unless the first segment is a non-profile word (<code>p</code>, <code>reel</code>, <code>explore</code>, <code>stories</code>, <code>accounts</code>, and others). Every other shape gives no ref: an unknown shape must not produce a key that every URL of that shape shares. A scheme-less URL is retried with <code>https://</code>.</li>
 <li>From a platform author id: <code>&lt;prefix&gt;:&lt;id&gt;</code>.</li>
 <li>One observation yields every ref it can prove: the id ref and the URL ref.</li>
+<li>Kinds. The ref built from an all-digit platform id is the observation's <strong>id ref</strong>. Every other ref is an <strong>alias</strong>: a URL ref, and a parser fallback that put a slug or a handle where the id goes. The kind belongs to the observation, not to the key string; <code>fb:123</code> from <code>profile.php?id=123</code> is an alias ref, and the same string from the actor id is the id ref. An Authors row carries id evidence when its <code>PlatformAuthorId</code> is all digits.</li>
 </ul>
 <p><strong>The resolver.</strong> Given a platform, an author id, a URL, a display name, and optional flags:</p>
 <p>If neither a valid author id nor a canonical profile URL yields a ref, return no author: store the post with AuthorId null and its observed name/URL. Do not create an Authors row, match by display name, or group unrelated observations under a placeholder. Such a post has no author-derived friend, close-friend, bypass or feedback status; configured tag exceptions can still apply. A later observation with proven refs may resolve it through normal ingest and content revision rules.</p>
 <ol>
-<li>Look up AuthorKeys on that platform for any of the observation's refs.</li>
-<li>When several authors match, they are one person. Keep the best row (friend flag first, then avatar present, then post count, then lowest id) and merge the others into it: re-point posts, feedback author refs, coverage visits, person collection requests and sweep targets; fill null fields; OR the friend flag; take earliest first-seen; move keys; delete merged rows; rebuild RefsJson. Duplicate targets within a sweep coalesce at the earliest position; a terminal visit keeps that target completed. Retain visit history and recompute the cycle's target total.</li>
-<li>Otherwise match on exact (Platform, PlatformAuthorId), only when the observation has a valid author id. Never match null ids to each other.</li>
+<li>Look up AuthorKeys on that platform for any of the observation's refs, and the row with the same (Platform, PlatformAuthorId) when the observation has an id ref.</li>
+<li>The rows that are one account with the observation: the owner of the id ref, the row with that <code>PlatformAuthorId</code>, and the owners of its alias refs that carry no id evidence of their own. A row with a different all-digit <code>PlatformAuthorId</code> that owns an alias is never one of them: a slug or a reclaimed handle must not join two people. Without an id ref, the alias owner is the author.</li>
+<li>When several rows are one account, keep the best row (id evidence first, then friend flag, then avatar present, then post count, then lowest id) and merge the others into it: re-point posts, feedback author refs, coverage visits, person collection requests and sweep targets; fill null fields; OR the friend flag; take earliest first-seen; move keys; delete merged rows; rebuild RefsJson. Duplicate targets within a sweep coalesce at the earliest position; a terminal visit keeps that target completed. Retain visit history and recompute the cycle's target total. Write one <code>merge</code> IdentityEvents row per removed row.</li>
 <li>Otherwise insert.</li>
-<li>On update, a known value is never overwritten by a missing one. <code>IsFriend</code> is only ever set to true here. <code>LastSeenAt</code> moves forward. New refs are added unless the key exists anywhere. RefsJson is rewritten sorted.</li>
+<li>On update, a known value is never overwritten by a missing one, and an all-digit id fills a null or non-numeric <code>PlatformAuthorId</code>. <code>IsFriend</code> is only ever set to true here. <code>LastSeenAt</code> moves forward. New refs are added unless the key exists anywhere. An alias ref that another id-bearing row owns stays with that row, and an <code>alias_conflict</code> IdentityEvents row records it, one per platform, key and observed id, with a count and a last-seen time. RefsJson is rewritten sorted.</li>
 </ol>
 <p><strong>The friend list for matching.</strong> Every friend row is exposed with its handle, its display name, its URL, and every key ever recorded for it as aliases. This is what lets a close-friend entry keep matching after the platform renames the handle. A friend whose URL yields no ref, even after the Instagram fallback, is left out and can match no entry.</p>
 <p><strong>The unfriend prune.</strong> Runs only after a live friends import with positive completion evidence as defined in 6.11, and at least one person. A no-new stop, a successful run status, and a nonempty result do not prove completeness. For every current friend on the platform, take every ref it is known by: all its keys plus the refs from its id and URL. When none of them appears in the proven-complete capture, clear <code>IsFriend</code>. An empty or unproven capture prunes nothing. Rows are never deleted. The prune touches one platform.</p>
@@ -2777,7 +2842,7 @@ Some prose the human wrote.
 <ul>
 <li>Platform context: retain the story's own <code>comet_sections.context_layout.story.comet_sections.title.story.title.text</code> in <code>StoryTitle</code>, including photo-update context. Never borrow a shared/attached story's title or insert this platform-generated text into the author caption.</li>
 <li>Text: <code>message</code>, else the message under the comet content sections, else a flat <code>text</code>. An object yields its <code>.text</code>.</li>
-<li>Author: the first of <code>actors[]</code>. Name from <code>name</code>. URL from <code>wwwURL</code> or <code>url</code>, made absolute. Id from <code>id</code>, <code>idString</code> or <code>__dr</code>, else the numeric id from the URL, else the URL slug.</li>
+<li>Author: the first of <code>actors[]</code>. Name from <code>name</code>. URL from <code>wwwURL</code> or <code>url</code>, made absolute. Id from <code>id</code>, <code>idString</code> or <code>__dr</code>, else the numeric id from the URL (<code>profile.php?id=N</code>, <code>/people/&lt;name&gt;/&lt;N&gt;</code> or <code>/N</code>), else the URL slug. Only an all-digit id is id evidence for identity (5.6); a slug is an alias.</li>
 <li>Like ref: <code>feedback.id</code> or <code>feedback.targetID</code>. If absent, use the feedback under <code>comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer</code> only when that UFI story’s <code>post_id</code> matches the collected post. Shared-story and comment feedback are not fallback candidates.</li>
 <li>Posted at: <code>creation_time</code>.</li>
 <li>Permalink: <code>wwwURL</code>, <code>permalink</code>, <code>permalink_url</code> or <code>url</code>. A relative URL is prefixed with <code>https://www.facebook.com</code>. <code>http</code> becomes <code>https</code>. Anything else is dropped.</li>
@@ -3529,7 +3594,7 @@ Some prose the human wrote.
 </tr>
 <tr>
 <td><code>status</code></td>
-<td>one screen from live config and the database: first the abandoned-run reaper with a <code>WARNING run #N ... closed as error</code> line per repair; per platform with posts, enabled or paused, post and visible counts, author and friend counts, the re-login state, the last finished run; one <code>WARNING timeline:</code> line per troubled close-friend profile with the note and the screenshot path; pending and claimed requests with child identity, waiting reason and recovery outcome, running runs by kind/phase, pending hearts; coverage by target and sweep cycle; processing counts, oldest pending age and next retry per stage; the model and endpoint or <code>disabled</code>, the unscored visible count, the category count, the policy line count; the disk line.</td>
+<td>one screen from live config and the database: first the abandoned-run reaper with a <code>WARNING run #N ... closed as error</code> line per repair; per platform with posts, enabled or paused, post and visible counts, author and friend counts, the re-login state, the last finished run; one <code>WARNING timeline:</code> line per troubled close-friend profile with the note and the screenshot path; one <code>WARNING identity:</code> line per alias conflict (a handle or slug that an observation with another platform id carried; the key stays with its first owner, both names and ids are printed); pending and claimed requests with child identity, waiting reason and recovery outcome, running runs by kind/phase, pending hearts; coverage by target and sweep cycle; processing counts, oldest pending age and next retry per stage; the model and endpoint or <code>disabled</code>, the unscored visible count, the category count, the policy line count; the disk line.</td>
 <td>0</td>
 </tr>
 <tr>
@@ -4069,7 +4134,7 @@ login facebook: ok
 <p>Collection/import times, running-work start times, People activity dates and planned next runs include relative labels such as “33 minutes ago” or “in 5 hours” beside their exact timestamps. These labels are calculated on page load; refresh status to update them.</p>
 <ul>
 <li>Overview has one platform card per platform: last-known login health, local people/post counts, last collection/import, queued/running actions and next planned collection. Queued work shows the kind, mode, status and the scheduler's note. A collect that waits for the manual cooldown shows the remaining minutes and the local start time, with a <code>Start now (skip the cooldown)</code> button (<code>POST /manage/platform/{platform}/now</code>) that sets <code>SkipCooldown</code> on that request. Expose all collection modes, Refresh friends/following, platform enablement, opt-in like-back permission and Start login. Explain add-only import and manual noVNC login. Global pause/resume states that existing work may finish and that the buttons on the page still start work while paused.</li>
-<li>People is searchable and paginated. Show avatar/name linked to the internal person page, local relationship, Close friend, Muted and Always show buttons with accessible pressed states. Expanded activity includes post/visibility counts, latest post, last encounter/check, retry information and exact identity refs. Remove from feed list is inside a descriptive disclosure, explaining retained posts and possible re-addition. Never describe local removal as platform unfriending.</li>
+<li>People is searchable and paginated. Show avatar/name linked to the internal person page, local relationship, Close friend, Muted and Always show buttons with accessible pressed states. Expanded activity includes post/visibility counts, latest post, last encounter/check, retry information and exact identity refs. Below the list, only when any exist, the last 20 identity events: a merge (a record without a platform id joined into the record that has it) or an alias conflict (a handle or slug that already belongs to another person), with the time, the key, the kept person linked, the other name from the event snapshot and the count. No undo. Remove from feed list is inside a descriptive disclosure, explaining retained posts and possible re-addition. Never describe local removal as platform unfriending.</li>
 <li>Schedule opens with the scheduling state as a banner with one Pause or Resume button, a short statement of the three combined rules, and a disclosure that explains how a slot fires. Then one native form per platform and mode. Each form starts with a plain-language line of its rule (cadence, weekdays, times) and that mode's planned next run, then edits comma-separated 24-hour times, a repeat-every-N-days cadence with its starting date, and weekday pills. Empty times disable a mode; an empty starting date means today. Show the timezone and explain delay constraints.</li>
 <li>Rules exposes blocked phrases, written model policy, learned rules, mute/show lists, audience/type gates and configurable always-show bypasses. Categories/views edit existing definitions with labels, prose, checkboxes and person references; initial/new structures remain file edits. Explain effects on stored versus future judgments.</li>
 <li>Processing exposes the processing-health summary, a due-processing action, model name and non-secret capacity/language controls. The Recovery tab keeps detailed retry evidence. Storage exposes last measured usage and retention controls, explaining deletion effects before saving.</li>
@@ -4273,7 +4338,7 @@ docker compose up -d --pull never
 <p><strong>Small contract edges.</strong> An empty taxonomy generates a prompt requesting categories=[] and still produces a score. A timeline screenshot is served only from its published diagnostic media copy, and raw retention removes the copy; post-media retention leaves it alone.</p>
 <p><strong>Configuration.</strong> An unattended scheduler observes valid file edits on its next tick, including re-enabling scheduling; invalid edits retain the last good complete set and concurrent requests see one consistent snapshot. A missing config yields defaults with every platform paused. The example loads with comments. The home zone resolves an IANA id and falls back. An unknown key is a load error. The taxonomy validates slugs, the single default, the reserved <code>all</code>, and every view shape, and rejects a union of unions. The preferences parser reads the five machine sections, hashes the policy, reads and appends learned lines with citations, and throws on a malformed bullet.</p>
 <p><strong>Domain.</strong> Canonical author refs for every URL form and the rejects. Key refs from an id and a URL. The people matcher: accents, every query word must hit, an exact handle first, never a guess. Image dimension/type results for PNG, GIF, JPEG, WebP, malformed and unknown bytes, regardless of the chosen inspector. The summary-need rule and the link domain extraction. The mode aliases. The hidden-owner set is closed.</p>
-<p><strong>Identity and storage.</strong> Two captures without proven author refs retain distinct observed names and null AuthorId, never share author privileges or feedback, and can later resolve through a proven ref. Different URL-only authors do not merge through null platform ids. ClearHidden sets Hidden false, clears the three nullable fields and advances VisibilityRevision in both tracked and bulk paths. Concurrent heart presses create at most one pending Likes row. A two-key observation merges twins and keeps the friend flag. Only a proven-complete capture prunes, and the prune compares refs. The full deterministic result commits with a new post. Reparsing the fixture twice produces one copy of every post. A content change advances the revision and invalidates the old summary for display without losing its provenance. The 64 px glyph guard deletes a tiny download. A video waits for the verdict; a file already in its slot is registered; an offline import defers nothing. Two unrendered visits flag a profile. An abandoned running row is closed after the grace period, and a live recorded process protects it after its browser lock has been released, including standalone commands.</p>
+<p><strong>Identity and storage.</strong> Two captures without proven author refs retain distinct observed names and null AuthorId, never share author privileges or feedback, and can later resolve through a proven ref. Different URL-only authors do not merge through null platform ids. ClearHidden sets Hidden false, clears the three nullable fields and advances VisibilityRevision in both tracked and bulk paths. Concurrent heart presses create at most one pending Likes row. A two-key observation merges twins and keeps the friend flag. An alias owned by another id-bearing row never merges and logs one conflict per observed id; the alias alone still names its first owner. An id-less owner adopts the id, or merges into the id owner with a merge event that names the removed row and its posts. <code>/people/&lt;name&gt;/&lt;id&gt;</code> yields the id; an unknown URL shape yields no key; a profile tab path keeps the slug. Preference matching compares the full key tail, never a suffix. Only a proven-complete capture prunes, and the prune compares refs. The full deterministic result commits with a new post. Reparsing the fixture twice produces one copy of every post. A content change advances the revision and invalidates the old summary for display without losing its provenance. The 64 px glyph guard deletes a tiny download. A video waits for the verdict; a file already in its slot is registered; an offline import defers nothing. Two unrendered visits flag a profile. An abandoned running row is closed after the grace period, and a live recorded process protects it after its browser lock has been released, including standalone commands.</p>
 <p><strong>Visibility and instance policy.</strong> Two synthetic instances with opposite reel policies produce different visibility from the same parsed flags. Test each blocked type, empty blocked-types, restricted/unrestricted audience, none/with/any tag exception, default and explicit bypass sets, and mute precedence. An author view alone never overrides a hide. Refilter applies changed gates and may replace an old model hide with a deterministic exclusion. Reserved thumbs/other hides stay protected. Policy-only stale model hides remain until an explicit passing rescore; content-stale model hides queue processing without prematurely releasing the post. Known author aliases survive handle changes.</p>
 <p><strong>Ordering.</strong> Explicit scoring/summary commands select newest first. Automatic processing selects successive bounded oldest capture-or-attempt batches within each platform/task, moves failures behind other due work, and rotates platforms and model tasks fairly across scheduler restart without draining the rolling pool. The feed remains date descending with null last and obeys the configured render cap, with no hidden row clamp. Category clauses require current-content verdicts; author clauses, including inside a union, admit visible unjudged posts.</p>
 <p><strong>Interrupted ingest.</strong> Under the default restricted audience, a collect that captures an ordinary stranger's post and then checkpoints/errors never exposes it in live or Unsorted mode, regardless of model availability. Under an unrestricted audience the same post may legitimately pass: the invariant is atomic application of the configured rules. Concurrent readers see no row or the committed deterministic result. Inject an evaluator failure: the insert rolls back and the snapshot remains unparsed. Kill after commit: replay does not duplicate it. Default shields still respect type and mute gates; explicit type bypasses behave as configured. Offline/no-model replay never bypasses the chosen deterministic rules.</p>

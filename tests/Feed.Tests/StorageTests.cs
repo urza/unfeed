@@ -83,4 +83,30 @@ public sealed class StorageTests
         await IdentityStore.Resolve(db,"facebook",new("123","Fixture merged","https://facebook.com/fixture"),false,default);
         await db.Entry(p).ReloadAsync();Assert.Equal(a!.Id,p.AuthorId);Assert.Equal(2,p.ContentRevision);Assert.False(p.Judged);Assert.Equal(a.Id,(await db.Feedback.AsNoTracking().SingleAsync()).AuthorId);Assert.Equal(a.Id,(await db.TimelineVisits.AsNoTracking().SingleAsync()).AuthorId);Assert.Equal(a.Id,(await db.RunRequests.AsNoTracking().SingleAsync()).PersonAuthorId);Assert.NotEmpty(p.ContentHash);
     }
+    [Fact] public async Task AliasOwnedByAnotherIdNeverMergesAndLogsOnce()
+    {
+        await using var i = new TestInstance(); await i.Init(); await using var db = i.Factory.Open();
+        var a = await IdentityStore.Resolve(db, "instagram", new("1", "First Owner", "https://instagram.com/shared/"), true, default);
+        var b = await IdentityStore.Resolve(db, "instagram", new("2", "Second Owner", "https://instagram.com/shared/"), false, default);
+        Assert.NotEqual(a!.Id, b!.Id); Assert.Equal(["ig:2"], Identity.Keys(b)); Assert.Equal(2, Identity.Keys(a).Length); Assert.Equal(2, await db.Authors.CountAsync());
+        await IdentityStore.Resolve(db, "instagram", new("2", "Second Owner", "https://instagram.com/shared/"), false, default);
+        var e = await db.IdentityEvents.SingleAsync(); Assert.Equal("alias_conflict", e.Kind); Assert.Equal("ig:shared", e.Key); Assert.Equal("2", e.ObservedId); Assert.Equal(a.Id, e.KeptAuthorId); Assert.Equal(2, e.Count);
+        var row = Assert.Single(await IdentityStore.Events(db, 20)); Assert.Equal("First Owner", row.Kept?.DisplayName); Assert.Equal("Second Owner", row.OtherName);
+        var c = await IdentityStore.Resolve(db, "instagram", new(null, "Someone", "https://instagram.com/shared/"), false, default); Assert.Equal(a.Id, c!.Id); Assert.Single(await db.IdentityEvents.ToListAsync());
+    }
+    [Fact] public async Task IdlessOwnerAdoptsTheIdOrMergesIntoTheIdOwner()
+    {
+        await using var i = new TestInstance(); await i.Init(); await using var db = i.Factory.Open();
+        var x = await IdentityStore.Resolve(db, "facebook", new(null, "Fixture X", "https://facebook.com/fixture.x"), false, default); Assert.Null(x!.PlatformAuthorId);
+        var y = await IdentityStore.Resolve(db, "facebook", new("5", "Fixture X", "https://facebook.com/fixture.x"), false, default);
+        Assert.Equal(x.Id, y!.Id); Assert.Equal("5", y.PlatformAuthorId); Assert.Equal(["fb:5", "fb:fixture.x"], Identity.Keys(y)); Assert.Empty(await db.IdentityEvents.ToListAsync());
+        var m = await IdentityStore.Resolve(db, "facebook", new("fixture.m", "Fixture M", "https://facebook.com/fixture.m"), false, default); Assert.Equal("fixture.m", m!.PlatformAuthorId);
+        db.Add(new Post { Platform = "facebook", PlatformPostId = "m1", AuthorId = m.Id, CategoriesJson = "[]", VerdictContentRevision = 1, IngestReadyAt = Clock.Now }); await db.SaveChangesAsync();
+        var n = await IdentityStore.Resolve(db, "facebook", new("7", "Fixture N", null), true, default);
+        var k = await IdentityStore.Resolve(db, "facebook", new("7", "Fixture N", "https://facebook.com/fixture.m"), false, default);
+        Assert.Equal(n!.Id, k!.Id); Assert.Equal("7", k.PlatformAuthorId); Assert.Equal(["fb:7", "fb:fixture.m"], Identity.Keys(k)); Assert.Equal(2, await db.Authors.CountAsync());
+        var e = await db.IdentityEvents.SingleAsync(); Assert.Equal("merge", e.Kind); Assert.Equal("fb:fixture.m", e.Key); Assert.Equal(n.Id, e.KeptAuthorId); Assert.Equal(m.Id, e.RemovedAuthorId);
+        Assert.Contains("\"Name\":\"Fixture M\"", e.DetailJson); Assert.Contains("\"PostIds\":[", e.DetailJson); Assert.Equal(n.Id, (await db.Posts.AsNoTracking().SingleAsync()).AuthorId);
+        var row = Assert.Single(await IdentityStore.Events(db, 20)); Assert.Equal("Fixture N", row.Kept?.DisplayName); Assert.Equal("Fixture M", row.OtherName);
+    }
 }

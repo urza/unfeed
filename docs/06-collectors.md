@@ -153,7 +153,7 @@ A raw that the parser rejects is `blocked`, not failed: the run keeps the status
 
 - Platform context: retain the story's own `comet_sections.context_layout.story.comet_sections.title.story.title.text` in `StoryTitle`, including photo-update context. Never borrow a shared/attached story's title or insert this platform-generated text into the author caption.
 - Text: `message`, else the message under the comet content sections, else a flat `text`. An object yields its `.text`.
-- Author: the first of `actors[]`. Name from `name`. URL from `wwwURL` or `url`, made absolute. Id from `id`, `idString` or `__dr`, else the numeric id from the URL, else the URL slug.
+- Author: the first of `actors[]`. Name from `name`. URL from `wwwURL` or `url`, made absolute. Id from `id`, `idString` or `__dr`, else the numeric id from the URL (`profile.php?id=N`, `/people/<name>/<N>` or `/N`), else the URL slug. Only an all-digit id is id evidence for identity (5.6); a slug is an alias.
 - Like ref: `feedback.id` or `feedback.targetID`. If absent, use the feedback under `comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer` only when that UFI story’s `post_id` matches the collected post. Shared-story and comment feedback are not fallback candidates.
 - Posted at: `creation_time`.
 - Permalink: `wwwURL`, `permalink`, `permalink_url` or `url`. A relative URL is prefixed with `https://www.facebook.com`. `http` becomes `https`. Anything else is dropped.

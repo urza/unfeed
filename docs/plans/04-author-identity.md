@@ -1,6 +1,6 @@
 # Plan 04: Author identity with allowlisted URL shapes, id-only merges and a merge log
 
-Status: reviewed 2026-11-10 (`.work/04-author-identity/plan-review.md`). Scope reduced: no key kind column, no unmerge. Ready to implement.
+Status: implemented 2026-11-10 on branch `04-author-identity` (`.work/04-author-identity/`). Scope reduced at the plan review: no key kind column, no unmerge.
 
 ## Outcome
 
@@ -91,3 +91,12 @@ Every author has a numeric id. Slugs are aliases, never the only evidence. No au
 ## Out of scope
 
 Friends import completeness, person pages, whitelist semantics. A stored key kind column (the kind is computed per observation). `identity unmerge` and a Manage undo link (plan review 2026-11-10: merges now only adopt id-less rows, so an undo has no realistic use; the log holds the facts for a repair by hand).
+
+## Notes from implement
+
+- `Identity.Refs` keeps returning `string[]` (its three callers intersect and contain strings). The kind lives in one new function, `Identity.IdRef(platform, id)`: the id ref when the id is all digits, else null. `Resolve` treats every other ref as an alias. `Identity.IsPlatformId` is the one digit rule, used by `Resolve` for the row's own id evidence too.
+- The merge candidates also include the row with the observation's `(Platform, PlatformAuthorId)` even when it owns no key, so the id fill can never collide with the unique index.
+- The merge event's `Key` holds the key or keys through which the removed row matched (space separated); the removed row's own name and keys are in `DetailJson` under `Name` and `Keys`. A conflict's `DetailJson` holds `Name`, `Url` and `AuthorId` (the observation's author).
+- `IdentityStore.Events(db, take, kind)` is the one read for `status` and Manage People; it resolves the kept row's current name and the other side's name from the snapshot.
+- The `status` line prints up to 50 conflicts, newest first.
+- Measured 2026-11-10 on copies of the instance (config, database, the stored `friends-*` raws): `friends --offline --all-dirs` with the main build and with the branch build imported 207 Facebook and 624 Instagram people each; authors (1,193 and 1,169), friends and keys (2,280 and 2,340) are equal in both copies. The branch run wrote zero identity events.

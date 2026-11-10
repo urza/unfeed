@@ -8,6 +8,15 @@ public sealed class Author
     public DateTime FirstSeenAt { get; set; } = Clock.Now; public DateTime LastSeenAt { get; set; } = Clock.Now;
 }
 public sealed class AuthorKey { public string Key { get; set; } = ""; public string Platform { get; set; } = ""; public long AuthorId { get; set; } }
+// The identity log. Kind "merge": RemovedAuthorId joined KeptAuthorId through Key; DetailJson snapshots the removed row,
+// its keys and the moved post ids for a repair by hand. Kind "alias_conflict": Key stays with KeptAuthorId although an
+// observation with ObservedId (another platform id) carried it; one row per (Platform, Key, ObservedId), Count and LastAt grow.
+public sealed class IdentityEvent
+{
+    public long Id { get; set; } public string Platform { get; set; } = ""; public string Kind { get; set; } = ""; public string Key { get; set; } = ""; public string? ObservedId { get; set; }
+    public long KeptAuthorId { get; set; } public long? RemovedAuthorId { get; set; } public string DetailJson { get; set; } = "{}";
+    public DateTime At { get; set; } = Clock.Now; public DateTime LastAt { get; set; } = Clock.Now; public int Count { get; set; } = 1;
+}
 public sealed class Post
 {
     public long Id { get; set; } public string Platform { get; set; } = ""; public string PlatformPostId { get; set; } = ""; public long? AuthorId { get; set; }

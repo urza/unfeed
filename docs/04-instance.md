@@ -286,7 +286,7 @@ A Markdown document. Its structure is part of this specification. Its content is
 | `plain-english policy` (or `plain english policy`) | `- <sentence>`, taken verbatim | the scoring prompt (chapter 9) |
 | `learned from thumbs` | `- <date>: <sentence>. (thumbs #a, #b)`, appended by the curation command | the scoring prompt (chapter 9) |
 
-A ref is `fb:<handle or id>` or `ig:<handle>`. Always-show entries resolve against known authors, including the current observation; which gates they bypass comes from `filters.always_show_bypasses`. A mute name is matched against the display name of the post's author, friend or not, and a mute ref is compared with the author's keys. An entry with a ref prefix of another platform is skipped on this platform. Unmatched and multiply matched entries appear in the rules report so the owner can pin exact refs.
+A ref is `fb:<handle or id>` or `ig:<handle or id>`. A handle or slug ref is an alias: it names the person who owned that handle first. When the platform gives the handle to someone else, the `status` report and Manage People show the conflict, and the id ref (shown in the person's details) is the exact form. Always-show entries resolve against known authors, including the current observation; which gates they bypass comes from `filters.always_show_bypasses`. A mute name is matched against the display name of the post's author, friend or not, and a mute ref is compared with the author's keys. An entry with a ref prefix of another platform is skipped on this platform. Unmatched and multiply matched entries appear in the rules report so the owner can pin exact refs.
 
 Example:
 

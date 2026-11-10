@@ -66,6 +66,10 @@ else if(Model.Section == "people") {
  @if(Model.People.Length == 0){<p>No people match this search.</p>}
  <nav class="manage-pagination" aria-label="People pages">@if(Model.Page > 1){<a href="@PeoplePage(Model.Page - 1)">← Previous</a>}@if(Model.Page < Pages){<a href="@PeoplePage(Model.Page + 1)">Next →</a>}</nav>
  <details><summary>How these controls work</summary><p>Mute hides posts and overrides Always show. Always show bypasses only the filters selected in Rules; it does not grant a category or membership in a view. Close-friend additions affect future collection and classification. Existing excluded categories require explicit rescoring. Removing a close friend immediately removes restricted categories from stored verdicts.</p><p>Edits reapply deterministic filters to stored posts. Processing or imports may need to finish before you can save.</p></details>
+ @if(Model.Events.Length > 0){<h2>Identity events</h2><p>A merge joins a record without a platform id into the record that has it. An alias conflict is a handle or slug that already belongs to another person; a muted, always-show or close-friend entry by that handle keeps pointing at the first owner, so use the id reference shown in that person's details instead.</p>
+ <div class="manage-table-scroll"><table class="people-table"><thead><tr><th>When</th><th>Event</th><th>Key</th><th>Kept person</th><th>Other person</th><th>Seen</th></tr></thead><tbody>
+ @foreach(var e in Model.Events){<tr><td data-label="When">@e.Event.LastAt.ToString("u")</td><td data-label="Event">@(e.Event.Kind == "merge" ? "Merge" : "Alias conflict")</td><td data-label="Key">@e.Event.Key</td><td data-label="Kept person">@if(e.Kept is not null){<a href="@($"/people/{e.Kept.Id}")">@(e.Kept.DisplayName ?? "Unknown person")</a>}else{<span>Removed person</span>}</td><td data-label="Other person">@(e.OtherName ?? "Unknown person")@if(e.Event.ObservedId is not null){<small> (id @e.Event.ObservedId)</small>}</td><td data-label="Seen">@e.Event.Count</td></tr>}
+ </tbody></table></div>}
  </section>
 }
 else if(Model.Section == "schedule") {

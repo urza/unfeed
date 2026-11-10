@@ -47,6 +47,25 @@ The alias table. It is the authority for "are these two keys one person".
 
 Index: (AuthorId). Only the identity resolver writes this table.
 
+### IdentityEvents
+
+The identity log, append-only. Only the identity resolver writes it. The `status` report and Manage People read it.
+
+| Column | Type | Meaning |
+|---|---|---|
+| Id | integer, key | |
+| Platform | text | |
+| Kind | text | `merge` or `alias_conflict` |
+| Key | text | the key or keys (space separated) through which the removed row matched; for a conflict, the alias that stays with its owner |
+| ObservedId | text, null | the observation's platform id |
+| KeptAuthorId | integer | the row that was kept, or that keeps the alias; no foreign key, so the event outlives a later merge |
+| RemovedAuthorId | integer, null | the merged row, deleted; null for a conflict |
+| DetailJson | text | a merge: the removed row's name, id, URL, friend flag, avatar, first-seen, keys and moved post ids, enough for a repair by hand; a conflict: the observed name and URL and the observation's author id |
+| At, LastAt | datetime | first and last occurrence |
+| Count | integer | occurrences; a conflict row is one per (Platform, Key, ObservedId) |
+
+Index: (Platform, Key, ObservedId).
+
 ### Posts
 
 | Column | Type | Meaning |
@@ -365,19 +384,20 @@ Author identity is resolved during ingest through shared rules and persisted evi
 
 **Refs.** A ref is `<prefix>:<key>`, lowercased.
 
-- From a URL. Facebook hosts are `facebook.com`, `fb.com` and their subdomains. `profile.php?id=N` gives `fb:N`. A numeric first path segment gives `fb:N`. Any other first segment gives `fb:<slug>`, unless the segment is a known non-profile word (`groups`, `photo`, `reel`, `watch`, `events`, and about forty more). Instagram gives `ig:<handle>` with a leading `@` removed, unless the first segment is a non-profile word (`p`, `reel`, `explore`, `stories`, `accounts`, and others). A scheme-less URL is retried with `https://`.
+- From a URL, by an allowlist of shapes. Facebook hosts are `facebook.com`, `fb.com` and their subdomains. `profile.php?id=N` gives `fb:N`. `/people/<name>/<N>` gives `fb:N`. A single path segment gives `fb:<segment>` (a numeric segment gives `fb:N`), unless the segment is a known non-profile word (`groups`, `photo`, `reel`, `watch`, `events`, and about forty more). A two-segment path gives the first segment only when the second is a known profile tab (`about`, `photos`, `videos`, `reels`, `friends`, `friends_mutual`, `friends_all`, `posts`, `tagged`, `followers`, `following`, `saved`, `map`). Instagram gives `ig:<handle>` with a leading `@` removed for a single segment, or a handle followed by `reels`, `tagged`, `saved`, `followers` or `following`, unless the first segment is a non-profile word (`p`, `reel`, `explore`, `stories`, `accounts`, and others). Every other shape gives no ref: an unknown shape must not produce a key that every URL of that shape shares. A scheme-less URL is retried with `https://`.
 - From a platform author id: `<prefix>:<id>`.
 - One observation yields every ref it can prove: the id ref and the URL ref.
+- Kinds. The ref built from an all-digit platform id is the observation's **id ref**. Every other ref is an **alias**: a URL ref, and a parser fallback that put a slug or a handle where the id goes. The kind belongs to the observation, not to the key string; `fb:123` from `profile.php?id=123` is an alias ref, and the same string from the actor id is the id ref. An Authors row carries id evidence when its `PlatformAuthorId` is all digits.
 
 **The resolver.** Given a platform, an author id, a URL, a display name, and optional flags:
 
 If neither a valid author id nor a canonical profile URL yields a ref, return no author: store the post with AuthorId null and its observed name/URL. Do not create an Authors row, match by display name, or group unrelated observations under a placeholder. Such a post has no author-derived friend, close-friend, bypass or feedback status; configured tag exceptions can still apply. A later observation with proven refs may resolve it through normal ingest and content revision rules.
 
-1. Look up AuthorKeys on that platform for any of the observation's refs.
-2. When several authors match, they are one person. Keep the best row (friend flag first, then avatar present, then post count, then lowest id) and merge the others into it: re-point posts, feedback author refs, coverage visits, person collection requests and sweep targets; fill null fields; OR the friend flag; take earliest first-seen; move keys; delete merged rows; rebuild RefsJson. Duplicate targets within a sweep coalesce at the earliest position; a terminal visit keeps that target completed. Retain visit history and recompute the cycle's target total.
-3. Otherwise match on exact (Platform, PlatformAuthorId), only when the observation has a valid author id. Never match null ids to each other.
+1. Look up AuthorKeys on that platform for any of the observation's refs, and the row with the same (Platform, PlatformAuthorId) when the observation has an id ref.
+2. The rows that are one account with the observation: the owner of the id ref, the row with that `PlatformAuthorId`, and the owners of its alias refs that carry no id evidence of their own. A row with a different all-digit `PlatformAuthorId` that owns an alias is never one of them: a slug or a reclaimed handle must not join two people. Without an id ref, the alias owner is the author.
+3. When several rows are one account, keep the best row (id evidence first, then friend flag, then avatar present, then post count, then lowest id) and merge the others into it: re-point posts, feedback author refs, coverage visits, person collection requests and sweep targets; fill null fields; OR the friend flag; take earliest first-seen; move keys; delete merged rows; rebuild RefsJson. Duplicate targets within a sweep coalesce at the earliest position; a terminal visit keeps that target completed. Retain visit history and recompute the cycle's target total. Write one `merge` IdentityEvents row per removed row.
 4. Otherwise insert.
-5. On update, a known value is never overwritten by a missing one. `IsFriend` is only ever set to true here. `LastSeenAt` moves forward. New refs are added unless the key exists anywhere. RefsJson is rewritten sorted.
+5. On update, a known value is never overwritten by a missing one, and an all-digit id fills a null or non-numeric `PlatformAuthorId`. `IsFriend` is only ever set to true here. `LastSeenAt` moves forward. New refs are added unless the key exists anywhere. An alias ref that another id-bearing row owns stays with that row, and an `alias_conflict` IdentityEvents row records it, one per platform, key and observed id, with a count and a last-seen time. RefsJson is rewritten sorted.
 
 **The friend list for matching.** Every friend row is exposed with its handle, its display name, its URL, and every key ever recorded for it as aliases. This is what lets a close-friend entry keep matching after the platform renames the handle. A friend whose URL yields no ref, even after the Instagram fallback, is left out and can match no entry.
 

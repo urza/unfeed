@@ -7,7 +7,7 @@ namespace Feed.Core.Infrastructure;
 public sealed class FeedDb(InstancePaths paths) : DbContext
 {
     public DbSet<Author> Authors => Set<Author>(); public DbSet<AuthorKey> AuthorKeys => Set<AuthorKey>(); public DbSet<Post> Posts => Set<Post>(); public DbSet<Media> Media => Set<Media>(); public DbSet<RawSnapshot> RawSnapshots => Set<RawSnapshot>(); public DbSet<Run> Runs => Set<Run>(); public DbSet<RunRequest> RunRequests => Set<RunRequest>(); public DbSet<Feedback> Feedback => Set<Feedback>(); public DbSet<Like> Likes => Set<Like>(); public DbSet<PlatformState> PlatformStates => Set<PlatformState>(); public DbSet<TimelineVisit> TimelineVisits => Set<TimelineVisit>(); public DbSet<SweepTarget> SweepTargets => Set<SweepTarget>(); public DbSet<Kv> Kv => Set<Kv>();
-    public DbSet<RawDiagnostic> RawDiagnostics => Set<RawDiagnostic>();
+    public DbSet<RawDiagnostic> RawDiagnostics => Set<RawDiagnostic>(); public DbSet<IdentityEvent> IdentityEvents => Set<IdentityEvent>();
     protected override void OnConfiguring(DbContextOptionsBuilder b) => b.UseSqlite($"Data Source={paths.Database};Default Timeout=30;Pooling=True").AddInterceptors(new Pragmas());
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -39,6 +39,8 @@ public sealed class FeedDb(InstancePaths paths) : DbContext
         b.Entity<RawSnapshot>().HasIndex(x => new { x.Platform, x.AttemptedAt, x.CapturedAt }).HasFilter("Parsed = 0 AND Deleted = 0");
         b.Entity<PlatformState>().HasKey(x => x.Platform); b.Entity<TimelineVisit>().HasIndex(x => new { x.Platform, x.Url, x.Id });
         b.Entity<SweepTarget>().HasKey(x => new { x.Platform, x.CycleId, x.AuthorId }); b.Entity<Kv>().HasKey(x => x.Key);
+        // No foreign keys: a merge event outlives the removed author, and the kept author can be removed by a later merge.
+        b.Entity<IdentityEvent>().HasIndex(x => new { x.Platform, x.Key, x.ObservedId });
     }
     public async Task Initialize(CancellationToken ct = default) { await Database.MigrateAsync(ct); await Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct); await Application.MediaKeys.Normalize(this, paths, ct); }
     public async Task Put(string key, string value, CancellationToken ct = default) => await Database.ExecuteSqlInterpolatedAsync($"INSERT INTO Kv (Key,Value) VALUES ({key},{value}) ON CONFLICT(Key) DO UPDATE SET Value=excluded.Value", ct);

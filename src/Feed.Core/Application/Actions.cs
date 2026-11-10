@@ -7,7 +7,7 @@ public sealed class Actions(DbFactory factory)
 {
     public static async Task<int> EnsureRequest(FeedDb db, string kind, string? platform, string? mode = null, CancellationToken ct = default, bool retryIncomplete = false, long? personAuthorId = null, string? person = null)
     {
-        if ((person is not null || personAuthorId is not null) && (person is null || personAuthorId is null || kind != "collect" || mode != "home" || retryIncomplete || platform is null || !Platforms.All.Contains(platform) || Identity.UrlRef(platform, person) is null)) throw new ArgumentException("Invalid person collection target");
+        if ((person is not null || personAuthorId is not null) && (person is null || personAuthorId is null || kind != "collect" || mode != "home" || retryIncomplete || platform is null || !Platforms.All.Contains(platform) || Identity.UrlRef(platform, person) is null)) throw new ArgumentException("Invalid person collection target: use a profile URL such as facebook.com/<slug>, facebook.com/profile.php?id=N or instagram.com/<handle>");
         if (kind == "collect" && await db.Runs.AnyAsync(r => r.Kind == "collect" && r.Platform == platform && r.Status == "running", ct)) return 0;
         return await db.Database.ExecuteSqlInterpolatedAsync($"INSERT OR IGNORE INTO RunRequests (Kind,Platform,Mode,Status,RequestedAt,RetryIncomplete,PersonAuthorId,Person) SELECT {kind},{platform},{mode},'pending',{Clock.Now},{retryIncomplete},{personAuthorId},{person} WHERE NOT EXISTS (SELECT 1 FROM RunRequests WHERE Kind={kind} AND Platform IS {platform} AND Status IN ('pending','claimed'))", ct);
     }
