@@ -1,84 +1,92 @@
 # Plan 09: Build the judge-quality loop
 
-Status: proposed 2026-11-09 from the step-back review. Not started. A fresh session reviews this plan before any code changes.
+Status: proposed 2026-11-09 from the step-back review. Reviewed and reduced on 2026-11-10 (plan review: CHANGE COURSE, smaller course taken with one adjustment; report: `.work/09-judge-quality-loop/plan-review.md`). Not started.
 
 ## Outcome
 
-The owner can see what the judge hides and why, can compare a policy edit against recent posts before rescoring history, and can see where thumbs disagree with verdicts. Every verdict ever made stays available for that comparison.
+The owner can try the current policy on a sample of judged posts before a `rescore --all`; a trial writes no verdict and the live verdicts stay as they are. The owner can list the `llm` hides in the hidden feed, and the `curate` report marks the thumbs and the owner unhides that disagree with the current verdict.
 
 ## Problem and evidence
 
-The card footer says the agent learns from a thumb (`docs/15-ui.md` L116). In practice a thumb becomes one sentence per author in the prompt (`Prompts.Memory`, `src/Feed.Core/Application/Prompts.cs` L78-82). Learned policy lines need the manual `curate --write` command (`src/Feed.Cli/Program.cs` L87-104). Verdicts are overwritten in place on the post row (`Processing.cs` L243). No table keeps a verdict history or a policy-version history.
+The card footer says the agent learns from a thumb (`docs/15-ui.md` L117). In practice a thumb becomes one sentence per author in the prompt (`Prompts.Memory`, `src/Feed.Core/Application/Prompts.cs` L104-108). Learned policy lines need the manual `curate --write` command (`src/Feed.Cli/Program.cs` L77-93). Verdicts are overwritten in place on the post row (`Processing.cs` L247). Nothing shows the owner where a verdict and a thumb disagree, and the only way to test a policy edit is `rescore --all`, which re-judges about 7,900 posts and overwrites every answer.
 
-Live instance, 2026-11-09:
+Live instance, 2026-11-10 (copy of `data/feed.db`):
 
 | Measure | Value |
 |---|---|
+| Posts; judged for their current content | 10,856; 7,897 |
 | Feedback rows in six weeks | 9 (8 up, 1 down), none curated |
-| Posts hidden by `llm` | 2,195, none with a thumb |
-| Distinct PrefsVersion values | 12 |
-| Posts judged under the newest version | 1,739 of 7,880 |
+| Thumbs that disagree with the current verdict | 1 (a thumb down on a visible post) |
+| Posts hidden by `llm`; in the last 7 days | 2,216; 215 |
+| Distinct `PrefsVersion` values; posts under the newest | 12; 1,822 |
 | Views or lists that filter by `HiddenBy = llm` | none |
 
-The owner edits policy often (12 versions) and has no way to see what each edit changed. The only tool is `rescore --all`, which re-judges about 7,800 posts and destroys the previous answer.
+The owner edits policy often (12 versions, three of them with more than 900 posts). The live database is not yet migrated to plan 02, so the count of owner unhides against an `llm` hide is unknown.
 
 ## Current behavior to keep in mind
 
-- `Feedback` entity (`Entities.cs` L81-85) already snapshots `CategoriesAtVote`, `ScoreAtVote`, `ReasonAtVote`, `Scope` and `ViewKey`.
-- `FeedQuery.cs` L119-125 builds the card trail: shields, score, categories, reason, "older policy" flag, hidden by. L123 compares `PrefsVersion` to the current version.
-- `?scope=hidden` and `?scope=unsorted` exist (`FeedQuery.cs` L110). No owner filter.
-- `rescore` accepts `--all`, `--platform`, `--limit`, `--since`, `--post-id`, `--post-ids`, `--author`, `--text-only` and runs `Processing.Run` directly under a Run of kind `rescore`.
-- The `feedback` command prints a flat list. Spec 9.6 and 13-cli L36 describe a grouped view with the memory text. The code does not match.
+- `Feedback` entity (`Entities.cs` L82-86) already snapshots `CategoriesAtVote`, `ScoreAtVote`, `ReasonAtVote`, `Scope` and `ViewKey`.
+- `FeedQuery.cs` L119-126 builds the card trail: shields, score, categories, reason, "older policy" flag, hidden by. L125 compares `PrefsVersion` to the current version.
+- The main feed reads `?hidden=1` and `?unsorted=1` (`Feed.Web/Program.cs` L35); `?scope=hidden` exists only on person pages (`PersonRoutes.cs`). No owner filter.
+- `rescore` accepts `--all`, `--platform`, `--limit`, `--since`, `--post-id`, `--post-ids`, `--author`, `--text-only` and runs `Processing.Run` directly under a Run of kind `rescore`. Selection (`Processing.cs` L121) takes unjudged and stale posts; posts judged under an older version only with `--all` or `--author`. `Stamp` (L171-175) writes `LlmAttemptedAt` and clears `LlmTokenLimit` on every dispatch; `Apply` (L240-255) writes the verdict columns and calls `Visibility.Model`.
+- `Visibility.Model` (`Identity.cs` L103) is the only rule for an `llm` hide: score below the threshold, no owner unhide of this content (`OwnerUnhiddenRevision`), no `llm` shield.
+- The `feedback` command prints a flat list, as spec 13-cli L35 says. `curate` without flags prints the same flat list (`Program.cs` L89), but spec 9.6 and 13-cli L36 describe a report grouped by author with the memory sentences. The bug is in `curate`.
+- `storage clean-hidden` and reset delete posts, feedback, likes and media with explicit `ExecuteDelete` calls (`StorageCleanup.cs` L47-50, L79-82).
 - Thumbs never change visibility (binding rule 11). This plan keeps that.
 
 ## Target design
 
-1. **Append-only verdict history.** New table `Verdicts`: `Id`, `PostId`, `ContentRevision`, `PrefsVersion`, `InputHash`, `Model`, `Endpoint`, `Score`, `Reason`, `CategoriesJson`, `JudgedAt`, `RunId`, `Trial` (bool). Verdict apply in `Processing.cs` inserts a row and then updates the post columns as today. The post columns stay as the current pointer, so `FeedQuery` does not change. Index on `(PostId, JudgedAt)`.
-2. **Policy version ledger.** New table `PolicyVersions`: `Version`, `FirstSeenAt`, `PrefsHash`, `TaxonomyHash`, `Generation`, `ConfigHash`, `PolicyText`, `TaxonomyReplyShape`. `Processing.Run` upserts the current version at start. `PolicyText` is owner data and lives only in `data/`, like the rest of the database.
-3. **Trial judging.** New command `rescore --trial --sample N [--since D] [--platform P]`. It selects N recent judged posts, runs the judge under the current version with the normal pool and the processing lock, and writes `Verdicts` rows with `Trial = true`. It does not touch the post row. It prints one line per post whose hide state or category set differs from the current verdict, and a summary line: would hide, would unhide, labels changed, unchanged. The owner then decides on `rescore --all`.
-4. **Disagreement query.** New read projection `JudgeQuery`: a thumb down on a visible post with score at or above threshold; a thumb up on a post hidden by `llm`, or on a post whose current verdict scores below threshold. Also: uncurated thumbs, and the count of `llm` hides in the last 7 days with a bounded sample.
-5. **Judge tab on Manage.** Shows the disagreement list, the newest `llm` hides with score and reason, the version ledger with counts per version, and the last trial summary. Links go to the existing `?scope=hidden` feed with a new `&owner=llm` filter.
-6. **Make `feedback` match the spec.** Group by author, show the memory sentences the prompt would receive, and show the disagreement flag per row.
-7. **Keep the UI promise honest.** Change the thumb hint text to say what happens: the vote is remembered for this author and can be turned into a policy line. If the reviewer prefers, keep the current text once the Judge tab exists.
+1. **Trial judging.** `rescore --trial [--limit N] [--since D] [--platform P] [--author REF]`, default limit 100. `WorkScope` gets a `Trial` flag. Under the flag, `Processing.Run`:
+   - selects judged posts for their current content (`CategoriesJson != null && VerdictContentRevision == ContentRevision`), visible or hidden by `llm`, newest post first, with the same `--since`, `--platform` and `--author` filters as today; the "stale version" condition does not apply;
+   - checks eligibility before dispatch with a read (same predicate as `Stamp`) and writes nothing to the post;
+   - on a verdict, computes the trial hide state with `Visibility.Model` on a copy of the post that carries the trial score and reason, and compares it with the current state: hidden by `llm` or not, and the restricted category set;
+   - writes no post column and no verdict; the processing lock and `llm.parallel` apply as for any rescore;
+   - prints one line per post whose hide state or category set differs: post id, platform, old score and new score, `would hide` / `would unhide` / `labels changed`, and whether the old verdict was made under the current version or an older one;
+   - prints a summary line: sampled, would hide, would unhide, labels changed, unchanged, failed, and how many compared verdicts were under the current version (differences there are model noise, not the edit).
+   The CLI output is the whole report. Nothing is stored.
+2. **`owner=` filter on the hidden scope.** `FeedQuery.Read` takes an optional `owner` for the hidden scope and filters `HiddenBy`. The route reads `?owner=`; `/?hidden=1&owner=llm` lists the `llm` hides, each card with its score and reason in the trail as today. Unknown values fall back to no filter.
+3. **Make `curate` match the spec, and mark disagreements.** `curate` without flags groups the uncurated signals by author and prints the memory sentences `Prompts.Memory` would produce for that author. A signal that disagrees with the current verdict gets a mark: a thumb down on a visible post with the current score at or above the threshold; a thumb up on a post hidden by `llm`, or on a post whose current score is below the threshold. After the groups, one block lists the owner unhides that disagree: posts with `OwnerUnhiddenRevision == ContentRevision`, judged for the current content, score below the threshold (post id, platform, score, reason). The two predicates live in one small static class `JudgeReport` in `Feed.Core/Queries`, so a unit test covers them without the console. `feedback` stays a flat list.
+4. **Keep the UI promise honest.** The thumb chip titles become "More like this (remembered for this author)" and "Less like this (remembered for this author)".
 
 ## Contracts to preserve
 
 - Binding rule 11: a thumb writes a row and nothing else. Trial verdicts and disagreement lists never change visibility.
 - Binding rule 6: trial judging runs under the processing lock and counts against `llm.parallel`.
-- Binding rule 1: `PolicyText` in the database stays in `data/`. Tests use the synthetic instance.
-- Rescore remains explicit. No automatic rescore follows a trial.
+- Binding rule 12 (fail-open): a trial compares only posts judged for their current content.
+- Rescore remains explicit. No automatic rescore follows a trial. A trial writes nothing.
+- No new table, no migration, no new config key, no new page.
 
 ## Implementation sequence
 
-1. Migration: add `Verdicts` and `PolicyVersions`. Backfill one `Verdicts` row per post that has a verdict today, from the current columns, with `Trial = false`. Backfill `PolicyVersions` from the distinct `PrefsVersion` values with `PolicyText = null` for versions whose text is unknown.
-2. Insert into `Verdicts` at verdict apply. Upsert `PolicyVersions` at `Processing.Run` start. Test: two rescores of one post leave two rows and the post shows the latest.
-3. `JudgeQuery` with a unit test on the four disagreement cases using synthetic rows.
-4. `rescore --trial`. Test with the fake HTTP model: trial rows appear, the post row is byte-identical, the printed summary matches the rows.
-5. Manage Judge tab and `&owner=` filter on the hidden scope. Browser test: the tab renders with and without JavaScript, the link lands on the filtered feed.
-6. `feedback` command grouping. Test the output shape against the spec text.
-7. Retention: the daily job deletes trial verdicts older than 30 days and keeps the last 20 non-trial rows per post. Config key `retention.verdict_history` with that default.
+1. `WorkScope.Trial`; selection, eligibility read, compare-and-print in `Processing.Run`. CLI flag and usage line. Test with the fake HTTP model: the post row is byte-identical after a trial (compare all columns), the printed lines and the summary match the fake verdicts, a trial on a post hidden by `llm` whose trial score passes the threshold reports `would unhide`, and a trial on a post the owner unhid reports no `would hide`.
+2. `JudgeReport` predicates with a unit test on synthetic rows: thumb down on a visible high-score post; thumb up on an `llm` hide; thumb up on a low-score visible post; an owner unhide of a low-score post; and a thumb that agrees (not marked).
+3. `owner=` filter in `FeedQuery` and the route. Test: `hidden=1&owner=llm` lists only `llm` hides.
+4. `curate` grouping and marks. Test the output shape against the spec text (grouped by author, one memory block per author, the disagreement mark, the unhide block).
+5. Thumb chip titles.
 
 ## Spec updates
 
-- `docs/09-llm.md`: new 9.11 "Verdict history and trials"; 9.6 aligned with the grouped `feedback` output.
-- `docs/05-data-model.md`: the two new tables and the retention rule.
-- `docs/13-cli.md`: `rescore --trial`, `feedback` output.
-- `docs/15-ui.md`: Judge tab, `owner` filter, thumb hint text.
-- `docs/12-scheduler.md` daily job: verdict retention.
-- `docs/04-instance.md`: `retention.verdict_history`.
+- `docs/09-llm.md`: new 9.11 "Trial judging"; 9.6 gains the disagreement marks and the unhide block in the `curate` report.
+- `docs/13-cli.md`: `rescore --trial`; the `curate` row names the marks.
+- `docs/15-ui.md`: `owner` filter on the hidden feed, thumb chip titles.
+- `docs/02-overview.md` 2.3: no rule change; rule 11 holds.
 
 ## Verification
 
 - Unit and browser tests listed above. `ProcessingTests` and `ModelSafetyTests` pass unchanged.
-- Private instance: after the backfill, `Verdicts` holds 7,880 rows and the feed renders identically. A trial of 100 posts completes under the normal pool and leaves the hidden count unchanged.
+- Private instance (on a copy): a trial of 100 posts completes under the normal pool, the hidden count and every post row are unchanged.
 
-## Open questions for the reviewer
+## Decisions taken at review (2026-11-10)
 
-1. Should `Verdicts` keep every row forever? Rows are small (about 300 bytes). At 300 judgments a day that is about 30 MB a year. The plan proposes a cap per post to keep the table bounded.
-2. Store `PolicyText` in the database, or only the hashes with a pointer to `data/settings-backups/`? The backups already hold every saved preferences.md version.
-3. Trial sample: newest N judged posts, or stratified by hidden and visible? Stratified gives a better view of unhide risk.
-4. Should the Judge tab replace the "learns from it" text, or should both exist?
+1. No `Verdicts` table. Nothing in the plan read the history of non-trial verdicts: trials compare with the post columns, disagreements read the post columns and the `Feedback` snapshot. A 7,900-row backfill, an insert per judgment, a retention job and a config key would serve one sentence in the outcome. The owner's minimum (see disagreements, try a rescore on a sample without overwriting) needs no history. The previous verdict is not kept either; a trial compares against the live verdict, which is the one the owner sees.
+2. No `PolicyVersions` table. `PrefsVersion` already carries the four hashes, the per-version counts are a `GROUP BY` on `Posts`, and `data/settings-backups/` already holds every saved preferences text. A ledger would hold `PolicyText = null` for 11 of 12 versions.
+3. Trial results are not stored. The CLI output is the full report.
+4. `--trial` reuses `--limit`, `--since`, `--platform` and `--author`; no `--sample` flag and no stratified sampling. The owner can pass `--since` to focus a sample.
+5. The grouped report goes on `curate` without flags, where the spec puts it. `feedback` stays flat; the `curate` report is the one disagreement surface.
+6. The thumb chip titles change to say what happens. The old text promised learning that nothing performs.
+7. Owner unhides count as disagreements. They are the owner's strongest signal against a verdict and cost one predicate.
+8. Step back (CHANGE COURSE) asked to ship the trial without a stored summary, the `owner=llm` filter, the `curate` grouping with disagreement marks and the chip titles, and to defer the Judge tab and `JudgeQuery` until the thumbs reach a count that a page helps with. The owner proxy took that course with one adjustment: the `curate` report also lists the owner unhides that disagree, because the owner named disagreement with unhides as part of the minimum outcome; it is one predicate and a few printed lines, no page.
 
 ## Out of scope
 
-Prompt redesign, structured output decoding, summary merging, automatic policy edits from thumbs, any change to how thumbs reach the prompt.
+Prompt redesign, structured output decoding, summary merging, automatic policy edits from thumbs, any change to how thumbs reach the prompt, verdict history, a policy ledger, a stored trial summary, a Judge tab on Manage and a `JudgeQuery` projection (deferred until the thumbs reach a count that a page helps with), a trial button on Manage (the trial is a model run and belongs to the CLI like `rescore`).
