@@ -7,7 +7,13 @@ Reviewers: neutral, minimalist, performance (reason: a new query in the Manage d
 The owner is away. The session acts as owner proxy.
 
 ## Step back
-<filled in after the step-back agent>
+Verdict: GO
+
+Why: The plan fixes the real cost (blocked raws turned runs into `error`, marked visits `incomplete` and started useless browser retries), and it deletes about 600 lines of model recovery code that had 0 accepted results in 10 attempts. The parser and the replay loop stay unchanged, so no data or repair path is lost.
+
+The step-back agent weighed the one new mechanism, the silent-home-collect alert, against not having it. Before this change, a run that ended `error` was the only run-level alarm, and this branch removes it. The alert is the cheapest replacement: about 15 lines that read the `Runs` table, plus one presentation category. The ignored `JsonElement?` config property costs one line, which is less than a config migration would cost. Nothing in the diff needs to be simpler or reverted.
+
+User (owner proxy, 2026-11-10): merge after the final checks pass.
 
 ## Findings
 
