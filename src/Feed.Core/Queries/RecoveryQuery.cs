@@ -52,6 +52,7 @@ public static class RecoveryQuery
         DateTime? Delay(string key) => DateTime.TryParse(values.GetValueOrDefault(key), out var at) ? at.ToUniversalTime() : null;
         string State(string p, DateTime? at, bool model = false) => !s.Config.Scheduler.Enabled ? "Automatic recovery paused: scheduler disabled" : !s.Config.Enabled(p) ? "Automatic recovery paused: platform disabled" : model && !s.Config.Llm.Enabled ? "Model processing disabled" : at > Clock.Now ? "Automatic retry after delay" : "Due for automatic recovery";
         RecoveryDisposition Disposition(string p, bool model = false) => !s.Config.Scheduler.Enabled || !s.Config.Enabled(p) || model && !s.Config.Llm.Enabled ? RecoveryDisposition.Paused : RecoveryDisposition.Automatic;
+        // The two branches spell out PendingWork.Judgment and PendingWork.Summary; an OR of two expressions cannot reuse them in one query. Keep them in step.
         var posts = await db.Posts.AsNoTracking().Where(p => fingerprint == null && p.IngestReadyAt != null && (platform == null || p.Platform == platform)
             && (p.LlmAttemptedAt != null && (!p.Hidden || p.HiddenBy == "llm") && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision || p.LlmTokenLimit != null)
                 || p.SummaryAttemptedAt != null && !p.Hidden && (p.Summary == null || p.SummaryContentRevision != p.ContentRevision))).ToArrayAsync(ct);

@@ -2,6 +2,13 @@ using System.Linq.Expressions;
 using Feed.Core.Domain;
 namespace Feed.Core.Application;
 
+// The two "this post still needs model work" rules, shared by the scheduler, the processing counts and the reports
+// so that they cannot drift. An llm-hidden post is re-judged (its verdict may change); other hides are final.
+public static class PendingWork
+{
+    public static readonly Expression<Func<Post, bool>> Judgment = p => (!p.Hidden || p.HiddenBy == "llm") && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision || p.LlmTokenLimit != null);
+    public static readonly Expression<Func<Post, bool>> Summary = p => !p.Hidden && (p.Summary == null || p.SummaryContentRevision != p.ContentRevision);
+}
 public static class JudgmentRetry
 {
     public static int? Budget(Post p, LlmConfig config)

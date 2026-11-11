@@ -44,7 +44,7 @@ public static class Reports
             var pending = db.Posts.Where(p => p.Platform == platform && p.IngestReadyAt != null);
             foreach (var task in new[] { "judge", "summary" })
             {
-                var candidates = task == "judge" ? pending.Where(p => (!p.Hidden || p.HiddenBy == "llm") && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision || p.LlmTokenLimit != null)) : pending.Where(p => !p.Hidden && (p.Summary == null || p.SummaryContentRevision != p.ContentRevision));
+                var candidates = pending.Where(task == "judge" ? PendingWork.Judgment : PendingWork.Summary);
                 var rows = await candidates.AsNoTracking().ToArrayAsync();
                 var due = task == "judge" ? rows.Count(JudgmentRetry.Due(s.Config.Llm, Clock.Now).Compile()) : rows.Count(p => p.SummaryAttemptedAt == null || p.SummaryAttemptedAt <= retryCutoff);
                 var retry = rows.Select(p => task == "judge" ? JudgmentRetry.After(p, s.Config.Llm) : p.SummaryAttemptedAt?.AddMinutes(30)).Where(at => at > Clock.Now).Min();

@@ -303,8 +303,8 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
         {
         await using (var db = factory.Open()) foreach (var platform in platforms)
         {
-            counts.Stage(platform, "judge").Remaining = await db.Posts.CountAsync(p => p.Platform == platform && (!p.Hidden || p.HiddenBy == "llm") && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision || p.LlmTokenLimit != null), ct);
-            counts.Stage(platform, "summary").Remaining = await db.Posts.CountAsync(p => p.Platform == platform && !p.Hidden && (p.Summary == null || p.SummaryContentRevision != p.ContentRevision), ct);
+            counts.Stage(platform, "judge").Remaining = await db.Posts.Where(p => p.Platform == platform).CountAsync(PendingWork.Judgment, ct);
+            counts.Stage(platform, "summary").Remaining = await db.Posts.Where(p => p.Platform == platform).CountAsync(PendingWork.Summary, ct);
             counts.Stage(platform, "raw").Remaining = await db.RawSnapshots.CountAsync(r => r.Platform == platform && !r.Deleted && !r.Parsed, ct);
             counts.Stage(platform, "image").Remaining = await db.Media.Join(db.Posts.Where(p => p.Platform == platform), m => m.PostId, p => p.Id, (m, p) => m).CountAsync(m => m.IsCurrent && m.Kind == "image" && m.Path == null && m.PrunedAt == null, ct);
             counts.Stage(platform, "video").Remaining = await db.Media.Join(db.Posts.Where(p => p.Platform == platform), m => m.PostId, p => p.Id, (m, p) => m).CountAsync(m => m.IsCurrent && m.Kind == "video" && m.Path == null && m.PrunedAt == null, ct);
