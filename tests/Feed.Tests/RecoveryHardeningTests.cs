@@ -106,8 +106,6 @@ public sealed class RecoveryHardeningTests
         }
         await using var check = i.Factory.Open(); var row = Assert.Single(await CoverageQuery.Read(check, Snapshot)); Assert.Equal("partial capture with errors", row.Status); Assert.Contains("Retry limit reached", row.Recovery); Assert.Equal(3, await check.TimelineVisits.CountAsync());
     }
-    sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> reply) : HttpMessageHandler
-    { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage r, CancellationToken ct) => Task.FromResult(reply(r)); }
     [Fact] public async Task HealthyQueuedAndInflightWorkIsNotReportedAsFailure()
     {
         await using var i = new TestInstance(); await i.Init();
@@ -122,7 +120,7 @@ public sealed class RecoveryHardeningTests
     {
         await using var i = new TestInstance(); await i.Init(); await using (var db = i.Factory.Open()) { db.Add(new Post { Platform = "facebook", PlatformPostId = "fixture", IngestReadyAt = Clock.Now }); await db.SaveChangesAsync(); }
         bool fail = true;
-        using var handler = new Handler(_ => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new { choices = new[] { new { finish_reason = fail ? "length" : "stop", message = new { content = fail ? "" : "{\"score\":8,\"reason\":\"synthetic\"}", reasoning_content = fail ? "private reasoning" : "" } } } })) });
+        using var handler = new StubHandler(_ => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new { choices = new[] { new { finish_reason = fail ? "length" : "stop", message = new { content = fail ? "" : "{\"score\":8,\"reason\":\"synthetic\"}", reasoning_content = fail ? "private reasoning" : "" } } } })) });
         using var http = new HttpClient(handler); var media = new MediaFiles(i.Paths, http); var s = Snapshot with { Config = Snapshot.Config with { Llm = new() { Enabled = true, BaseUrl = "http://fixture.test/v1", Vision = false } } };
         Processing Worker() => new(i.Paths, i.Factory, new(http), media, new(i.Paths, i.Factory, media));
         Assert.Equal(1, (await Worker().Run(s, new("rescore"), null, default)).Failed);

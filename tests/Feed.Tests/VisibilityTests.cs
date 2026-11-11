@@ -106,14 +106,10 @@ public sealed class VisibilityTests
         await using (var db = i.Factory.Open()) { db.Add(friend); await db.SaveChangesAsync(); var p = new Post { Platform = "facebook", PlatformPostId = "muted", AuthorId = friend.Id, Text = "synthetic", IngestReadyAt = Clock.Now }; p.SetHidden("mute", "muted: fb:101"); db.Add(p); await db.SaveChangesAsync(); id = p.Id; }
         Assert.True(await new Actions(i.Factory).Unhide(id));
         var s = new InstanceSnapshot(new() { Platforms = System.Collections.Immutable.ImmutableDictionary<string, PlatformConfig>.Empty.Add("facebook", new()), Llm = new() { Enabled = true, BaseUrl = "http://synthetic.test/v1", FallbackBaseUrl = "", Vision = false } }, new(), Preferences.Parse(Mute));
-        using var handler = new Reply("{\"score\":9,\"reason\":\"fine\",\"categories\":[]}"); using var http = new HttpClient(handler); var media = new MediaFiles(i.Paths, http);
+        using var handler = new StubHandler(_ => Replies.Llm("{\"score\":9,\"reason\":\"fine\",\"categories\":[]}")); using var http = new HttpClient(handler); var media = new MediaFiles(i.Paths, http);
         var counts = await new Processing(i.Paths, i.Factory, new(http), media, new(i.Paths, i.Factory, media)).Run(s, new("rescore"), null, default);
         Assert.Equal(1, counts.Completed);
         await using var check = i.Factory.Open(); var post = await check.Posts.SingleAsync(); Assert.Equal(9, post.LlmScore); Assert.False(post.Hidden);
-    }
-    sealed class Reply(string content) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } }), System.Text.Encoding.UTF8, "application/json") });
     }
     [Fact]
     public async Task ReapplyCountsChangesAndAdvancesEveryRevisionInScope()

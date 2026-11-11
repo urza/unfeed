@@ -1,6 +1,4 @@
-using System.Diagnostics;
 using System.Net;
-using System.Net.Sockets;
 using Feed.Core.Domain;
 using Feed.Core.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -32,78 +30,70 @@ public sealed class ManagementBrowserTests
             for(int n=0;n<55;n++) { var raw=new RawSnapshot {Platform="facebook",Path=$"raw/synthetic-group-{n}.json",Parsed=true,Warning="Synthetic auxiliary warning"};db.Add(raw);await db.SaveChangesAsync();db.RawDiagnostics.Add(new(){RawSnapshotId=raw.Id,Code="upstream_error",Fingerprint="fixture-signature",Impact="auxiliary",Evidence="Synthetic auxiliary warning"}); }
             await db.SaveChangesAsync();
         }
-        var listener=new TcpListener(IPAddress.Loopback,0);listener.Start();var port=((IPEndPoint)listener.LocalEndpoint).Port;listener.Stop();
-        var root=new DirectoryInfo(AppContext.BaseDirectory);while(root is not null&&!File.Exists(Path.Combine(root.FullName,"Feed.slnx")))root=root.Parent;
-        var start=new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")??"dotnet") {WorkingDirectory=root!.FullName,UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true};
-        foreach(var arg in new[]{Path.Combine(root.FullName,"src/Feed.Web/bin/Debug/net10.0/Feed.Web.dll"),"--data",instance.Paths.Root,"--urls",$"http://127.0.0.1:{port}"})start.ArgumentList.Add(arg);
-        start.Environment["FEED_CLI"]=instance.Paths.Get("missing-cli");
-        using var server=Process.Start(start)!;var stdout=server.StandardOutput.ReadToEndAsync();var stderr=server.StandardError.ReadToEndAsync();
-        try {
-            var url=$"http://127.0.0.1:{port}";using var http=new HttpClient();using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            while(true){if(server.HasExited)throw new InvalidOperationException("Web host exited: "+await stderr);try{if((await http.GetAsync(url+"/healthz",timeout.Token)).IsSuccessStatusCode)break;}catch(HttpRequestException){}await Task.Delay(100,timeout.Token);}
-            using var pw=await Playwright.CreateAsync();await using var browser=await pw.Chromium.LaunchAsync(new(){Headless=true});await using var context=await browser.NewContextAsync(new(){JavaScriptEnabled=javascript,ViewportSize=new(){Width=1280,Height=900}});
-            var page=await context.NewPageAsync();await page.GotoAsync(url+"/manage");Assert.Equal(2,await page.Locator(".manage-platforms > section").CountAsync());Assert.Equal(0,await page.Locator("meta[http-equiv='refresh']").CountAsync());Assert.DoesNotContain("synthetic-do-not-render",await page.ContentAsync());
-            Assert.True(await page.GetByRole(AriaRole.Button,new(){Name="Refresh following",Exact=true}).IsEnabledAsync());
-            await page.GetByRole(AriaRole.Link,new(){Name="Backgrounds",Exact=true}).ClickAsync();Assert.EndsWith("/manage/backgrounds",page.Url);Assert.Equal("Backgrounds",await page.Locator(".manage-nav [aria-current=page]").InnerTextAsync());await page.GetByRole(AriaRole.Link,new(){Name="Overview",Exact=true}).ClickAsync();
-            // With script the tabs switch in the same document, so wait for the destination before reading the page.
-            await page.GetByRole(AriaRole.Link,new(){Name="View recovery progress",Exact=true}).ClickAsync();await page.WaitForFunctionAsync("location.search.startsWith('?section=recovery') && !document.querySelector('main').hasAttribute('aria-busy')");
-            Assert.Contains("Recovery is paused",await page.Locator(".recovery-summary").InnerTextAsync());
-            Assert.Contains("1 compatibility groups",await page.Locator(".recovery-summary").InnerTextAsync());
-            Assert.Contains("no immediate owner action",await page.Locator(".recovery-details").InnerTextAsync());
-            var notices=page.Locator(".recovery-section").Filter(new(){HasText="Informational notices"});Assert.Null(await notices.GetAttributeAsync("open"));
-            await page.GetByText("Show affected items and recovery instructions",new(){Exact=true}).First.ClickAsync();
-            Assert.Contains("Collection association unavailable",await page.Locator(".recovery-details").InnerTextAsync());
-            if(javascript){var updated=await page.Locator(".recovery-summary time").GetAttributeAsync("datetime");await page.WaitForFunctionAsync("previous => document.querySelector('.recovery-summary time').getAttribute('datetime') !== previous",updated,new(){Timeout=45000});Assert.True(await page.Locator(".recovery-group details").First.EvaluateAsync<bool>("e => e.open"));}
-            await page.EvaluateAsync("document.querySelector('.background').style.background = 'repeating-linear-gradient(35deg, white 0px, white 24px, #ffdf00 24px, #ffdf00 48px, #ee4499 48px, #ee4499 72px)'");
-            await page.ScreenshotAsync(new(){Path=$"/tmp/feed-recovery-desktop-{javascript}.png"});
-            await page.SetViewportSizeAsync(390,844);Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));
-            Assert.Equal("rgb(20, 33, 50)",await page.Locator(".recovery-summary").EvaluateAsync<string>("e => getComputedStyle(e).backgroundColor"));
-            await page.ScreenshotAsync(new(){Path=$"/tmp/feed-recovery-phone-{javascript}.png"});await page.SetViewportSizeAsync(1280,900);
-            await page.GotoAsync(url+"/manage?section=recovery&signature=fixture-signature");Assert.Equal(50,await page.Locator(".recovery-item").CountAsync());
-            await page.GetByRole(AriaRole.Link,new(){Name="Next",Exact=true}).ClickAsync();await page.WaitForFunctionAsync("location.search.includes('page=2') && !document.querySelector('main').hasAttribute('aria-busy')");Assert.Equal(5,await page.Locator(".recovery-item").CountAsync());
-            await page.SetViewportSizeAsync(390,844);await page.EvaluateAsync("document.querySelector('.background').style.background = 'repeating-linear-gradient(35deg,white 0 24px,#ffdf00 24px 48px,#ee4499 48px 72px)'");
-            Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));Assert.NotEqual("rgba(0, 0, 0, 0)",await page.Locator(".manage-panel").First.EvaluateAsync<string>("e => getComputedStyle(e).backgroundColor"));
-            await page.ScreenshotAsync(new(){Path=$"/tmp/feed-capture-audit-phone-{javascript}.png"});await page.SetViewportSizeAsync(1280,900);
-            var bad=await http.PostAsync(url+"/manage/settings/scheduler",new FormUrlEncodedContent(new Dictionary<string,string>{{"enabled","true"}}));Assert.Equal(HttpStatusCode.BadRequest,bad.StatusCode);
-            await page.GotoAsync(url+"/manage?section=people&q=Synthetic&platform=instagram");var stale=await context.NewPageAsync();await stale.GotoAsync(page.Url);
-            await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Close friend: Synthetic Person",Exact=true}));Assert.Contains("q=Synthetic",page.Url);
-            await using(var db=instance.Factory.Open()){Assert.False((await db.Posts.SingleAsync(p => p.PlatformPostId == "fixture")).Hidden);}
-            Assert.Equal<string>(["ig:101"],new InstanceFiles(instance.Paths).Current.Config.Platform("instagram").CloseFriends);
-            await Submit(stale, stale.GetByRole(AriaRole.Button,new(){Name="Always show: Synthetic Person",Exact=true}));Assert.Contains("Settings changed",await stale.Locator("[role=alert]").InnerTextAsync());
-            await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Muted: Synthetic Person",Exact=true}));await using(var db=instance.Factory.Open()){Assert.Equal("mute",(await db.Posts.SingleAsync(p => p.PlatformPostId == "fixture")).HiddenBy);}
-            await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Muted: Synthetic Person",Exact=true}));await using(var db=instance.Factory.Open()){Assert.False((await db.Posts.SingleAsync(p => p.PlatformPostId == "fixture")).Hidden);}
-            await Assertions.Expect(page.GetByRole(AriaRole.Button,new(){Name="Muted: Synthetic Person",Exact=true})).ToHaveAttributeAsync("aria-pressed","false");
-            await page.Locator(".people-table").WaitForAsync();
-            await page.SetViewportSizeAsync(390,844);Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));await page.Locator(".people-table").ScrollIntoViewIfNeededAsync();await page.ScreenshotAsync(new(){Path=$"/tmp/feed-manage-people-{javascript}.png"});
-            await page.GotoAsync(url+"/manage?section=schedule");var form=page.Locator("form[action='/manage/settings/schedule']").First;await form.Locator("input[name=times]").FillAsync("08:00, 18:30");await Submit(page, form.Locator("button"));
-            Assert.Equal<string>(["08:00","18:30"],new InstanceFiles(instance.Paths).Current.Config.Platform("facebook").Schedule["home"]);Assert.False(new InstanceFiles(instance.Paths).Current.Config.Scheduler.Enabled);
-            Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));await page.ScreenshotAsync(new(){Path=$"/tmp/feed-manage-schedule-{javascript}.png"});
-            await page.GotoAsync(url+"/manage?section=rules");await page.Locator("textarea[name=keywords]").FillAsync("Synthetic post");await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Save written rules",Exact=true}));await using(var db=instance.Factory.Open()){Assert.Equal("keyword",(await db.Posts.SingleAsync(p => p.PlatformPostId == "fixture")).HiddenBy);}
-            foreach(var section in new[]{"overview","categories","processing","storage"}){await page.GotoAsync(url+"/manage?section="+section);Assert.DoesNotContain("synthetic-do-not-render",await page.ContentAsync());Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));}
-            await page.GotoAsync(url+"/manage?section=storage");
-            await page.EvaluateAsync("document.querySelector('.background').style.background = 'repeating-linear-gradient(35deg,white 0 24px,#ffdf00 24px 48px,#ee4499 48px 72px)'");
-            await page.ScreenshotAsync(new(){Path=$"/tmp/feed-storage-phone-{javascript}.png"});
-            await page.SetViewportSizeAsync(1280,900);await page.ScreenshotAsync(new(){Path=$"/tmp/feed-storage-desktop-{javascript}.png"});
-            await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Preview hidden-post cleanup",Exact=true}));
-            Assert.Contains("Preview: 1 hidden posts",await page.Locator(".manage-notice").InnerTextAsync());
-            await using(var db=instance.Factory.Open()) Assert.True(await db.Posts.AnyAsync(p=>p.Hidden));
-            await page.Locator("form[action='/manage/storage/hidden'] input[name=confirm]").CheckAsync();
-            await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Delete hidden posts and media",Exact=true}));
-            Assert.Contains("Deleted: 1 hidden posts",await page.Locator(".manage-notice").InnerTextAsync());
-            await using(var db=instance.Factory.Open()) Assert.False(await db.Posts.AnyAsync(p=>p.Hidden));
-            var reset = page.Locator("form[action='/manage/storage/reset']");
-            Assert.False(await reset.Locator("input[name=delete_posts]").IsCheckedAsync());
-            await reset.Locator("input[name=confirm]").CheckAsync();
-            await Submit(page, reset.Locator("button"));
-            await using(var db=instance.Factory.Open()) Assert.True(await db.Posts.AnyAsync());
-            reset = page.Locator("form[action='/manage/storage/reset']");
-            await reset.Locator("input[name=delete_posts]").CheckAsync(); await reset.Locator("input[name=confirm]").CheckAsync();
-            await Submit(page, reset.Locator("button"));
-            await using(var db=instance.Factory.Open()) { Assert.False(await db.Posts.AnyAsync()); Assert.True(await db.Authors.AnyAsync()); }
-            await page.GotoAsync(url+"/manage?section=categories");await page.Locator("textarea[name=definition]").FillAsync("Synthetic changed definition");await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Save category",Exact=true}));Assert.Equal("Synthetic changed definition",new InstanceFiles(instance.Paths).Current.Taxonomy.Categories[0].Definition);
-            var viewForm=page.Locator("form[action='/manage/settings/view']").First;await viewForm.Locator("input[name=label]").FillAsync("Updated view");await Submit(page, viewForm.Locator("button"));Assert.Equal("Updated view",new InstanceFiles(instance.Paths).Current.Taxonomy.Views[0].Label);
-            await page.SetViewportSizeAsync(1280,900);await page.GotoAsync(url+"/manage");await page.ScreenshotAsync(new(){Path=$"/tmp/feed-manage-overview-{javascript}.png"});
-        } finally {if(!server.HasExited)server.Kill(true);await server.WaitForExitAsync();await stdout;await stderr;}
+        await using var host = await WebHost.Start(instance, s => s.Environment["FEED_CLI"] = instance.Paths.Get("missing-cli"));
+        var url = host.BaseAddress.ToString().TrimEnd('/');
+        using var pw=await Playwright.CreateAsync();await using var browser=await pw.Chromium.LaunchAsync(new(){Headless=true});await using var context=await browser.NewContextAsync(new(){JavaScriptEnabled=javascript,ViewportSize=new(){Width=1280,Height=900}});
+        var page=await context.NewPageAsync();await page.GotoAsync(url+"/manage");Assert.Equal(2,await page.Locator(".manage-platforms > section").CountAsync());Assert.Equal(0,await page.Locator("meta[http-equiv='refresh']").CountAsync());Assert.DoesNotContain("synthetic-do-not-render",await page.ContentAsync());
+        Assert.True(await page.GetByRole(AriaRole.Button,new(){Name="Refresh following",Exact=true}).IsEnabledAsync());
+        await page.GetByRole(AriaRole.Link,new(){Name="Backgrounds",Exact=true}).ClickAsync();Assert.EndsWith("/manage/backgrounds",page.Url);Assert.Equal("Backgrounds",await page.Locator(".manage-nav [aria-current=page]").InnerTextAsync());await page.GetByRole(AriaRole.Link,new(){Name="Overview",Exact=true}).ClickAsync();
+        // With script the tabs switch in the same document, so wait for the destination before reading the page.
+        await page.GetByRole(AriaRole.Link,new(){Name="View recovery progress",Exact=true}).ClickAsync();await page.WaitForFunctionAsync("location.search.startsWith('?section=recovery') && !document.querySelector('main').hasAttribute('aria-busy')");
+        Assert.Contains("Recovery is paused",await page.Locator(".recovery-summary").InnerTextAsync());
+        Assert.Contains("1 compatibility groups",await page.Locator(".recovery-summary").InnerTextAsync());
+        Assert.Contains("no immediate owner action",await page.Locator(".recovery-details").InnerTextAsync());
+        var notices=page.Locator(".recovery-section").Filter(new(){HasText="Informational notices"});Assert.Null(await notices.GetAttributeAsync("open"));
+        await page.GetByText("Show affected items and recovery instructions",new(){Exact=true}).First.ClickAsync();
+        Assert.Contains("Collection association unavailable",await page.Locator(".recovery-details").InnerTextAsync());
+        if(javascript){var updated=await page.Locator(".recovery-summary time").GetAttributeAsync("datetime");await page.WaitForFunctionAsync("previous => document.querySelector('.recovery-summary time').getAttribute('datetime') !== previous",updated,new(){Timeout=45000});Assert.True(await page.Locator(".recovery-group details").First.EvaluateAsync<bool>("e => e.open"));}
+        await page.EvaluateAsync("document.querySelector('.background').style.background = 'repeating-linear-gradient(35deg, white 0px, white 24px, #ffdf00 24px, #ffdf00 48px, #ee4499 48px, #ee4499 72px)'");
+        await page.ScreenshotAsync(new(){Path=$"/tmp/feed-recovery-desktop-{javascript}.png"});
+        await page.SetViewportSizeAsync(390,844);Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));
+        Assert.Equal("rgb(20, 33, 50)",await page.Locator(".recovery-summary").EvaluateAsync<string>("e => getComputedStyle(e).backgroundColor"));
+        await page.ScreenshotAsync(new(){Path=$"/tmp/feed-recovery-phone-{javascript}.png"});await page.SetViewportSizeAsync(1280,900);
+        await page.GotoAsync(url+"/manage?section=recovery&signature=fixture-signature");Assert.Equal(50,await page.Locator(".recovery-item").CountAsync());
+        await page.GetByRole(AriaRole.Link,new(){Name="Next",Exact=true}).ClickAsync();await page.WaitForFunctionAsync("location.search.includes('page=2') && !document.querySelector('main').hasAttribute('aria-busy')");Assert.Equal(5,await page.Locator(".recovery-item").CountAsync());
+        await page.SetViewportSizeAsync(390,844);await page.EvaluateAsync("document.querySelector('.background').style.background = 'repeating-linear-gradient(35deg,white 0 24px,#ffdf00 24px 48px,#ee4499 48px 72px)'");
+        Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));Assert.NotEqual("rgba(0, 0, 0, 0)",await page.Locator(".manage-panel").First.EvaluateAsync<string>("e => getComputedStyle(e).backgroundColor"));
+        await page.ScreenshotAsync(new(){Path=$"/tmp/feed-capture-audit-phone-{javascript}.png"});await page.SetViewportSizeAsync(1280,900);
+        var bad=await host.Http.PostAsync(url+"/manage/settings/scheduler",new FormUrlEncodedContent(new Dictionary<string,string>{{"enabled","true"}}));Assert.Equal(HttpStatusCode.BadRequest,bad.StatusCode);
+        await page.GotoAsync(url+"/manage?section=people&q=Synthetic&platform=instagram");var stale=await context.NewPageAsync();await stale.GotoAsync(page.Url);
+        await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Close friend: Synthetic Person",Exact=true}));Assert.Contains("q=Synthetic",page.Url);
+        await using(var db=instance.Factory.Open()){Assert.False((await db.Posts.SingleAsync(p => p.PlatformPostId == "fixture")).Hidden);}
+        Assert.Equal<string>(["ig:101"],new InstanceFiles(instance.Paths).Current.Config.Platform("instagram").CloseFriends);
+        await Submit(stale, stale.GetByRole(AriaRole.Button,new(){Name="Always show: Synthetic Person",Exact=true}));Assert.Contains("Settings changed",await stale.Locator("[role=alert]").InnerTextAsync());
+        await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Muted: Synthetic Person",Exact=true}));await using(var db=instance.Factory.Open()){Assert.Equal("mute",(await db.Posts.SingleAsync(p => p.PlatformPostId == "fixture")).HiddenBy);}
+        await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Muted: Synthetic Person",Exact=true}));await using(var db=instance.Factory.Open()){Assert.False((await db.Posts.SingleAsync(p => p.PlatformPostId == "fixture")).Hidden);}
+        await Assertions.Expect(page.GetByRole(AriaRole.Button,new(){Name="Muted: Synthetic Person",Exact=true})).ToHaveAttributeAsync("aria-pressed","false");
+        await page.Locator(".people-table").WaitForAsync();
+        await page.SetViewportSizeAsync(390,844);Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));await page.Locator(".people-table").ScrollIntoViewIfNeededAsync();await page.ScreenshotAsync(new(){Path=$"/tmp/feed-manage-people-{javascript}.png"});
+        await page.GotoAsync(url+"/manage?section=schedule");var form=page.Locator("form[action='/manage/settings/schedule']").First;await form.Locator("input[name=times]").FillAsync("08:00, 18:30");await Submit(page, form.Locator("button"));
+        Assert.Equal<string>(["08:00","18:30"],new InstanceFiles(instance.Paths).Current.Config.Platform("facebook").Schedule["home"]);Assert.False(new InstanceFiles(instance.Paths).Current.Config.Scheduler.Enabled);
+        Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));await page.ScreenshotAsync(new(){Path=$"/tmp/feed-manage-schedule-{javascript}.png"});
+        await page.GotoAsync(url+"/manage?section=rules");await page.Locator("textarea[name=keywords]").FillAsync("Synthetic post");await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Save written rules",Exact=true}));await using(var db=instance.Factory.Open()){Assert.Equal("keyword",(await db.Posts.SingleAsync(p => p.PlatformPostId == "fixture")).HiddenBy);}
+        foreach(var section in new[]{"overview","categories","processing","storage"}){await page.GotoAsync(url+"/manage?section="+section);Assert.DoesNotContain("synthetic-do-not-render",await page.ContentAsync());Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));}
+        await page.GotoAsync(url+"/manage?section=storage");
+        await page.EvaluateAsync("document.querySelector('.background').style.background = 'repeating-linear-gradient(35deg,white 0 24px,#ffdf00 24px 48px,#ee4499 48px 72px)'");
+        await page.ScreenshotAsync(new(){Path=$"/tmp/feed-storage-phone-{javascript}.png"});
+        await page.SetViewportSizeAsync(1280,900);await page.ScreenshotAsync(new(){Path=$"/tmp/feed-storage-desktop-{javascript}.png"});
+        await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Preview hidden-post cleanup",Exact=true}));
+        Assert.Contains("Preview: 1 hidden posts",await page.Locator(".manage-notice").InnerTextAsync());
+        await using(var db=instance.Factory.Open()) Assert.True(await db.Posts.AnyAsync(p=>p.Hidden));
+        await page.Locator("form[action='/manage/storage/hidden'] input[name=confirm]").CheckAsync();
+        await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Delete hidden posts and media",Exact=true}));
+        Assert.Contains("Deleted: 1 hidden posts",await page.Locator(".manage-notice").InnerTextAsync());
+        await using(var db=instance.Factory.Open()) Assert.False(await db.Posts.AnyAsync(p=>p.Hidden));
+        var reset = page.Locator("form[action='/manage/storage/reset']");
+        Assert.False(await reset.Locator("input[name=delete_posts]").IsCheckedAsync());
+        await reset.Locator("input[name=confirm]").CheckAsync();
+        await Submit(page, reset.Locator("button"));
+        await using(var db=instance.Factory.Open()) Assert.True(await db.Posts.AnyAsync());
+        reset = page.Locator("form[action='/manage/storage/reset']");
+        await reset.Locator("input[name=delete_posts]").CheckAsync(); await reset.Locator("input[name=confirm]").CheckAsync();
+        await Submit(page, reset.Locator("button"));
+        await using(var db=instance.Factory.Open()) { Assert.False(await db.Posts.AnyAsync()); Assert.True(await db.Authors.AnyAsync()); }
+        await page.GotoAsync(url+"/manage?section=categories");await page.Locator("textarea[name=definition]").FillAsync("Synthetic changed definition");await Submit(page, page.GetByRole(AriaRole.Button,new(){Name="Save category",Exact=true}));Assert.Equal("Synthetic changed definition",new InstanceFiles(instance.Paths).Current.Taxonomy.Categories[0].Definition);
+        var viewForm=page.Locator("form[action='/manage/settings/view']").First;await viewForm.Locator("input[name=label]").FillAsync("Updated view");await Submit(page, viewForm.Locator("button"));Assert.Equal("Updated view",new InstanceFiles(instance.Paths).Current.Taxonomy.Views[0].Label);
+        await page.SetViewportSizeAsync(1280,900);await page.GotoAsync(url+"/manage");await page.ScreenshotAsync(new(){Path=$"/tmp/feed-manage-overview-{javascript}.png"});
     }
 
     // A saved capture that the current parser cannot read is a Compatibility row: the overview panel must
@@ -119,20 +109,12 @@ public sealed class ManagementBrowserTests
             db.RawSnapshots.Add(raw);await db.SaveChangesAsync();
             db.Add(new RawDiagnostic { RawSnapshotId=raw.Id,Code="unknown",Fingerprint="synthetic-blocked",Impact="content",ParserVersion=PayloadParser.Version });await db.SaveChangesAsync();
         }
-        var listener=new TcpListener(IPAddress.Loopback,0);listener.Start();var port=((IPEndPoint)listener.LocalEndpoint).Port;listener.Stop();
-        var root=new DirectoryInfo(AppContext.BaseDirectory);while(root is not null&&!File.Exists(Path.Combine(root.FullName,"Feed.slnx")))root=root.Parent;
-        var start=new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")??"dotnet") {WorkingDirectory=root!.FullName,UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true};
-        foreach(var arg in new[]{Path.Combine(root.FullName,"src/Feed.Web/bin/Debug/net10.0/Feed.Web.dll"),"--data",instance.Paths.Root,"--urls",$"http://127.0.0.1:{port}"})start.ArgumentList.Add(arg);
-        start.Environment["FEED_CLI"]=instance.Paths.Get("missing-cli");
-        using var server=Process.Start(start)!;var stdout=server.StandardOutput.ReadToEndAsync();var stderr=server.StandardError.ReadToEndAsync();
-        try {
-            var url=$"http://127.0.0.1:{port}";using var http=new HttpClient();using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            while(true){if(server.HasExited)throw new InvalidOperationException("Web host exited: "+await stderr);try{if((await http.GetAsync(url+"/healthz",timeout.Token)).IsSuccessStatusCode)break;}catch(HttpRequestException){}await Task.Delay(100,timeout.Token);}
-            using var pw=await Playwright.CreateAsync();await using var browser=await pw.Chromium.LaunchAsync(new(){Headless=true});var page=await browser.NewPageAsync();
-            await page.GotoAsync(url+"/manage");
-            var panel=page.Locator(".attention-panel.notice");Assert.Equal(1,await panel.CountAsync());
-            var text=await panel.InnerTextAsync();Console.WriteLine("Catching up panel:\n"+text);
-            Assert.True(text.Contains("parser update"),"Panel text was:\n"+text);
-        } finally {if(!server.HasExited)server.Kill(true);await server.WaitForExitAsync();await stdout;await stderr;}
+        await using var host = await WebHost.Start(instance, s => s.Environment["FEED_CLI"] = instance.Paths.Get("missing-cli"));
+        var url = host.BaseAddress.ToString().TrimEnd('/');
+        using var pw=await Playwright.CreateAsync();await using var browser=await pw.Chromium.LaunchAsync(new(){Headless=true});var page=await browser.NewPageAsync();
+        await page.GotoAsync(url+"/manage");
+        var panel=page.Locator(".attention-panel.notice");Assert.Equal(1,await panel.CountAsync());
+        var text=await panel.InnerTextAsync();Console.WriteLine("Catching up panel:\n"+text);
+        Assert.True(text.Contains("parser update"),"Panel text was:\n"+text);
     }
 }

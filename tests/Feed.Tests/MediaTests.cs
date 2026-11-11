@@ -30,10 +30,9 @@ public sealed class MediaTests
         Assert.NotEqual(PayloadParser.SourceKey("https://external.test/emg1/v/t13/1?url=https%3A%2F%2Fa.example%2F1.jpg&stp=c0"),PayloadParser.SourceKey("https://external.test/emg1/v/t13/1?url=https%3A%2F%2Fa.example%2F2.jpg&stp=c0"));
         Assert.Equal("https://cdn.test/plain.jpg",PayloadParser.SourceKey("https://cdn.test/plain.jpg?_nc_gid=x#frag"));
     }
-    sealed class PngHandler(byte[] bytes):HttpMessageHandler{public int Calls;protected override Task<HttpResponseMessage>SendAsync(HttpRequestMessage r,CancellationToken ct){Interlocked.Increment(ref Calls);return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new ByteArrayContent(bytes)});}}
     [Fact]public async Task RecaptureWithRotatedCdnParametersKeepsRevisionRowsAndFiles()
     {
-        await using var i=new TestInstance();await i.Init();using var handler=new PngHandler(Png(640,480));using var http=new HttpClient(handler);var ingest=new Ingest(i.Paths,i.Factory,new(i.Paths,http));
+        await using var i=new TestInstance();await i.Init();var png=Png(640,480);using var handler=new StubHandler(_=>new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new ByteArrayContent(png)});using var http=new HttpClient(handler);var ingest=new Ingest(i.Paths,i.Factory,new(i.Paths,http));
         var snapshot=new InstanceSnapshot(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("instagram",new())},new(),Preferences.Parse(""));
         string Raw(string dir,string gid,string host="scontent-a.cdninstagram.com",string name="a_n.jpg"){var file=i.Paths.Get("raw","instagram",dir,"001.json");Directory.CreateDirectory(Path.GetDirectoryName(file)!);File.WriteAllText(file,$$$"""{"items":[{"pk":"101","code":"synthetic","user":{"pk":"501","username":"synthetic.person"},"caption":{"text":"Synthetic caption"},"image_versions2":{"candidates":[{"url":"https://{{{host}}}/v/{{{name}}}?stp=dst-jpg_e35&_nc_gid={{{gid}}}&oh=sig{{{gid}}}&oe=1","width":640}]}}]}""");return file;}
         var first=Raw("20260101T000000","one");var second=Raw("20260102T000000","two","scontent-b.cdninstagram.com");File.SetLastWriteTimeUtc(second,File.GetLastWriteTimeUtc(first).AddMinutes(1));
@@ -108,7 +107,7 @@ public sealed class MediaTests
     {
         await using var i=new TestInstance();await i.Init();var folder=i.Paths.Get("media","facebook","fixture");Directory.CreateDirectory(folder);await File.WriteAllBytesAsync(Path.Combine(folder,"01.webm"),[1,2,3]);
         await using(var db=i.Factory.Open()){var p=new Post{Platform="facebook",PlatformPostId="fixture",IngestReadyAt=Clock.Now};db.Add(p);await db.SaveChangesAsync();db.Media.Add(new(){PostId=p.Id,Kind="video",Position=1,SourceKey="synthetic",OriginalUrl="https://unused.invalid/video.mp4"});await db.SaveChangesAsync();}
-        using var http=new HttpClient(new NoNetwork());var turn=await new Maintenance(i.Paths,i.Factory,http).Videos(new(new(),new(),Preferences.Parse("")),["facebook"],1,default);Assert.Equal(1,turn.Completed);Assert.Equal(0,turn.Failed);await using var check=i.Factory.Open();var row=await check.Media.SingleAsync();Assert.EndsWith("01.webm",row.Path);Assert.NotNull(row.ContentHash);
+        using var http=new HttpClient(NoNetwork());var turn=await new Maintenance(i.Paths,i.Factory,http).Videos(new(new(),new(),Preferences.Parse("")),["facebook"],1,default);Assert.Equal(1,turn.Completed);Assert.Equal(0,turn.Failed);await using var check=i.Factory.Open();var row=await check.Media.SingleAsync();Assert.EndsWith("01.webm",row.Path);Assert.NotNull(row.ContentHash);
     }
     // The probe said yt-dlp is absent: the fallback row is stamped and waits, with no attempt counted and no prune.
     [Fact]public async Task MissingDownloadToolKeepsTheVideoRowWaiting()
@@ -116,10 +115,10 @@ public sealed class MediaTests
         await using var i=new TestInstance();await i.Init();
         await using(var db=i.Factory.Open()){var p=new Post{Platform="facebook",PlatformPostId="fixture",Permalink="https://www.facebook.com/reel/synthetic/",IngestReadyAt=Clock.Now};db.Add(p);await db.SaveChangesAsync();db.Media.Add(new(){PostId=p.Id,Kind="video",Position=1,SourceKey="permalink:synthetic",OriginalUrl=p.Permalink});await db.SaveChangesAsync();
             await db.Put(ToolHealth.Key("yt-dlp"),System.Text.Json.JsonSerializer.Serialize(new ToolHealth.State("missing",null,null,Clock.Now),InstanceValidation.Json));}
-        using var http=new HttpClient(new NoNetwork());var turn=await new Maintenance(i.Paths,i.Factory,http).Videos(new(new(),new(),Preferences.Parse("")),["facebook"],1,default);Assert.Equal(new MediaTurn(1,0,1),turn);
+        using var http=new HttpClient(NoNetwork());var turn=await new Maintenance(i.Paths,i.Factory,http).Videos(new(new(),new(),Preferences.Parse("")),["facebook"],1,default);Assert.Equal(new MediaTurn(1,0,1),turn);
         await using var check=i.Factory.Open();var row=await check.Media.SingleAsync();Assert.Null(row.PrunedAt);Assert.Null(row.Path);Assert.Equal(0,row.DownloadAttempts);Assert.NotNull(row.AttemptedAt);Assert.Contains("yt-dlp",row.Error);
     }
-    sealed class NoNetwork:HttpMessageHandler{protected override Task<HttpResponseMessage>SendAsync(HttpRequestMessage r,CancellationToken ct)=>throw new InvalidOperationException("Recovery must not fetch an already published video");}
+    static StubHandler NoNetwork()=>new(HttpResponseMessage (_)=>throw new InvalidOperationException("Recovery must not fetch an already published video"));
     sealed class FlakyHandler(byte[] bytes):HttpMessageHandler{public bool Fail=true;public int Calls;protected override Task<HttpResponseMessage>SendAsync(HttpRequestMessage r,CancellationToken ct){Interlocked.Increment(ref Calls);if(Fail)throw new HttpRequestException("proxy tunnel 502");return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK){Content=new ByteArrayContent(bytes)});}}
     static InstanceSnapshot Instagram()=>new(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("instagram",new())},new(),Preferences.Parse(""));
     static string InstagramRaw(TestInstance i){var file=i.Paths.Get("raw","instagram","20260101T000000","001.json");Directory.CreateDirectory(Path.GetDirectoryName(file)!);File.WriteAllText(file,"""{"items":[{"pk":"101","code":"synthetic","user":{"pk":"501","username":"synthetic.person"},"caption":{"text":"Synthetic caption"},"image_versions2":{"candidates":[{"url":"https://cdn.test/v/a_n.jpg?stp=dst-jpg_e35&_nc_gid=one&oh=1&oe=1","width":640}]}}]}""");return file;}

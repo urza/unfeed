@@ -14,14 +14,9 @@ public sealed class JudgeTrialTests
 {
     static InstanceSnapshot Snapshot(int threshold = 4) => new(new() { Platforms = ImmutableDictionary<string, PlatformConfig>.Empty.Add("facebook", new()), Llm = new() { Enabled = true, BaseUrl = "http://synthetic.test/v1", FallbackBaseUrl = "", Vision = false, Threshold = threshold } }, new(), Preferences.Parse(""));
     static Post Judged(long authorId, int score, string labels = "[]") => new() { Platform = "facebook", PlatformPostId = Guid.NewGuid().ToString("N"), AuthorId = authorId, Text = "synthetic", IngestReadyAt = Clock.Now, PostedAt = Clock.Now, CategoriesJson = labels, VerdictContentRevision = 1, LlmScore = score, LlmReason = "stored" };
-    sealed class Reply(string content) : HttpMessageHandler
-    {
-        public int Calls;
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) { Interlocked.Increment(ref Calls); return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } }), System.Text.Encoding.UTF8, "application/json") }); }
-    }
     static async Task<(WorkCounts Counts, List<string> Lines)> Trial(TestInstance i, string verdict, int threshold = 4)
     {
-        using var handler = new Reply(verdict); using var http = new HttpClient(handler); var media = new MediaFiles(i.Paths, http); var lines = new List<string>();
+        using var handler = new StubHandler(_ => Replies.Llm(verdict)); using var http = new HttpClient(handler); var media = new MediaFiles(i.Paths, http); var lines = new List<string>();
         var counts = await new Processing(i.Paths, i.Factory, new(http), media, new(i.Paths, i.Factory, media)).Run(Snapshot(threshold), new("rescore", Trial: true), lines.Add, default);
         return (counts, lines);
     }

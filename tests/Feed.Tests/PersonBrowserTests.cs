@@ -1,6 +1,4 @@
-using System.Diagnostics;
 using System.Net;
-using System.Net.Sockets;
 using Feed.Core.Domain;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Playwright;
@@ -25,47 +23,39 @@ public sealed class PersonBrowserTests
                 new Post { Platform = "facebook", PlatformPostId = "unsorted", AuthorId = id, Text = "Unsorted synthetic post", PostedAt = Clock.Now },
                 new Post { Platform = "facebook", PlatformPostId = "hidden", AuthorId = id, Text = "Hidden synthetic post", Hidden = true, HiddenBy = "keyword", HiddenReason = "Synthetic rule", PostedAt = Clock.Now }); await db.SaveChangesAsync();
         }
-        var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
-        var root = new DirectoryInfo(AppContext.BaseDirectory); while (root is not null && !File.Exists(Path.Combine(root.FullName, "Feed.slnx"))) root = root.Parent;
-        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet") { WorkingDirectory = root!.FullName, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var arg in new[] { Path.Combine(root.FullName, "src/Feed.Web/bin/Debug/net10.0/Feed.Web.dll"), "--data", i.Paths.Root, "--urls", $"http://127.0.0.1:{port}" }) start.ArgumentList.Add(arg);
-        start.Environment["FEED_CLI"] = i.Paths.Get("missing-cli");
-        using var server = Process.Start(start)!; var stdout = server.StandardOutput.ReadToEndAsync(); var stderr = server.StandardError.ReadToEndAsync();
-        try {
-            var url = $"http://127.0.0.1:{port}"; using var http = new HttpClient(); using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            while (true) { if (server.HasExited) throw new InvalidOperationException(await stderr); try { if ((await http.GetAsync(url + "/healthz", timeout.Token)).IsSuccessStatusCode) break; } catch (HttpRequestException) { } await Task.Delay(100, timeout.Token); }
-            using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true }); await using var context = await browser.NewContextAsync(new() { JavaScriptEnabled = javascript, ViewportSize = new() { Width = 1280, Height = 900 } });
-            var page = await context.NewPageAsync(); await page.GotoAsync(url);
-            async Task Navigate(string name)
-            {
-                var target = page.GetByRole(AriaRole.Link, new() { Name = name, Exact = true });
-                var href = await target.GetAttributeAsync("href");
-                await target.ClickAsync();
-                await Assertions.Expect(page).ToHaveURLAsync(url + href);
-            }
-            var link = page.Locator(".card-head .author").First; Assert.Equal($"/people/{id}", await link.GetAttributeAsync("href")); Assert.Null(await link.GetAttributeAsync("target")); await link.ClickAsync();
-            Assert.Equal("Synthetic Person", await page.Locator("h1").InnerTextAsync()); Assert.Equal(2, await page.Locator(".card").CountAsync());
-            Assert.Equal("https://www.facebook.com/synthetic/", await page.GetByRole(AriaRole.Link, new() { Name = "Open platform profile" }).GetAttributeAsync("href"));
-            // The pause alone no longer disables the button; only the gates checked further down do.
-            Assert.True(await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).IsEnabledAsync());
-            await Navigate("Life"); Assert.Equal(1, await page.Locator(".card").CountAsync()); Assert.Contains("Visible synthetic", await page.Locator(".card").InnerTextAsync());
-            await Navigate("Unsorted (1)"); Assert.Contains("Unsorted synthetic", await page.Locator(".card").InnerTextAsync());
-            await Navigate("Hidden (1)"); Assert.Contains("Synthetic rule", await page.Locator(".hidden-tag").InnerTextAsync());
-            await Navigate("All posts");
-            await page.Locator("form[data-action=thumb]").First.Locator("button").ClickAsync();
-            await Assertions.Expect(page.Locator("form[data-action=thumb]").First.Locator("[data-count]")).ToHaveTextAsync("1"); await using (var db = i.Factory.Open()) Assert.Equal(1, await db.Feedback.CountAsync());
-            await page.SetViewportSizeAsync(390, 844);
-            if (javascript) await page.WaitForFunctionAsync("document.querySelectorAll('.feed-column').length === 1");
-            Assert.True((await page.Locator(".card").First.BoundingBoxAsync())!.Width >= 340);
-            Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));
-            await page.ScreenshotAsync(new() { Path = $"/tmp/feed-person-{javascript}.png", FullPage = true });
-            Assert.Equal(HttpStatusCode.NotFound, (await http.GetAsync(url + "/people/99999")).StatusCode);
-            using var platformLock = Feed.Core.Infrastructure.ResourceLock.Try(i.Paths, "facebook"); using var processingLock = Feed.Core.Infrastructure.ResourceLock.Try(i.Paths, "processing");
-            Assert.Equal(HttpStatusCode.BadRequest, (await http.PostAsync(url + $"/people/{id}/collect", new FormUrlEncodedContent([]))).StatusCode);
-            await page.ReloadAsync(); Assert.True(await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).IsEnabledAsync());
-            await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).ClickAsync(); Assert.Contains("Collection queued for this person", await page.Locator("[role=status]").InnerTextAsync());
-            await using (var db = i.Factory.Open()) { var request = await db.RunRequests.SingleAsync(r => r.Kind == "collect"); Assert.Equal(id, request.PersonAuthorId); Assert.Equal("https://www.facebook.com/synthetic/", request.Person); }
-            Assert.True(await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).IsDisabledAsync());
-        } finally { if (!server.HasExited) server.Kill(true); await server.WaitForExitAsync(); await stdout; await stderr; }
+        await using var host = await WebHost.Start(i, s => s.Environment["FEED_CLI"] = i.Paths.Get("missing-cli"));
+        var url = host.BaseAddress.ToString().TrimEnd('/');
+        using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true }); await using var context = await browser.NewContextAsync(new() { JavaScriptEnabled = javascript, ViewportSize = new() { Width = 1280, Height = 900 } });
+        var page = await context.NewPageAsync(); await page.GotoAsync(url);
+        async Task Navigate(string name)
+        {
+            var target = page.GetByRole(AriaRole.Link, new() { Name = name, Exact = true });
+            var href = await target.GetAttributeAsync("href");
+            await target.ClickAsync();
+            await Assertions.Expect(page).ToHaveURLAsync(url + href);
+        }
+        var link = page.Locator(".card-head .author").First; Assert.Equal($"/people/{id}", await link.GetAttributeAsync("href")); Assert.Null(await link.GetAttributeAsync("target")); await link.ClickAsync();
+        Assert.Equal("Synthetic Person", await page.Locator("h1").InnerTextAsync()); Assert.Equal(2, await page.Locator(".card").CountAsync());
+        Assert.Equal("https://www.facebook.com/synthetic/", await page.GetByRole(AriaRole.Link, new() { Name = "Open platform profile" }).GetAttributeAsync("href"));
+        // The pause alone no longer disables the button; only the gates checked further down do.
+        Assert.True(await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).IsEnabledAsync());
+        await Navigate("Life"); Assert.Equal(1, await page.Locator(".card").CountAsync()); Assert.Contains("Visible synthetic", await page.Locator(".card").InnerTextAsync());
+        await Navigate("Unsorted (1)"); Assert.Contains("Unsorted synthetic", await page.Locator(".card").InnerTextAsync());
+        await Navigate("Hidden (1)"); Assert.Contains("Synthetic rule", await page.Locator(".hidden-tag").InnerTextAsync());
+        await Navigate("All posts");
+        await page.Locator("form[data-action=thumb]").First.Locator("button").ClickAsync();
+        await Assertions.Expect(page.Locator("form[data-action=thumb]").First.Locator("[data-count]")).ToHaveTextAsync("1"); await using (var db = i.Factory.Open()) Assert.Equal(1, await db.Feedback.CountAsync());
+        await page.SetViewportSizeAsync(390, 844);
+        if (javascript) await page.WaitForFunctionAsync("document.querySelectorAll('.feed-column').length === 1");
+        Assert.True((await page.Locator(".card").First.BoundingBoxAsync())!.Width >= 340);
+        Assert.True(await page.EvaluateAsync<bool>("document.documentElement.scrollWidth <= innerWidth"));
+        await page.ScreenshotAsync(new() { Path = $"/tmp/feed-person-{javascript}.png", FullPage = true });
+        Assert.Equal(HttpStatusCode.NotFound, (await host.Http.GetAsync(url + "/people/99999")).StatusCode);
+        using var platformLock = Feed.Core.Infrastructure.ResourceLock.Try(i.Paths, "facebook"); using var processingLock = Feed.Core.Infrastructure.ResourceLock.Try(i.Paths, "processing");
+        Assert.Equal(HttpStatusCode.BadRequest, (await host.Http.PostAsync(url + $"/people/{id}/collect", new FormUrlEncodedContent([]))).StatusCode);
+        await page.ReloadAsync(); Assert.True(await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).IsEnabledAsync());
+        await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).ClickAsync(); Assert.Contains("Collection queued for this person", await page.Locator("[role=status]").InnerTextAsync());
+        await using (var db = i.Factory.Open()) { var request = await db.RunRequests.SingleAsync(r => r.Kind == "collect"); Assert.Equal(id, request.PersonAuthorId); Assert.Equal("https://www.facebook.com/synthetic/", request.Person); }
+        Assert.True(await page.GetByRole(AriaRole.Button, new() { Name = "Collect latest posts" }).IsDisabledAsync());
     }
 }

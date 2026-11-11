@@ -16,8 +16,6 @@ public sealed class VideoContextTests
         public int Calls;
         public Task<string> Extract(VideoSource source, CancellationToken ct) { Interlocked.Increment(ref Calls); return extract(source, ct); }
     }
-    sealed class Handler(Func<HttpRequestMessage, Task<HttpResponseMessage>> send) : HttpMessageHandler
-    { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => send(request); }
     static readonly VideoSource Source = new("https://www.youtube.com/watch?v=synthetic", "shared");
     static readonly VideoContextConfig Config = new() { Enabled = true, CaptionLanguages = ["cs", "en"] };
     static string Metadata => """{"id":"synthetic","title":"Synthetic lesson","description":"A useful explanation","uploader":"Original creator","duration":125,"chapters":[{"title":"Intro","start_time":0}],"subtitles":{"en":[{"ext":"vtt","url":"https://captions.example.test/manual.vtt"}]},"automatic_captions":{"cs-orig":[{"ext":"json3","url":"https://captions.example.test/auto.json3"}]}}""";
@@ -49,7 +47,7 @@ public sealed class VideoContextTests
     {
         await using var i = new TestInstance();
         var tool = new Tool((s, ct) => Task.FromResult(Metadata));
-        using var http = new HttpClient(new Handler(r => { Assert.Equal("https://captions.example.test/manual.vtt", r.RequestUri!.AbsoluteUri); Assert.Null(r.Headers.Authorization); Assert.False(r.Headers.Contains("Cookie")); return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n<v Speaker>Hello &amp; welcome</v>\n\n00:00:02.000 --> 00:00:03.000\nHello &amp; welcome again") }); }));
+        using var http = new HttpClient(new StubHandler(r => { Assert.Equal("https://captions.example.test/manual.vtt", r.RequestUri!.AbsoluteUri); Assert.Null(r.Headers.Authorization); Assert.False(r.Headers.Contains("Cookie")); return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n<v Speaker>Hello &amp; welcome</v>\n\n00:00:02.000 --> 00:00:03.000\nHello &amp; welcome again") }); }));
         VideoContext first;
         using (var provider = new VideoContextProvider(i.Paths, http, tool)) first = await provider.Get(Source, Config, default);
         Assert.Equal("Original creator", first.Uploader); Assert.Equal("shared", first.Relation); Assert.Equal(125, first.DurationSeconds);
@@ -61,7 +59,7 @@ public sealed class VideoContextTests
     {
         await using var i = new TestInstance();
         var tool = new Tool((s, ct) => Task.FromResult("""{"id":"synthetic","automatic_captions":{"en":[{"ext":"json3","url":"https://captions.example.test/translation"}],"cs-orig":[{"ext":"json3","url":"https://captions.example.test/original"}]}}"""));
-        using var http = new HttpClient(new Handler(r => { Assert.EndsWith("/original", r.RequestUri!.AbsoluteUri); return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"events":[{"segs":[{"utf8":"Ahoj "},{"utf8":"světe"}]}]}""") }); }));
+        using var http = new HttpClient(new StubHandler(r => { Assert.EndsWith("/original", r.RequestUri!.AbsoluteUri); return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"events":[{"segs":[{"utf8":"Ahoj "},{"utf8":"světe"}]}]}""") }); }));
         using var provider = new VideoContextProvider(i.Paths, http, tool);
         var result = await provider.Get(Source, Config, default); Assert.True(result.Captions!.Automatic); Assert.Equal("cs-orig", result.Captions.Language); Assert.Equal("Ahoj světe", result.Captions.Text);
         var other = await provider.Get(Source, Config with { CaptionLanguages = ["en"] }, default); Assert.Equal("not_available", other.Captions!.Status); Assert.Equal(2, tool.Calls);
@@ -77,7 +75,7 @@ public sealed class VideoContextTests
     [Fact] public async Task FailedCaptionFetchPreservesMetadataAndHasShortCacheTtl()
     {
         await using var i = new TestInstance(); var tool = new Tool((s,ct) => Task.FromResult(Metadata));
-        using var http = new HttpClient(new Handler(r => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden))));
+        using var http = new HttpClient(new StubHandler(r => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden))));
         using var provider = new VideoContextProvider(i.Paths,http,tool);
         var result = await provider.Get(Source,Config,default); Assert.Equal("available",result.Status); Assert.Equal("Synthetic lesson",result.Title); Assert.Equal("unavailable",result.Captions!.Status);
         using var cache = JsonDocument.Parse(File.ReadAllText(Assert.Single(Directory.GetFiles(i.Paths.Get("video-context"),"*.json"))));
@@ -126,7 +124,7 @@ public sealed class VideoContextTests
         await using var i=new TestInstance();await i.Init();long id;
         await using(var db=i.Factory.Open()){var p=new Post{Platform="facebook",PlatformPostId="synthetic",SharedUrl=Source.Url,IngestReadyAt=Clock.Now};if(hidden)p.SetHidden("keyword","synthetic");db.Add(p);await db.SaveChangesAsync();id=p.Id;}
         var context=new Context(new(Source.Url,"shared","available"));
-        using var http=new HttpClient(new Handler(r=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent("""{"choices":[{"message":{"content":"{\"score\":9,\"reason\":\"Allowed\",\"categories\":[]}"}}]}""")})));
+        using var http=new HttpClient(new StubHandler(r=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent("""{"choices":[{"message":{"content":"{\"score\":9,\"reason\":\"Allowed\",\"categories\":[]}"}}]}""")})));
         var media=new MediaFiles(i.Paths,http);var snapshot=new InstanceSnapshot(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("facebook",new()),VideoContext=Config with{Enabled=enabled},Llm=new(){Enabled=true,BaseUrl="http://synthetic.test/v1",Vision=false}},new(),Preferences.Parse(""));
         await new Processing(i.Paths,i.Factory,new(http),media,new(i.Paths,i.Factory,media),context).Run(snapshot,new("rescore",PostId:id),null,default);
         Assert.Equal(0,context.Calls);
@@ -136,7 +134,7 @@ public sealed class VideoContextTests
         await using var i=new TestInstance();await i.Init();long id;
         await using(var db=i.Factory.Open()){var p=new Post{Platform="facebook",PlatformPostId="synthetic",SharedUrl=Source.Url,IngestReadyAt=Clock.Now};db.Add(p);await db.SaveChangesAsync();id=p.Id;}
         var context=new CallbackContext(async ct=>{await using var db=i.Factory.Open();await db.Posts.Where(p=>p.Id==id).ExecuteUpdateAsync(u=>u.SetProperty(p=>p.ContentRevision,p=>p.ContentRevision+1),ct);return new(Source.Url,"shared","available");});
-        int calls=0;using var http=new HttpClient(new Handler(r=>{calls++;throw new InvalidOperationException("Must not call model");}));
+        int calls=0;using var http=new HttpClient(new StubHandler(HttpResponseMessage (r)=>{calls++;throw new InvalidOperationException("Must not call model");}));
         var media=new MediaFiles(i.Paths,http);var snapshot=new InstanceSnapshot(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("facebook",new()),VideoContext=Config,Llm=new(){Enabled=true,BaseUrl="http://synthetic.test/v1",Vision=false}},new(),Preferences.Parse(""));
         var counts=await new Processing(i.Paths,i.Factory,new(http),media,new(i.Paths,i.Factory,media),context).Run(snapshot,new("rescore",PostId:id),null,default);
         Assert.Equal(0,calls);Assert.Equal(1,counts.Superseded);
@@ -147,7 +145,7 @@ public sealed class VideoContextTests
         await using(var db=i.Factory.Open()){db.Add(new Post{Platform="facebook",PlatformPostId="video",SharedUrl=Source.Url,PostedAt=Clock.Now,IngestReadyAt=Clock.Now});db.Add(new Post{Platform="facebook",PlatformPostId="text",PostedAt=Clock.Now.AddMinutes(-1),IngestReadyAt=Clock.Now});await db.SaveChangesAsync();}
         var entered=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);var release=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);var modelCalled=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var context=new CallbackContext(async ct=>{entered.SetResult();await release.Task.WaitAsync(ct);return new(Source.Url,"shared","available");});
-        using var http=new HttpClient(new Handler(r=>{modelCalled.TrySetResult();return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent("""{"choices":[{"message":{"content":"{\"score\":9,\"reason\":\"Allowed\",\"categories\":[]}"}}]}""")});}));
+        using var http=new HttpClient(new StubHandler(r=>{modelCalled.TrySetResult();return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent("""{"choices":[{"message":{"content":"{\"score\":9,\"reason\":\"Allowed\",\"categories\":[]}"}}]}""")});}));
         var media=new MediaFiles(i.Paths,http);var snapshot=new InstanceSnapshot(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("facebook",new()),VideoContext=Config,Llm=new(){Enabled=true,Parallel=2,BaseUrl="http://synthetic.test/v1",Vision=false}},new(),Preferences.Parse(""));
         using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var run=new Processing(i.Paths,i.Factory,new(http),media,new(i.Paths,i.Factory,media),context).Run(snapshot,new("rescore"),null,timeout.Token);
@@ -166,7 +164,7 @@ public sealed class VideoContextTests
         await using(var db=i.Factory.Open()){db.Add(new Post{Platform="facebook",PlatformPostId="video",SharedUrl=Source.Url,PostedAt=Clock.Now,IngestReadyAt=Clock.Now});db.Add(new Post{Platform="facebook",PlatformPostId="text",PostedAt=Clock.Now.AddMinutes(-1),IngestReadyAt=Clock.Now});await db.SaveChangesAsync();}
         var release=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var context=new CallbackContext(async ct=>{await release.Task.WaitAsync(ct);return new(Source.Url,"shared","available");});
-        int calls=0;using var http=new HttpClient(new Handler(r=>{Interlocked.Increment(ref calls);return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));}));
+        int calls=0;using var http=new HttpClient(new StubHandler(r=>{Interlocked.Increment(ref calls);return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));}));
         var media=new MediaFiles(i.Paths,http);var snapshot=new InstanceSnapshot(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("facebook",new()),VideoContext=Config,Llm=new(){Enabled=true,Parallel=2,Batch=1,BaseUrl="http://synthetic.test/v1",Vision=false}},new(),Preferences.Parse(""));
         using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var counts=await new Processing(i.Paths,i.Factory,new(http),media,new(i.Paths,i.Factory,media),context).Run(snapshot,new("rescore"),s=>{if(s.StartsWith("batch #"))release.TrySetResult();},timeout.Token);
@@ -179,7 +177,7 @@ public sealed class VideoContextTests
         await using(var db=i.Factory.Open()){var p=new Post{Platform="facebook",PlatformPostId="synthetic",Text="Look!",SharedUrl=Source.Url,IngestReadyAt=Clock.Now};db.Add(p);await db.SaveChangesAsync();id=p.Id;}
         var context=new Context(new(Source.Url,"shared",status,Uploader:"Other creator",Captions:new(status,Text:status=="available"?"Synthetic spoken content":null)));
         string? hash=null;
-        using var http=new HttpClient(new Handler(async r=>{var body=await r.Content!.ReadAsStringAsync();hash=Prompts.Sha(body);using var json=JsonDocument.Parse(body);var text=json.RootElement.GetProperty("messages")[1].GetProperty("content")[0].GetProperty("text").GetString()!;Assert.Contains("Video context:",text);Assert.Contains("Other creator",text);Assert.Contains(status,text);return new(HttpStatusCode.OK){Content=new StringContent("""{"choices":[{"message":{"content":"{\"score\":9,\"reason\":\"Allowed synthetic update\",\"categories\":[]}"}}]}""")};}));
+        using var http=new HttpClient(new StubHandler(async r=>{var body=await r.Content!.ReadAsStringAsync();hash=Prompts.Sha(body);using var json=JsonDocument.Parse(body);var text=json.RootElement.GetProperty("messages")[1].GetProperty("content")[0].GetProperty("text").GetString()!;Assert.Contains("Video context:",text);Assert.Contains("Other creator",text);Assert.Contains(status,text);return new(HttpStatusCode.OK){Content=new StringContent("""{"choices":[{"message":{"content":"{\"score\":9,\"reason\":\"Allowed synthetic update\",\"categories\":[]}"}}]}""")};}));
         var media=new MediaFiles(i.Paths,http);var snapshot=new InstanceSnapshot(new(){Platforms=ImmutableDictionary<string,PlatformConfig>.Empty.Add("facebook",new()),VideoContext=Config,Llm=new(){Enabled=true,BaseUrl="http://synthetic.test/v1",Vision=false}},new(),Preferences.Parse(""));
         var counts=await new Processing(i.Paths,i.Factory,new(http),media,new(i.Paths,i.Factory,media),context).Run(snapshot,new("rescore",PostId:id),null,default);
         Assert.Equal(1,counts.Completed);Assert.Equal(1,context.Calls);await using var check=i.Factory.Open();var stored=await check.Posts.SingleAsync();Assert.False(stored.Hidden);Assert.Equal(hash,stored.VerdictInputHash);

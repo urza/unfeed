@@ -43,7 +43,7 @@ public sealed class BackgroundTests
         int downloads = 0, archives = 0;
         string subject = "SyntheticScene";
         var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
-        using var http = new HttpClient(new Handler(r => {
+        using var http = new HttpClient(new StubHandler(r => {
             if (r.RequestUri!.AbsolutePath.Contains("HPImageArchive"))
             {
                 archives++;
@@ -99,17 +99,15 @@ public sealed class BackgroundTests
         Assert.True(gallery.Action("pin", gallery.Current.Images[0].Name));
     }
 
-    sealed class Handler(Func<HttpRequestMessage,HttpResponseMessage> response):HttpMessageHandler
-    { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)=>Task.FromResult(response(request)); }
     [Fact]public async Task EightMarketWindowsDeduplicateAndPersistRemovalsAndRefreshDelay()
     {
         await using var i=new TestInstance();int archives=0,downloads=0;
-        using var handler=new Handler(r=>{
+        using var handler=new StubHandler(r=>{
             if(r.RequestUri!.AbsolutePath.Contains("HPImageArchive")){archives++;return new(System.Net.HttpStatusCode.OK){Content=new StringContent(System.Text.Json.JsonSerializer.Serialize(new{images=Enumerable.Range(0,8).Select(n=>new{urlbase="/th?id=OHR.Synthetic"+n}).ToArray()}))};}
             downloads++;Assert.EndsWith("_1920x1080.jpg",r.RequestUri.ToString());var bytes=new byte[24];new byte[]{137,80,78,71,13,10,26,10}.CopyTo(bytes,0);System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(bytes.AsSpan(16,4),1920);System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(bytes.AsSpan(20,4),1080);bytes[8]=(byte)r.RequestUri.ToString().Split("Synthetic")[1][0];var content=new ByteArrayContent(bytes);content.Headers.ContentType=new("image/png");return new(System.Net.HttpStatusCode.OK){Content=content,RequestMessage=r};
         });using var http=new HttpClient(handler);var files=new InstanceFiles(i.Paths);var gallery=new Backgrounds(i.Paths,files,NullLogger<Backgrounds>.Instance);await gallery.Refresh(http,default);Assert.Equal(8,archives);Assert.Equal(8,downloads);Assert.Equal(8,gallery.Current.Images.Length);
         gallery.Action("remove",gallery.Current.Images[0].Name);File.Delete(i.Paths.Get("backgrounds","refresh.json"));await gallery.Refresh(http,default);Assert.Equal(8,downloads);Assert.Equal(7,gallery.Current.Images.Length);
         var restarted=new Backgrounds(i.Paths,files,NullLogger<Backgrounds>.Instance);restarted.Scan();await restarted.Refresh(http,default);Assert.Equal(16,archives);Assert.NotNull(restarted.Current.Outcome);
-        File.Delete(i.Paths.Get("backgrounds","refresh.json"));using var failure=new HttpClient(new Handler(_=>new(System.Net.HttpStatusCode.ServiceUnavailable)));await restarted.Refresh(failure,default);Assert.Equal(7,restarted.Current.Images.Length);await restarted.Refresh(http,default);Assert.Equal(16,archives);
+        File.Delete(i.Paths.Get("backgrounds","refresh.json"));using var failure=new HttpClient(new StubHandler(_=>new(System.Net.HttpStatusCode.ServiceUnavailable)));await restarted.Refresh(failure,default);Assert.Equal(7,restarted.Current.Images.Length);await restarted.Refresh(http,default);Assert.Equal(16,archives);
     }
 }
