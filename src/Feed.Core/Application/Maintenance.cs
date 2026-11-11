@@ -95,26 +95,20 @@ public sealed class Maintenance(InstancePaths paths, DbFactory factory, HttpClie
         if (p.Permalink is null) throw new IOException("no permalink for video fallback");
         // No cookies on purpose (plan 10): the owner's exported session must not be replayed by a second client with
         // another fingerprint. A permalink that needs a login fails here and the row is pruned after three attempts.
-        var start = new ProcessStartInfo("yt-dlp") { UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
+        var start = new ProcessStartInfo("yt-dlp");
         var args = new List<string> { "--no-playlist", "--no-progress", "--max-filesize", cap.ToString(), "-f", "best[ext=mp4]/best", "--print", "after_move:filepath", "-o", output + ".%(ext)s", "--", p.Permalink }; foreach (var a in args) start.ArgumentList.Add(a);
-        using var process = Process.Start(start)!; using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(300)); var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token); var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
-        try {
-            await process.WaitForExitAsync(timeout.Token); var printed = await stdout; var error = await stderr;
-            var result = printed.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim();
-            if (process.ExitCode != 0 || result is null || !Path.GetFullPath(result).StartsWith(Path.GetFullPath(output) + ".", StringComparison.Ordinal) || !File.Exists(result)) throw new IOException("yt-dlp: " + error);
-            if (new FileInfo(result).Length > cap) throw new OversizeException(); return result;
-        }
-        finally { if (!process.HasExited) process.Kill(true); await process.WaitForExitAsync(); try { await Task.WhenAll(stdout, stderr); } catch (OperationCanceledException) { } }
+        var (exit, printed, error) = await ToolProcess.Run(start, TimeSpan.FromSeconds(300), ct);
+        var result = printed.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim();
+        if (exit != 0 || result is null || !Path.GetFullPath(result).StartsWith(Path.GetFullPath(output) + ".", StringComparison.Ordinal) || !File.Exists(result)) throw new IOException("yt-dlp: " + error);
+        if (new FileInfo(result).Length > cap) throw new OversizeException(); return result;
     }
     static async Task<(int? Width, int? Height)> VideoSize(string path, CancellationToken ct)
     {
         try {
-            var start = new ProcessStartInfo("ffprobe") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+            var start = new ProcessStartInfo("ffprobe");
             foreach (var arg in new[] { "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", path }) start.ArgumentList.Add(arg);
-            using var process = Process.Start(start)!; using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(10));
-            var output = process.StandardOutput.ReadToEndAsync(); var error = process.StandardError.ReadToEndAsync();
-            try { await process.WaitForExitAsync(timeout.Token); var parts = (await output).Trim().Split('x'); if (parts.Length == 2 && int.TryParse(parts[0], out var w) && int.TryParse(parts[1], out var h)) return (w, h); }
-            finally { if (!process.HasExited) process.Kill(true); await process.WaitForExitAsync(); await Task.WhenAll(output, error); }
+            var (_, output, _) = await ToolProcess.Run(start, TimeSpan.FromSeconds(10), ct);
+            var parts = output.Trim().Split('x'); if (parts.Length == 2 && int.TryParse(parts[0], out var w) && int.TryParse(parts[1], out var h)) return (w, h);
         }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or IOException || e is OperationCanceledException && !ct.IsCancellationRequested) { }
         return (null, null);

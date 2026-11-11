@@ -37,22 +37,15 @@ public static class ToolHealth
     // One version call with a short timeout. ffmpeg takes a single dash; the others take two.
     public static async Task<State> Check(string tool, CancellationToken ct)
     {
-        var start = new ProcessStartInfo(tool) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        var start = new ProcessStartInfo(tool);
         start.ArgumentList.Add(tool == "ffmpeg" ? "-version" : "--version");
         try
         {
-            using var process = Process.Start(start)!;
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(10));
-            var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token); var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
-            try
-            {
-                await process.WaitForExitAsync(timeout.Token);
-                var first = (await stdout).Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "";
-                if (process.ExitCode != 0) return new("error", null, Trim($"exit {process.ExitCode}: {(await stderr).Trim()}"), Clock.Now);
-                if (first.StartsWith(tool + " version ", StringComparison.OrdinalIgnoreCase)) first = first[(tool.Length + 9)..];
-                return new("ok", Trim(first.Split(' ', 2)[0]), null, Clock.Now);
-            }
-            finally { if (!process.HasExited) process.Kill(true); await process.WaitForExitAsync(); try { await Task.WhenAll(stdout, stderr); } catch (OperationCanceledException) { } }
+            var (exit, stdout, stderr) = await ToolProcess.Run(start, TimeSpan.FromSeconds(10), ct);
+            var first = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "";
+            if (exit != 0) return new("error", null, Trim($"exit {exit}: {stderr.Trim()}"), Clock.Now);
+            if (first.StartsWith(tool + " version ", StringComparison.OrdinalIgnoreCase)) first = first[(tool.Length + 9)..];
+            return new("ok", Trim(first.Split(' ', 2)[0]), null, Clock.Now);
         }
         catch (Win32Exception) { return new("missing", null, null, Clock.Now); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return new("error", null, "no answer within 10 seconds", Clock.Now); }

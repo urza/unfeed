@@ -181,6 +181,18 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
             if (scope.Trial) return await eligible.AnyAsync(cancel);
             return (work.Task == "judge" ? await eligible.ExecuteUpdateAsync(s => s.SetProperty(x => x.LlmAttemptedAt, Clock.Now).SetProperty(x => x.LlmTokenLimit, x => scope.Kind == "process" ? x.LlmTokenLimit : null), cancel) : await eligible.ExecuteUpdateAsync(s => s.SetProperty(x => x.SummaryAttemptedAt, Clock.Now), cancel)) == 1;
         }
+        // Under the dispatch gate: a stopped task is not dispatched; a post whose row changed since preparation
+        // is reported unapplied. True means the model call may be spent.
+        async Task<bool> Admit(Prepared work)
+        {
+            bool closed, authorized = false;
+            await dispatchGate.WaitAsync(token);
+            try { closed = stopped.ContainsKey(work.Task); if (!closed) authorized = await Stamp(work, token); }
+            finally { dispatchGate.Release(); }
+            if (closed) { Interlocked.Increment(ref counts.Undispatched); Interlocked.Increment(ref counts.Stage(work.Post.Platform, work.Task).Undispatched); }
+            else if (!authorized) { Interlocked.Increment(ref counts.Unapplied); await results.Writer.WriteAsync(new(work, null, null, null, false), token); }
+            return authorized;
+        }
         async Task Worker()
         {
             try
@@ -189,12 +201,7 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                 {
                     var work = initial;
                     Interlocked.Decrement(ref counts.Prepared);
-                    bool authorized = false, closed;
-                    await dispatchGate.WaitAsync(token);
-                    try { closed = stopped.ContainsKey(work.Task); if (!closed) authorized = await Stamp(work, token); }
-                    finally { dispatchGate.Release(); }
-                    if (closed) { Interlocked.Increment(ref counts.Undispatched); Interlocked.Increment(ref counts.Stage(work.Post.Platform, work.Task).Undispatched); continue; }
-                    if (!authorized) { Interlocked.Increment(ref counts.Unapplied); await results.Writer.WriteAsync(new(work, null, null, null, false), token); continue; }
+                    if (!await Admit(work)) continue;
                     Result result; bool active = false;
                     try
                     {
@@ -209,11 +216,7 @@ public sealed class Processing(InstancePaths paths, DbFactory factory, ModelClie
                             work = work with { Messages = messages, Hash = Prompts.Sha(JsonSerializer.Serialize(ModelClient.RequestBody(instance.Config.Llm, messages, work.MaxTokens))) };
                             progress?.Invoke($"post #{work.Post.Id} video context: {context.Status}; captions {context.Captions?.Status ?? "not_available"}; error {context.Error ?? context.Captions?.Error ?? "none"}");
                             // Metadata retrieval can take time. Recheck eligibility before spending a model call.
-                            await dispatchGate.WaitAsync(token);
-                            try { closed = stopped.ContainsKey(work.Task); authorized = !closed && await Stamp(work, token); }
-                            finally { dispatchGate.Release(); }
-                            if (closed) { Interlocked.Increment(ref counts.Undispatched); Interlocked.Increment(ref counts.Stage(work.Post.Platform, work.Task).Undispatched); continue; }
-                            if (!authorized) { Interlocked.Increment(ref counts.Unapplied); await results.Writer.WriteAsync(new(work, null, null, null, false), token); continue; }
+                            if (!await Admit(work)) continue;
                         }
                         Interlocked.Increment(ref counts.Active); active = true;
                         if (work.Task == "judge") { var response = await model.Call(instance.Config.Llm, work.Messages, work.MaxTokens, s => Prompts.ParseVerdict(s, instance.Taxonomy), token); result = new(work, response.Value, response.Endpoint, null, true); }

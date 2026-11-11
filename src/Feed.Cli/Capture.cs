@@ -51,6 +51,10 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
         await using (var db = factory.Open()) await db.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(u => u.SetProperty(r => r.RawDir, run.RawDir), ct);
         var pending = new ConcurrentBag<Task>(); var hashes = new Dictionary<string, string>(); string? activeVisit = null; var captured = new ConcurrentDictionary<string, Observation>(); var surfaceObservations = new ConcurrentDictionary<string, Observation>(); var seen = new HashSet<string>(); var serial = new SemaphoreSlim(1); int batches = 0, listenerErrors = 0, parserErrors = 0, blockedResponses = 0, scrolls = 0, visited = 0, incomplete = 0, emptyVisits = 0, unrendered = 0; bool explicitEmpty = false;
         await using (var db = factory.Open()) foreach (var id in await db.Posts.Where(p => p.Platform == platform).Select(p => p.PlatformPostId).ToListAsync(ct)) seen.Add(id);
+        // Counters and surface observations are judged for the active visit only; a late response from an earlier
+        // visit still lands in its raw file and in `captured`, but must not shape the current visit's verdict.
+        void Count(ParsedCapture parsed) { explicitEmpty |= parsed.ExplicitEmpty; blockedResponses += parsed.Diagnostics.Count; parserErrors += parsed.Issues.Count(i => i.Code == "unknown_response"); }
+        void Observe(Observation observation) => surfaceObservations.AddOrUpdate(observation.Post.PlatformPostId, observation, (_, existing) => existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(observation.TimelineOwnerIds).Distinct().ToArray() });
         async Task Save(string body, CaptureContext context)
         {
             await serial.WaitAsync(ct);
@@ -63,18 +67,18 @@ public sealed class Capture(InstancePaths paths, DbFactory factory, Ingest inges
                     var association = context with { BodyHash = hash };
                     if (!visits.Contains(association)) { visits.Add(association); InstancePaths.AtomicWrite(existing + ".visits", JsonSerializer.Serialize(visits)); }
                     // The bytes already have a raw ledger entry; the visit still observed them.
-                    var replay = PayloadParser.Parse(platform, body, friends, context); if (context.Visit == activeVisit) { explicitEmpty |= replay.ExplicitEmpty; blockedResponses += replay.Diagnostics.Count; parserErrors += replay.Issues.Count(i => i.Code == "unknown_response"); }
-                    foreach (var observation in replay.Posts.Where(_ => context.Visit == activeVisit)) surfaceObservations.AddOrUpdate(observation.Post.PlatformPostId, observation, (_, existing) => existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(observation.TimelineOwnerIds).Distinct().ToArray() });
+                    var replay = PayloadParser.Parse(platform, body, friends, context);
+                    if (context.Visit == activeVisit) { Count(replay); foreach (var observation in replay.Posts) Observe(observation); }
                     return;
                 }
                 var path = Path.Combine(directory, $"{++batches:000}{(platform == "facebook" ? ".jsonl" : ".json")}"); CaptureContext.Publish(path, body, context); hashes[hash] = path; await ingest.Register(platform, path, run.Id, ct);
-                var parsed = PayloadParser.Parse(platform, await File.ReadAllTextAsync(path, ct), friends, context); if (context.Visit == activeVisit) { explicitEmpty |= parsed.ExplicitEmpty; blockedResponses += parsed.Diagnostics.Count; parserErrors += parsed.Issues.Count(i => i.Code == "unknown_response"); }
+                var parsed = PayloadParser.Parse(platform, await File.ReadAllTextAsync(path, ct), friends, context); if (context.Visit == activeVisit) Count(parsed);
                 // A parser diagnostic blocks its raw at ingest until a parser upgrade replays it. It is not a listener
                 // error: the browser did its job, so the run and the visit are judged on the posts they observed.
                 // blockedResponses counts every diagnostic for the visit note; parserErrors counts only unrecognized
                 // shapes, because a GraphQL error on a post branch can be transient and still deserves a browser retry.
                 foreach (var diagnostic in parsed.Diagnostics) Console.Error.WriteLine("parser warning: " + diagnostic);
-                foreach (var observation in parsed.Posts) { captured.TryAdd(observation.Post.PlatformPostId, observation); if (context.Visit == activeVisit) surfaceObservations.AddOrUpdate(observation.Post.PlatformPostId, observation, (_, existing) => existing with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(observation.TimelineOwnerIds).Distinct().ToArray() }); }
+                foreach (var observation in parsed.Posts) { captured.TryAdd(observation.Post.PlatformPostId, observation); if (context.Visit == activeVisit) Observe(observation); }
             }
             catch (Exception e) when (e is not OperationCanceledException) { Interlocked.Increment(ref listenerErrors); Console.Error.WriteLine("capture warning: " + e.Message); }
             finally { serial.Release(); }
