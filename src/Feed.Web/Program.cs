@@ -16,7 +16,7 @@ var data = dataArg.v is null ? args.FirstOrDefault(a=>a.StartsWith("--data="))?[
 var paths = new InstancePaths(data); paths.Create(); var files = new InstanceFiles(paths); var initial = files.Current; var factory = new DbFactory(paths);
 await using(var db=factory.Open()){await db.Initialize();await Prompts.RestampVersions(db,initial);}
 if(builder.Configuration["urls"] is null && Environment.GetEnvironmentVariable("ASPNETCORE_URLS") is null)builder.WebHost.UseUrls($"http://{initial.Config.Web.Host}:{initial.Config.Web.Port}");
-var minimum=initial.Config.Ui.LogLevel switch{"trace"=>LogLevel.Trace,"debug"=>LogLevel.Debug,"warn"=>LogLevel.Warning,"error"=>LogLevel.Error,_=>LogLevel.Information};
+var minimum=LogSink.Level(initial.Config.Ui.LogLevel);
 builder.Logging.ClearProviders();builder.Logging.SetMinimumLevel(minimum);builder.Logging.AddProvider(new LogSink(paths,"web",minimum));builder.Logging.AddFilter("Microsoft",LogLevel.Warning);
 builder.Services.AddSingleton(paths);builder.Services.AddSingleton(files);builder.Services.AddSingleton(factory);builder.Services.AddSingleton<Actions>();builder.Services.AddSingleton<FeedQuery>();builder.Services.AddRazorComponents();builder.Services.AddResponseCompression();
 builder.Services.AddSingleton<Scheduler>();builder.Services.AddHostedService(sp=>sp.GetRequiredService<Scheduler>());builder.Services.AddSingleton<Backgrounds>();builder.Services.AddHostedService(sp=>sp.GetRequiredService<Backgrounds>());

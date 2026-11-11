@@ -95,26 +95,3 @@ public static class IdentityStore
     }
 }
 public sealed record IdentityEventRow(IdentityEvent Event, Author? Kept, string? OtherName, string? OtherId, long? OtherAuthorId);
-public sealed record CompletionEvidence(string ListId, string? Cursor, string? NextCursor, bool Terminal, int? ExactTotal, bool ParseFailed = false);
-public static class FriendsCompleteness
-{
-    public static bool Proven(IReadOnlyList<CompletionEvidence> pages, int people, bool interrupted, out string reason)
-    {
-        reason = "no proven completion evidence"; if (interrupted || people == 0 || pages.Count == 0) return false;
-        if (pages.Any(p => p.ParseFailed) || pages.Select(p => p.ListId).Distinct().Count() != 1) { reason = "parse failure or mixed lists"; return false; }
-        var totals = pages.Where(p => p.ExactTotal.HasValue).Select(p => p.ExactTotal!.Value).Distinct().ToArray(); if (totals.Length > 1 || totals.Length == 1 && totals[0] != people) { reason = "count mismatch"; return false; }
-        string? cursor = null; var visited = new HashSet<string>();
-        while (true)
-        {
-            var matches = pages.Where(p => p.Cursor == cursor).ToArray(); if (matches.Length != 1 || !visited.Add(cursor ?? "<first>")) { reason = "missing page or repeated cursor"; return false; }
-            var page = matches[0]; if (page.Terminal) { reason = "continuous terminal pagination chain"; return visited.Count == pages.Count; }
-            if (string.IsNullOrEmpty(page.NextCursor)) { reason = "broken cursor"; return false; } cursor = page.NextCursor;
-        }
-    }
-    public static async Task<int> Prune(FeedDb db, string platform, IEnumerable<string> capturedRefs, bool proven, int imported, CancellationToken ct)
-    {
-        if (!proven || imported == 0) return 0; var refs = capturedRefs.ToHashSet(); var count = 0;
-        foreach (var author in await db.Authors.Where(a => a.Platform == platform && a.IsFriend).ToListAsync(ct)) if (!Identity.Keys(author).Concat(Identity.Refs(platform, author.PlatformAuthorId, author.Url)).Any(refs.Contains)) { author.IsFriend = false; count++; }
-        await db.SaveChangesAsync(ct); return count;
-    }
-}

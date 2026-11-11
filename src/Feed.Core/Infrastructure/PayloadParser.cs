@@ -573,7 +573,6 @@ public static class PayloadParser
         var numeric = new[] { reference[3..], Get(n, "userID", "id", "idString", "__dr") }.FirstOrDefault(x => long.TryParse(x, out _));
         return new(numeric ?? Get(n, "ent_id") ?? reference[3..], name, url, Get(n, "img_url") ?? Get(At(n, "profile_picture"), "uri"));
     }
-    public static IEnumerable<string> Embedded(string html) => EmbeddedCaptures(html).Select(x => x.Body);
     public static IEnumerable<(string Body, string Operation)> EmbeddedCaptures(string html)
     {
         foreach (Match match in Regex.Matches(html, "<script[^>]*type=[\"']application/json[\"'][^>]*>(.*?)</script>", RegexOptions.Singleline | RegexOptions.IgnoreCase))

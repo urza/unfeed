@@ -306,7 +306,7 @@ public sealed class ParserTests
     }
     [Fact]public void EmbeddedFeedPayloadIsExtractedAndOtherPreloadersIgnored()
     {
-        var html="<script type=\"application/json\">[[\"CometNewsFeed\",{\"__bbox\":{\"result\":{\"data\":{\"synthetic\":true}}}}],[\"Other\",{\"__bbox\":{\"result\":{\"data\":{}}}}]]</script>";Assert.Single(PayloadParser.Embedded(html));
+        var html="<script type=\"application/json\">[[\"CometNewsFeed\",{\"__bbox\":{\"result\":{\"data\":{\"synthetic\":true}}}}],[\"Other\",{\"__bbox\":{\"result\":{\"data\":{}}}}]]</script>";Assert.Single(PayloadParser.EmbeddedCaptures(html));
     }
     [Fact]public void InstagramExplicitEmptyAndOrganicAdKeys()
     {

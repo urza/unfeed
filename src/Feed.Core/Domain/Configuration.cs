@@ -42,6 +42,7 @@ public sealed record FeedConfig
 }
 public sealed record PlatformConfig
 {
+    public static readonly string[] Weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
     public bool Enabled { get; init; } = true;
     public ImmutableArray<string> CloseFriends { get; init; } = [];
     public ImmutableArray<string> HomeTimelineAuthors { get; init; } = [];
@@ -171,7 +172,7 @@ public static class InstanceValidation
         {
             Choice(key, Platforms.All); Require(p.SweepLimit >= 1, "sweep_limit must be at least 1");
             foreach (var (mode, times) in p.Schedule) { Choice(Platforms.Mode(mode), Platforms.Modes); foreach (var time in times) Require(Regex.IsMatch(time, "^([01][0-9]|2[0-3]):[0-5][0-9]$"), $"Invalid schedule slot: {time}"); }
-            foreach (var (mode, days) in p.ScheduleDays) { Choice(Platforms.Mode(mode), Platforms.Modes); foreach (var day in days) Choice(day, "mon", "tue", "wed", "thu", "fri", "sat", "sun"); }
+            foreach (var (mode, days) in p.ScheduleDays) { Choice(Platforms.Mode(mode), Platforms.Modes); foreach (var day in days) Choice(day, PlatformConfig.Weekdays); }
             foreach (var (mode, interval) in p.ScheduleIntervals) { Choice(Platforms.Mode(mode), Platforms.Modes); Require(interval.Days >= 1 && interval.StartDate != default, "schedule_intervals requires days >= 1 and start_date (yyyy-MM-dd)"); }
         }
         var cats = t.Categories.Select(x => x.Key).ToArray(); var views = t.Views.Select(x => x.Key).ToArray();

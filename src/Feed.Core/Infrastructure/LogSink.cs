@@ -3,6 +3,7 @@ namespace Feed.Core.Infrastructure;
 public sealed class LogSink(InstancePaths paths, string process, LogLevel minimum = LogLevel.Information, bool quiet = false) : ILoggerProvider
 {
     public LogLevel Minimum => minimum;
+    public static LogLevel Level(string? name) => name switch { "trace" => LogLevel.Trace, "debug" => LogLevel.Debug, "warn" => LogLevel.Warning, "error" => LogLevel.Error, _ => LogLevel.Information };
     public ILogger CreateLogger(string categoryName) => new Sink(this, categoryName.Split('.').Last()); public void Dispose() { }
     public void Write(LogLevel level, string category, string message, Exception? error = null, bool emitConsole = true)
     {

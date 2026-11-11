@@ -12,7 +12,7 @@ namespace Feed.Web;
 public sealed record ProcessingCompletion(long PostId, string Platform, string Task, DateTime At);
 public sealed record PersonRow(Author Author, bool Close, bool Muted, bool Always, int Posts, int Hidden, DateTime? Latest, TimelineVisit? Visit, string? Retry);
 public sealed record PlatformOverview(string Platform, int Friends, int Posts, int Hidden, PlatformState? State, Run? Collection, Run? Import, Run[] Running, RunRequest[] Requests, string Next, Dictionary<string, string>? ModeNext = null);
-public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnapshot Instance, PlatformOverview[] Platforms, PersonRow[] People, int PeopleCount, int Page, string Query, string Platform, string Filter, string Section, string Disk, string? DiskAt, int Pending, int Failures)
+public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnapshot Instance, PlatformOverview[] Platforms, PersonRow[] People, int PeopleCount, int Page, string Query, string Platform, string Filter, string Section, string Disk, string? DiskAt, int Pending)
 {
     public string? RecoverySignature { get; init; }
     public int RecoveryPage { get; init; } = 1;
@@ -31,6 +31,7 @@ public sealed record ManagementPage(ManagementDocuments Documents, InstanceSnaps
 
 public sealed class Management(InstancePaths paths, DbFactory factory, ManagementFiles documents)
 {
+    public const int PeoplePageSize = 40;
     public static string PlatformName(string p) => p switch { "facebook" => "Facebook", "tools" => "Tools", _ => "Instagram" };
     public static string ModeName(string mode) => mode switch { "home" => "Home feed", "close_friends" => "Home + close friends", _ => "Everyone followed" };
     public static string RelativeTime(DateTime at, DateTime now)
@@ -59,8 +60,7 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         var summary = section is "overview" or "recovery" or "processing";
         return new(docs, s, platforms, people?.Rows ?? [], people?.Count ?? 0, page, query, platform, filter, section,
             section == "storage" ? await db.Get("disk:summary", ct) ?? "Not measured yet" : "", section == "storage" ? await db.Get("disk:at", ct) : null,
-            summary ? await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct) : 0,
-            summary ? await db.Posts.CountAsync(p => p.LlmError != null || p.SummaryError != null, ct) : 0) {
+            summary ? await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct) : 0) {
             RecoverySignature = signature, RecoveryPage = page,
             Backup = section == "storage" ? await Maintenance.BackupLine(paths, db, ct) : "",
             Tools = section == "processing" ? await ToolHealth.Line(db, ct) : "",
@@ -84,8 +84,8 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         var matching = authors.Where(a => (platform.Length == 0 || a.Platform == platform) && (query.Length == 0 || Identity.Normalize((a.DisplayName ?? "") + " " + a.RefsJson).Contains(needle)))
             .Select(a => (Author: a, Close: new RuleContext(a, authors, s, resolved).CloseFriend, Muted: s.Preferences.Mutes.Any(e => Identity.Matches(e, a)), Always: resolved.Shown(a)))
             .Where(p => filter switch { "friends" => p.Author.IsFriend, "removed" => !p.Author.IsFriend, "close" => p.Close, "muted" => p.Muted, "always" => p.Always, _ => true }).ToArray();
-        page = Math.Clamp(page, 1, Math.Max(1, (matching.Length + 39) / 40));
-        var slice = matching.Skip((page - 1) * 40).Take(40).ToArray(); var ids = slice.Select(p => p.Author.Id).ToArray();
+        page = Math.Clamp(page, 1, Math.Max(1, (matching.Length + PeoplePageSize - 1) / PeoplePageSize));
+        var slice = matching.Skip((page - 1) * PeoplePageSize).Take(PeoplePageSize).ToArray(); var ids = slice.Select(p => p.Author.Id).ToArray();
         var counts = await db.Posts.Where(p => p.AuthorId != null && ids.Contains(p.AuthorId.Value)).GroupBy(p => p.AuthorId!.Value).Select(g => new { Id = g.Key, Total = g.Count(), Hidden = g.Count(p => p.Hidden), Latest = g.Max(p => p.PostedAt) }).ToDictionaryAsync(c => c.Id, ct);
         var visits = new Dictionary<long, TimelineVisit>();
         foreach (var v in await db.TimelineVisits.AsNoTracking().Where(v => v.AuthorId != null && ids.Contains(v.AuthorId.Value)).OrderByDescending(v => v.At).ThenByDescending(v => v.Id).ToArrayAsync(ct)) visits.TryAdd(v.AuthorId!.Value, v);
@@ -131,7 +131,6 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         }
         return "No run planned in the next ten years";
     }
-    static readonly string[] WeekdayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
     // One plain sentence per mode, so the owner reads the rule instead of reassembling it from three controls.
     public static string Describe(FeedConfig c, string platform, string mode)
     {
@@ -139,7 +138,7 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         if (times.IsDefaultOrEmpty) return "Not scheduled.";
         var interval = s.ScheduleIntervals.GetValueOrDefault(mode); var days = s.ScheduleDays.GetValueOrDefault(mode);
         var cadence = interval is { Days: > 1 } ? $"Every {interval.Days} days from {interval.StartDate:dd MMM yyyy}" : "Every day";
-        var weekdays = days.IsDefaultOrEmpty || days.Length == 7 ? "" : ", only " + string.Join(", ", WeekdayOrder.Where(days.Contains).Select(d => char.ToUpperInvariant(d[0]) + d[1..]));
+        var weekdays = days.IsDefaultOrEmpty || days.Length == 7 ? "" : ", only " + string.Join(", ", PlatformConfig.Weekdays.Where(days.Contains).Select(d => char.ToUpperInvariant(d[0]) + d[1..]));
         return $"{cadence}{weekdays}, at {string.Join(", ", times.Order())}.";
     }
     public async Task<string> Queue(string platform, string kind, string? mode, CancellationToken ct)

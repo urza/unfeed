@@ -60,7 +60,7 @@ Exit: 0 success, 1 operation failed, 2 configuration/arguments, 75 deferred, 130
                 Directory.CreateDirectory(Path.GetDirectoryName(output)!); InstancePaths.AtomicWrite(output, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true })); Console.WriteLine($"parser-audit: {report.Length} captures; report={output}; no ingest or model calls"); return 0;
             }
             await using (var db = factory.Open()) { await db.Initialize(ct); await Prompts.RestampVersions(db, s, ct); }
-            var level = (a.Get("log-level") ?? s.Config.Ui.LogLevel) switch { "trace" => LogLevel.Trace, "debug" => LogLevel.Debug, "warn" => LogLevel.Warning, "error" => LogLevel.Error, _ => LogLevel.Information };
+            var level = LogSink.Level(a.Get("log-level") ?? s.Config.Ui.LogLevel);
             logs = new(paths, "cli", level, a.Flag("quiet")); Console.SetOut(new LoggedOutput(originalOutput, logs, a.Flag("quiet"))); logs.Write(LogLevel.Information, "cli", "command " + a.Command + "; instance=" + paths.Root); ledger = new(factory);
             if (a.Command is "help" or "--help" || a.Flag("help")) { Console.WriteLine(Usage); return 0; }
             if (a.Get("request-id") is null != (a.Get("claim-token") is null)) throw new ArgumentException("--request-id and --claim-token are required together");

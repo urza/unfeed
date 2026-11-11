@@ -185,5 +185,7 @@ public sealed class FeedQuery(DbFactory factory)
         return low;
     }
     static string Span(double days) => days >= 365 ? $"{(int)(days / 365)} years" : days >= 60 ? $"{(int)(days / 30)} months" : days >= 14 ? $"{(int)(days / 7)} weeks" : $"{Math.Max(1, (int)days)} days";
+    // Only http(s) links are rendered as hrefs; a javascript: or data: value from a payload is dropped.
+    public static string? SafeUrl(string? value) => Uri.TryCreate(value, UriKind.Absolute, out var u) && u.Scheme is "https" or "http" ? value : null;
     public static string Relative(DateTime? date) { if (date is null) return "-"; var span = Clock.Now - date.Value; return span.TotalSeconds < 90 ? "just now" : span.TotalMinutes < 90 ? $"{(int)span.TotalMinutes} min" : span.TotalHours < 36 ? $"{(int)span.TotalHours} h" : span.TotalDays < 14 ? $"{(int)span.TotalDays} d" : date.Value.ToString("dd MMM yyyy"); }
 }

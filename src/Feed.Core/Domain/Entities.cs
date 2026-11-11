@@ -102,7 +102,6 @@ public sealed class Kv { public string Key { get; set; } = ""; public string Val
 public static class ClosedValues
 {
     public static readonly string[] HideOwners = ["structural", "whitelist", "keyword", "mute", "llm", "thumbs", "other"];
-    public static readonly string[] RunStatuses = ["running", "ok", "capped", "checkpoint", "error", "refused", "imported", "cancelled"];
     public static readonly string[] RunKinds = ["collect", "process", "friends", "reparse", "rescore", "summarize", "refilter", "like", "login"];
 }
 public sealed record Tag(string Name, string? Url, string? Kind = null);

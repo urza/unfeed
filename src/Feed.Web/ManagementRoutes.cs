@@ -8,7 +8,8 @@ namespace Feed.Web;
 
 public static class ManagementRoutes
 {
-    static readonly string[] Sections = ["overview", "recovery", "coverage", "hearts", "people", "schedule", "rules", "categories", "processing", "storage"];
+    // The tabs come from the navigation component, so a new tab is added in one place. Backgrounds has its own route.
+    static readonly string[] Sections = [.. ManageNavigation.Sections.Select(s => s.Key).Where(k => k != "backgrounds")];
     public static void MapManagement(this WebApplication app, string stamp)
     {
         app.MapGet("/manage", async (HttpContext ctx, Management management, Backgrounds backgrounds, IAntiforgery antiforgery, Feed.Core.Infrastructure.InstanceFiles files, Scheduler scheduler) => {
@@ -17,7 +18,7 @@ public static class ManagementRoutes
                 var model = await management.Read(section, ctx.Request.Query["q"].ToString(), ctx.Request.Query["platform"].ToString(), ctx.Request.Query["filter"].ToString(), int.TryParse(ctx.Request.Query["page"], out var page) ? page : 1, ctx.RequestAborted, long.TryParse(ctx.Request.Query["collection"], out var collection) ? collection : null, ctx.Request.Query["signature"].FirstOrDefault());
                 ctx.Response.Headers.CacheControl = "no-store";
                 return (IResult)new RazorComponentResult<Manage>(new { Model = model, Stamp = stamp, Background = backgrounds.Current.SelectedUrl, RequestToken = antiforgery.GetAndStoreTokens(ctx).RequestToken!, Message = ctx.Request.Query["message"].FirstOrDefault(), Error = files.Error ?? scheduler.Error });
-            } catch (Exception e) when (e is FormatException or System.Text.Json.JsonException or IOException) { return Problem("Instance files could not be read: " + e.Message + " Correct the files and reload. Diagnostics keeps the last valid settings.", 409, section); }
+            } catch (Exception e) when (e is FormatException or System.Text.Json.JsonException or IOException) { return Problem("Instance files could not be read: " + e.Message + " Correct the files and reload. The last valid settings stay in use until then.", 409, section); }
         });
         app.MapPost("/manage/storage/reset", (HttpContext ctx, DbFactory factory, InstancePaths paths, IAntiforgery antiforgery) => Submit(ctx, antiforgery, async f => {
             if (f["confirm"] != "yes") throw new ArgumentException("Confirm permanent deletion before resetting downloads.");

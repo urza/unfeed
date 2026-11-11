@@ -37,7 +37,7 @@ else if(Model.Section == "recovery") {
  <details><summary>Run details</summary><p>Status: @run.Status · phase: @run.Phase</p></details>
  <p>@run.PostsFound posts found · @run.PostsNew new. Classification is a separate processing step.</p>
  @if(run.Error is not null){<p>Run problem: @run.Error</p>}
- @if(visits.Length > 0){<p>@visits.Length recorded visits · @visits.Count(v => v.CaptureStatus == "incomplete") incomplete.</p><details><summary>Visit details for this run</summary><DataTable Rows="@(visits.Select(v => (object)new {v.Name, v.CaptureStatus, v.PostsFound, v.StopReason, v.Note}).ToArray())"/></details>}
+ @if(visits.Length > 0){<p>@visits.Length recorded visits · @visits.Count(v => v.CaptureStatus == "incomplete") incomplete.</p><details><summary>Visit details for this run</summary><div class="manage-table-scroll"><table><thead><tr><th>Name</th><th>Capture status</th><th>Posts found</th><th>Stop reason</th><th>Note</th></tr></thead><tbody>@foreach(var v in visits){<tr><td>@v.Name</td><td>@v.CaptureStatus</td><td>@v.PostsFound</td><td>@(v.StopReason ?? "—")</td><td>@(v.Note ?? "—")</td></tr>}</tbody></table></div></details>}
  else{<p>No profile-visit coverage recorded for this run.</p>}
  </article>}
  <p>For older run IDs, consult <a href="/manage/log?file=cli">CLI logs</a>. <a href="/manage?section=coverage">Current coverage and retry status</a>.</p></section>
@@ -47,7 +47,7 @@ else if(Model.Section == "hearts") {
  @if(Model.Hearts.Length > 0){<div class="manage-table-scroll"><table class="people-table hearts-table"><thead><tr><th>Pressed</th><th>Person</th><th>Post</th><th>State</th><th>Detail</th></tr></thead><tbody>
  @foreach(var h in Model.Hearts){<tr class="@h.Like.State"><td data-label="Pressed">@At(h.Like.RequestedAt)</td>
   <td data-label="Person"><PlatformGlyph Platform="@h.Like.Platform"/> @if(h.Author is not null){<a href="@($"/people/{h.Author.Id}")">@h.PersonName</a>}else{@h.PersonName}</td>
-  <td data-label="Post">@if(SafeUrl(h.Post.Permalink) is { } link){<a href="@link" rel="noreferrer">@(h.Snippet.Length > 0 ? h.Snippet : "Open the original")</a>}else{@(h.Snippet.Length > 0 ? h.Snippet : "Post " + h.Post.Id)} @if(h.Author is not null){<a href="@($"/people/{h.Author.Id}#post-{h.Post.Id}")">in feed</a>}</td>
+  <td data-label="Post">@if(FeedQuery.SafeUrl(h.Post.Permalink) is { } link){<a href="@link" rel="noreferrer">@(h.Snippet.Length > 0 ? h.Snippet : "Open the original")</a>}else{@(h.Snippet.Length > 0 ? h.Snippet : "Post " + h.Post.Id)} @if(h.Author is not null){<a href="@($"/people/{h.Author.Id}#post-{h.Post.Id}")">in feed</a>}</td>
   <td data-label="State">@(h.Like.State switch { "sent" => "Sent " + At(h.Like.SentAt), "pending" => h.Like.AttemptedAt is null ? "Queued" : "Pressed, waiting for confirmation", _ => "Failed" })</td>
   <td data-label="Detail">@h.Like.Error @if(h.CanRetry){<form method="post" action="@($"/posts/{h.Post.Id}/like")" class="inline"><button type="submit">Heart again</button></form>}</td></tr>}
  </tbody></table></div>}
@@ -95,7 +95,7 @@ else if(Model.Section == "schedule") {
   <form method="post" action="/manage/settings/schedule" class="schedule-mode">@Token()<input type="hidden" name="platform" value="@platform.Platform"/><input type="hidden" name="mode" value="@mode"/>
    <div class="schedule-mode-head"><h3>@Management.ModeName(mode)</h3><p class="schedule-plan">@Management.Describe(Config, platform.Platform, mode)</p><p class="schedule-next">Next: @(platform.ModeNext?.GetValueOrDefault(mode) ?? "not planned")</p></div>
    <div class="schedule-row"><ManageField Label="Times" Name="times" Value="@string.Join(", ", settings.Schedule.GetValueOrDefault(mode, []))" Hint="24-hour times, comma separated, e.g. 08:00, 18:30. Empty switches this mode off."/><ManageField Label="Repeat every N days" Name="interval" Type="number" Value="@((interval?.Days ?? 1).ToString())" Hint="1 means every day."/><ManageField Label="Starting on" Name="start" Type="date" Value="@(interval?.StartDate.ToString("yyyy-MM-dd"))" Hint="Only used when N is above 1. Empty means today."/></div>
-   <fieldset class="weekday-pills"><legend>Only on these weekdays</legend><div class="weekday-options">@foreach(var day in Weekdays){<label class="weekday-pill"><input type="checkbox" name="days" value="@day" checked="@(days.IsDefaultOrEmpty || days.Contains(day))"/><span>@(char.ToUpperInvariant(day[0]) + day[1..])</span></label>}</div></fieldset>
+   <fieldset class="weekday-pills"><legend>Only on these weekdays</legend><div class="weekday-options">@foreach(var day in PlatformConfig.Weekdays){<label class="weekday-pill"><input type="checkbox" name="days" value="@day" checked="@(days.IsDefaultOrEmpty || days.Contains(day))"/><span>@(char.ToUpperInvariant(day[0]) + day[1..])</span></label>}</div></fieldset>
    <button class="primary">Save @Management.ModeName(mode)</button></form>}</div>
  </section>}
 }
@@ -147,12 +147,10 @@ else if(Model.Section == "processing") {
  [Parameter] public string? Message { get; set; }
  [Parameter] public string? Error { get; set; }
  FeedConfig Config => Model.Instance.Config;
- int Pages => Math.Max(1, (Model.PeopleCount + 39) / 40);
+ int Pages => Math.Max(1, (Model.PeopleCount + Management.PeoplePageSize - 1) / Management.PeoplePageSize);
  static readonly (string Key, string Label)[] PeopleFilters = [("","All known people"),("friends","Friends / followed"),("close","Close friends"),("muted","Muted"),("always","Always show"),("removed","Not in feed list")];
- static readonly string[] Weekdays = ["mon","tue","wed","thu","fri","sat","sun"];
  RenderFragment Token() => @<ManageToken Token="@RequestToken" Version="@Model.Documents.Version" Section="@Model.Section" Query="@Model.Query" Platform="@Model.Platform" Filter="@Model.Filter" Page="@Model.Page"/>;
  static string At(DateTime? at) => at is null ? "Never" : $"{at.Value:yyyy-MM-dd HH:mm 'UTC'} ({Management.RelativeTime(at.Value, Clock.Now)})";
  static string RunLabel(Run? run) => run is null ? "Never" : $"{At(run.StartedAt)} · {run.Status}";
  string PeoplePage(int page) => $"/manage?section=people&q={Uri.EscapeDataString(Model.Query)}&platform={Model.Platform}&filter={Model.Filter}&page={page}";
- static string? SafeUrl(string? value) => Uri.TryCreate(value, UriKind.Absolute, out var url) && url.Scheme is "http" or "https" ? value : null;
 }

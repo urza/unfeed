@@ -3,7 +3,7 @@
 @code {
  [Parameter] public string Section {get;set;}="overview";
  // Icons are 24-box stroke paths, so they inherit the pill text color and match the toolbar's Manage glyph.
- static readonly (string Key, string Label, string Icon)[] Sections = [
+ public static readonly (string Key, string Label, string Icon)[] Sections = [
   ("overview","Overview","<rect x=\"4\" y=\"4\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"13\" y=\"4\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"4\" y=\"13\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"13\" y=\"13\" width=\"7\" height=\"7\" rx=\"1.5\"/>"),
   ("recovery","Recovery","<path d=\"M4 12a8 8 0 1 0 2.4-5.7\"/><path d=\"M4 4v5h5\"/>"),
   ("coverage","Coverage","<circle cx=\"12\" cy=\"12\" r=\"8.5\"/><path d=\"M8.5 12.5l2.5 2.5 4.5-5\"/>"),

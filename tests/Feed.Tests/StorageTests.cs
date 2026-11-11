@@ -56,11 +56,6 @@ public sealed class StorageTests
         var result = PayloadParser.Parse("instagram", "{\"items\":[{\"pk\":\"1\",\"code\":\"parent\",\"user\":{\"username\":\"synthetic\"},\"carousel_media\":[" + slide + "]}," + slide + "]}");
         var parent = Assert.Single(result.Posts); Assert.Equal("1", parent.Post.PlatformPostId); Assert.Single(parent.Media);
     }
-    [Fact] public void CompletenessRequiresUnbrokenTerminalChain()
-    {
-        CompletionEvidence[] pages = [new("owner:following", null, "a", false, 80), new("owner:following", "a", null, true, 80)];
-        Assert.True(FriendsCompleteness.Proven(pages, 80, false, out _)); Assert.False(FriendsCompleteness.Proven(pages[..1], 80, false, out _)); Assert.False(FriendsCompleteness.Proven(pages, 79, false, out _)); Assert.False(FriendsCompleteness.Proven(pages, 80, true, out _));
-    }
     [Theory] [InlineData("{\"score\":true,\"reason\":\"x\"}")] [InlineData("{\"score\":7.5,\"reason\":\"x\"}")] [InlineData("{\"score\":11,\"reason\":\"x\"}")] public void VerdictRejectsInvalidScores(string reply) => Assert.ThrowsAny<Exception>(() => Prompts.ParseVerdict(reply, new()));
     [Fact] public void VerdictAllowsNoCategoryButStillRejectsMissingOrInvalidLabels()
     {
