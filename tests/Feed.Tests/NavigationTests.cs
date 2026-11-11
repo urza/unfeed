@@ -105,4 +105,50 @@ public sealed class NavigationTests
         }
         finally { if (!server.HasExited) server.Kill(true); await server.WaitForExitAsync(); await stdout; await stderr; }
     }
+
+    // The Manage tabs switch in the same document: a hover fetches the tab ahead of the click, the click reuses
+    // that one response, Back restores the previous tab, and the Backgrounds gallery still loads as a full page.
+    [Fact, Trait("Category", "Browser")]
+    public async Task ManageNavigationKeepsDocumentAndPrefetchesTabs()
+    {
+        await using var i = new TestInstance(); await i.Init();
+        await File.WriteAllTextAsync(i.Paths.Get("config.json"), """{"platforms":{"facebook":{},"instagram":{}},"scheduler":{"enabled":false},"backgrounds":{"source":"off"}} """);
+        var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
+        var root = new DirectoryInfo(AppContext.BaseDirectory); while (root != null && !File.Exists(Path.Combine(root.FullName, "Feed.slnx"))) root = root.Parent;
+        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet") { WorkingDirectory = root!.FullName, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var arg in new[] { Path.Combine(root.FullName, "src/Feed.Web/bin/Debug/net10.0/Feed.Web.dll"), "--data", i.Paths.Root, "--urls", $"http://127.0.0.1:{port}" }) start.ArgumentList.Add(arg);
+        using var server = Process.Start(start)!; var stdout = server.StandardOutput.ReadToEndAsync(); var stderr = server.StandardError.ReadToEndAsync();
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new($"http://127.0.0.1:{port}") };
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            while (true) { if (server.HasExited) throw new Exception(await stderr); try { if ((await http.GetAsync("/healthz", timeout.Token)).IsSuccessStatusCode) break; } catch (HttpRequestException) { } await Task.Delay(100, timeout.Token); }
+            using var pw = await Playwright.CreateAsync(); await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true });
+            var page = await browser.NewPageAsync(); var errors = new List<string>(); page.PageError += (_, error) => errors.Add(error);
+            await page.GotoAsync(http.BaseAddress + "manage"); await page.EvaluateAsync("window.documentSentinel = 42");
+            var scheduleFetches = 0; page.Request += (_, request) => { if (request.Url.EndsWith("/manage?section=schedule") && request.ResourceType == "fetch") scheduleFetches++; };
+            var schedule = page.Locator(".manage-nav a[href$='section=schedule']");
+            var prefetch = page.WaitForRequestAsync(request => request.Url.EndsWith("/manage?section=schedule"));
+            await schedule.DispatchEventAsync("pointerover"); await prefetch;
+            await schedule.DispatchEventAsync("click", new { button = 0 });
+            await page.WaitForFunctionAsync("location.search === '?section=schedule' && !document.querySelector('main').hasAttribute('aria-busy')");
+            Assert.Equal(1, scheduleFetches); Assert.Equal(42, await page.EvaluateAsync<int>("window.documentSentinel"));
+            Assert.Equal("Schedule", await page.Locator(".manage-nav [aria-current=page]").InnerTextAsync());
+            Assert.True(await page.Locator("form[action='/manage/settings/schedule']").CountAsync() > 0);
+            // The recovery tab carries the auto-refreshing status region; leaving it must remove the region with the page.
+            await page.Locator(".manage-nav a[href$='section=recovery']").DispatchEventAsync("click", new { button = 0 });
+            await page.WaitForFunctionAsync("location.search === '?section=recovery' && !document.querySelector('main').hasAttribute('aria-busy')");
+            Assert.Equal(1, await page.Locator("[data-status-refresh]").CountAsync());
+            await page.Locator(".manage-nav a[href$='section=rules']").DispatchEventAsync("click", new { button = 0 });
+            await page.WaitForFunctionAsync("location.search === '?section=rules' && !document.querySelector('main').hasAttribute('aria-busy')");
+            Assert.Equal(0, await page.Locator("[data-status-refresh]").CountAsync()); Assert.Equal(1, await page.Locator("textarea[name=keywords]").CountAsync());
+            await page.GoBackAsync();
+            await page.WaitForFunctionAsync("location.search === '?section=recovery' && !document.querySelector('main').hasAttribute('aria-busy')");
+            Assert.Equal(42, await page.EvaluateAsync<int>("window.documentSentinel"));
+            await page.GetByRole(AriaRole.Link, new() { Name = "Backgrounds", Exact = true }).ClickAsync();
+            await page.WaitForFunctionAsync("location.pathname === '/manage/backgrounds' && window.documentSentinel === undefined");
+            Assert.Empty(errors);
+        }
+        finally { if (!server.HasExited) server.Kill(true); await server.WaitForExitAsync(); await stdout; await stderr; }
+    }
 }

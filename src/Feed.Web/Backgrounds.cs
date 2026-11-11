@@ -5,7 +5,11 @@ using Feed.Core.Domain;
 using Feed.Core.Infrastructure;
 namespace Feed.Web;
 public sealed record BackgroundImage(string Name, string Path, string Source, string Etag);
-public sealed record BackgroundSnapshot(BackgroundImage[] Images, string? Selected, string? Pinned, string? Outcome);
+public sealed record BackgroundSnapshot(BackgroundImage[] Images, string? Selected, string? Pinned, string? Outcome)
+{
+    // The page links the selected image with its ETag in the URL, so the browser keeps it for a year; a new image gets a new URL.
+    public string? SelectedUrl => Images.FirstOrDefault(i => i.Name == Selected) is { } image ? $"/backgrounds/{Uri.EscapeDataString(image.Name)}?v={image.Etag.Trim('"')}" : null;
+}
 public sealed class Backgrounds(InstancePaths paths, InstanceFiles files, ILogger<Backgrounds> log) : BackgroundService
 {
     readonly object gate = new(); BackgroundSnapshot snapshot = new([], null, null, null); DateTime rotated; public BackgroundSnapshot Current => Volatile.Read(ref snapshot);

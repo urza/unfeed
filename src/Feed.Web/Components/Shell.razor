@@ -4,8 +4,9 @@
 @code {
  [Parameter] public string Title { get; set; } = "Feed";
  [Parameter] public string Stamp { get; set; } = "dev";
+ // The versioned URL of the selected background (BackgroundSnapshot.SelectedUrl), or null for the gradient alone.
  [Parameter] public string? Background { get; set; }
  [Parameter] public double Blur { get; set; } = 4;
  [Parameter] public RenderFragment? ChildContent { get; set; }
- string BackgroundStyle => $"--background-blur:{Blur.ToString(System.Globalization.CultureInfo.InvariantCulture)}px;" + (Background is null ? "" : $"background-image:url('/backgrounds/{Uri.EscapeDataString(Background)}')");
+ string BackgroundStyle => $"--background-blur:{Blur.ToString(System.Globalization.CultureInfo.InvariantCulture)}px;" + (Background is null ? "" : $"background-image:url('{Background}')");
 }

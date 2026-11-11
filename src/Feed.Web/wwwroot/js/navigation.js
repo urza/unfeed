@@ -1,7 +1,8 @@
 // Fetch server-rendered HTML; ordinary links remain functional without JavaScript.
-// Keep this limited to the feed and person pages, which have no management refresh timers.
+// The feed, person and Manage pages take part. The Manage status timer is started by `enhance` and stopped by
+// `cleanup`, so a replaced page never leaves a timer behind. The gallery at /manage/backgrounds stays a full load.
 export function navigation(enhance, cleanup) {
- const eligible = url => url.origin === location.origin && (url.pathname === '/' || /^\/people\/\d+$/.test(url.pathname));
+ const eligible = url => url.origin === location.origin && (url.pathname === '/' || url.pathname === '/manage' || /^\/people\/\d+$/.test(url.pathname));
  if (!eligible(new URL(location.href))) return;
  let controller, sequence = 0, navigating = false, scrollFrame;
  const state = y => ({...history.state, feedNavigation: true, feedScroll: y});
@@ -70,19 +71,19 @@ export function navigation(enhance, cleanup) {
  }
  let hover;
  document.addEventListener('pointerover', e => {
-  if (!e.target.closest('.toolbar')) return;
+  if (!e.target.closest('.toolbar, .manage-nav')) return;
   const found = destination(e.target); if (!found) return;
   clearTimeout(hover); hover = setTimeout(() => prefetch(found.url.href), 80);
  });
  document.addEventListener('pointerout', e => { if (e.target.closest('a[href]')) clearTimeout(hover); });
- document.addEventListener('focusin', e => { const found = e.target.closest('.toolbar') && destination(e.target); if (found) prefetch(found.url.href); });
+ document.addEventListener('focusin', e => { const found = e.target.closest('.toolbar, .manage-nav') && destination(e.target); if (found) prefetch(found.url.href); });
  document.addEventListener('pointerdown', e => { const found = destination(e.target, e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey); if (found) prefetch(found.url.href); });
  document.addEventListener('click', e => {
   const found = destination(e.target, e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey);
   if (!found) return;
   e.preventDefault();
   // Show the choice at once; the fetched page carries the authoritative state and replaces it.
-  const group = found.link.closest('.pills, .inspection, .menu-inspection, .menu');
+  const group = found.link.closest('.pills, .inspection, .menu-inspection, .menu, .manage-nav');
   if (group) {
    for (const other of group.querySelectorAll('a.active')) { other.classList.remove('active'); other.removeAttribute('aria-current'); }
    found.link.classList.add('active'); found.link.setAttribute('aria-current', 'page');

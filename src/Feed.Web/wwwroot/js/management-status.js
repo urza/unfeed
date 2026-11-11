@@ -1,10 +1,11 @@
 // Replace only the read-only status region; forms and expanded details stay untouched.
+// Returns a stop function: soft navigation calls it before the page content is replaced.
 export function managementStatus() {
- if (!document.querySelector('[data-status-refresh]')) return;
+ if (!document.querySelector('[data-status-refresh]')) return () => {};
  const reveal = () => document.querySelectorAll('.status-auto-note').forEach(note => note.hidden = false);
  reveal();
  let pending = false;
- setInterval(async () => {
+ const timer = setInterval(async () => {
   if (document.hidden || pending) return;
   pending = true;
   try {
@@ -17,4 +18,5 @@ export function managementStatus() {
   } catch { /* Keep the last successful timestamp visible when disconnected. */ }
   finally { pending = false; }
  }, 15000);
+ return () => clearInterval(timer);
 }

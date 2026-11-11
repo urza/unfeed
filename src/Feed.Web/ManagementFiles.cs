@@ -9,7 +9,11 @@ namespace Feed.Web;
 
 public sealed record ManagementDocuments(string? Config, string? Taxonomy, string? Preferences)
 {
-    public string Version => Prompts.Sha(JsonSerializer.Serialize(new[] { Config, Taxonomy, Preferences }));
+    string? version;
+    // Every form on the page carries the version, so the hash is computed once per request instead of once per form.
+    // The copy constructor drops the cache: a `with` expression changes the texts, and the default copy would keep the old hash.
+    ManagementDocuments(ManagementDocuments other) { Config = other.Config; Taxonomy = other.Taxonomy; Preferences = other.Preferences; }
+    public string Version => version ??= Prompts.Sha(JsonSerializer.Serialize(new[] { Config, Taxonomy, Preferences }));
     public InstanceSnapshot Snapshot()
     {
         var config = InstanceValidation.Parse<FeedConfig>(Config); var taxonomy = InstanceValidation.Parse<Taxonomy>(Taxonomy);
@@ -25,6 +29,14 @@ public sealed record ManagementDocuments(string? Config, string? Taxonomy, strin
 public sealed class ManagementFiles(InstancePaths paths)
 {
     public ManagementDocuments Read() => new(Read("config.json"), Read("taxonomy.json"), Read("preferences.md"));
+    sealed record Parsed(string Version, InstanceSnapshot Snapshot);
+    Parsed? parsed;
+    // The management page reads the documents on every request. Parsing and validating them repeats only when the text changed.
+    public InstanceSnapshot Snapshot(ManagementDocuments docs)
+    {
+        var cached = parsed; if (cached?.Version == docs.Version) return cached.Snapshot;
+        var snapshot = docs.Snapshot(); parsed = new(docs.Version, snapshot); return snapshot;
+    }
     string? Read(string name) => File.Exists(paths.Get(name)) ? File.ReadAllText(paths.Get(name)) : null;
     public ManagementDocuments Save(string version, Func<ManagementDocuments, ManagementDocuments> edit)
     {

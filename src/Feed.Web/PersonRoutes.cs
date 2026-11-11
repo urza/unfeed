@@ -19,7 +19,7 @@ public static class PersonRoutes
                 var model = await people.Read(id, s, category, scope, ctx.RequestAborted);
                 if (model is null) return Results.NotFound();
                 ctx.Response.Headers.CacheControl = "no-store";
-                return (IResult)new RazorComponentResult<PersonView>(new { Model = model, Stamp = stamp, Background = backgrounds.Current.Selected, RequestToken = antiforgery.GetAndStoreTokens(ctx).RequestToken!, Message = ctx.Request.Query["message"].FirstOrDefault() });
+                return (IResult)new RazorComponentResult<PersonView>(new { Model = model, Stamp = stamp, Background = backgrounds.Current.SelectedUrl, RequestToken = antiforgery.GetAndStoreTokens(ctx).RequestToken!, Message = ctx.Request.Query["message"].FirstOrDefault() });
             } catch (ArgumentException) { return Results.Redirect($"/people/{id}"); }
         });
         app.MapPost("/people/{id:long}/collect", async (long id, HttpContext ctx, People people, IAntiforgery antiforgery) => {
