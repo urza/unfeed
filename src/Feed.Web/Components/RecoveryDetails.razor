@@ -1,9 +1,9 @@
 <div class="recovery-details">
  <p>Outstanding recovery across stored history, not just the latest collection. Times use @Zone.Id; hover over a time for UTC.</p>
- @foreach(var state in new[]{RecoveryDisposition.Attention, RecoveryDisposition.Paused, RecoveryDisposition.Automatic, RecoveryDisposition.Compatibility, RecoveryDisposition.Informational}) {
+ @foreach(var state in new[]{RecoveryDisposition.Attention, RecoveryDisposition.Paused, RecoveryDisposition.Automatic, RecoveryDisposition.Compatibility, RecoveryDisposition.Backlog, RecoveryDisposition.Informational}) {
   var rows = Issues.Where(i => i.Disposition == state).ToArray();
   if(rows.Length == 0) { continue; }
-  <details open="@(state != RecoveryDisposition.Informational)" class="recovery-section">
+  <details open="@(state is not (RecoveryDisposition.Informational or RecoveryDisposition.Backlog))" class="recovery-section">
    <summary>@RecoveryPresentation.Label(state) · @rows.Length issue groups / tasks / notices</summary>
    @foreach(var group in rows.GroupBy(i => new {i.Platform, Category = RecoveryPresentation.Category(i)})) {
     <article class="recovery-group">
@@ -13,6 +13,7 @@
      @if(state == RecoveryDisposition.Paused){<p>Automatic work will wait. See each item's pause reason below. Review <a href="/manage?section=schedule">scheduling</a>, platform settings on Overview, or <a href="/manage?section=processing">AI processing</a>. Resuming scheduling also permits other queued and scheduled work.</p>}
      @if(state == RecoveryDisposition.Attention && group.Key.Category == "tokens"){<p>Automatic token retries have reached their limit or are disabled. Review model capacity and <a href="/manage?section=processing">processing token settings</a>. The advanced retry ladder and explicit rescoring require instance configuration or the CLI; this page does not reset attempts.</p>}
      @if(state == RecoveryDisposition.Compatibility){<p>Collection may be incomplete. Feed retained the response for compatibility work; no immediate owner action is required. A later clean collection of the same person supersedes an associated older alert, while the historical gap remains recorded.</p>}
+     @if(state == RecoveryDisposition.Backlog){<p>The visit that saved each response also captured posts, so no post is known to be missing. Feed keeps the response for parser work; no owner action is required.</p>}
      <details><summary>Show affected items and recovery instructions</summary>
       @foreach(var issue in group) {
        <div class="recovery-item">

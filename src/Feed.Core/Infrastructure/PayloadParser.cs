@@ -12,7 +12,7 @@ public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyLi
 public static class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
-    public const int Version = 16;
+    public const int Version = 17;
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
     public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
@@ -138,7 +138,15 @@ public static class PayloadParser
                 }
             }
         }
-        if (!people && posts.Count == 0 && !empty && !(platform == "facebook" && roots.Count > 0 && roots.All(FacebookAuxiliary))) errors.Add("parser uncertainty: no recognized posts or explicit empty response");
+        if (!people && posts.Count == 0 && !empty)
+        {
+            // Known auxiliary roots pass in silence. Unknown deferred fragments without content pass with a
+            // warning each (ContentFreeFragment). Any other root makes the whole response uncertain.
+            JsonElement[] unknown = platform == "facebook" ? roots.Where(r => !FacebookAuxiliary(r)).ToArray() : [];
+            if (platform == "facebook" && roots.Count > 0 && unknown.All(ContentFreeFragment))
+                warnings.AddRange(unknown.Select(r => $"facebook/deferred: unrecognized fragment {Get(r, "label")!.Split("$defer$").Last()}; no post fields, links or text; path={string.Join('/', Array(At(r, "path")).Select(Text))}"));
+            else errors.Add("parser uncertainty: no recognized posts or explicit empty response");
+        }
         return new(posts.Values.ToArray(), persons.DistinctBy(p => (p.Id, p.Url)).ToArray(), empty, errors) { Warnings = warnings };
     }
     static JsonElement ErrorScope(string platform, JsonElement root, JsonElement error)
@@ -376,25 +384,6 @@ public static class PayloadParser
         var node = At(data, "node");
         if (Get(node, "__typename") == "User" && At(node, "profile_tile_sections").ValueKind == JsonValueKind.Object && node.EnumerateObject().All(p => p.Name is "__typename" or "id" or "profile_tile_sections")) return true;
         var path = Array(At(root, "path")).Select(Text).ToArray();
-        // A deferred player response can belong to a video linked in a comment.
-        // Keep the exact envelope/field boundary and reject nested post content.
-        if (path.Length == 18 && path[0] is "user" or "node" && path[1] == "timeline_list_feed_units"
-            && path[2] == "edges" && int.TryParse(path[3], out var edge) && edge >= 0
-            && path.Skip(4).Take(8).SequenceEqual(new[] { "node", "comet_sections", "feedback", "story", "story_ufi_container", "story", "feedback_context", "interesting_top_level_comments" })
-            && int.TryParse(path[12], out var comment) && comment >= 0 && path[13] == "comment"
-            && path[14] is "preferred_body" or "body_renderer" && path[15] == "ranges"
-            && int.TryParse(path[16], out var range) && range >= 0 && path[17] == "entity"
-            && Get(root, "label") == "VideoPlayerRelay_video$defer$InstreamVideoAdBreaksPlayer_video"
-            && Get(data, "id") is not null && data.EnumerateObject().All(p => p.Name is "id" or "instream_extra_config" or "instream_video_ad_breaks_comet")
-            && !ContainsPostContent(data)) return true;
-        bool TimelineEdge(string?[] p) => p.Length > 4 && (p[0] is "user" or "node" && p[1] == "timeline_list_feed_units" || p[0] == "viewer" && p[1] == "news_feed") && p[2] == "edges" && int.TryParse(p[3], out var n) && n >= 0 && p[4] == "node";
-        // The same player response also arrives for a video linked from a text range of a story's
-        // message, including shared (attached) stories nested at varying depths. The tail and the
-        // exact field set identify it; nested post content would still be diagnostic.
-        if (TimelineEdge(path) && path.Length >= 9 && path[^4] == "message" && path[^3] == "ranges" && int.TryParse(path[^2], out var linked) && linked >= 0 && path[^1] == "entity"
-            && Get(root, "label") == "VideoPlayerRelay_video$defer$InstreamVideoAdBreaksPlayer_video"
-            && Get(data, "id") is not null && data.EnumerateObject().All(p => p.Name is "id" or "instream_extra_config" or "instream_video_ad_breaks_comet")
-            && !ContainsPostContent(data)) return true;
         // Deferred logging data for a story's "show more / show less" bumper button: scalars and
         // id lists for Facebook's own telemetry, never post content.
         if (TimelineEdge(path) && path.Length == 12 && path.Skip(5).SequenceEqual(new[] { "comet_sections", "call_to_action", "story", "bumpers", "persistent_bumper", "cta_renderer", "comet_action" })
@@ -410,7 +399,10 @@ public static class PayloadParser
         if (path.Length == 4 && path[0] is "user" or "node" && path[1] == "timeline_list_feed_units" && path[2] == "edges" && data.EnumerateObject().All(p => p.Name is "node" or "cursor") && (UnavailableFacebookStory(node) || ContentlessFacebookStory(node))) return true;
         // Deferred player controls accompany the already captured parent story; they
         // aren't independent posts or evidence that an otherwise empty timeline loaded.
-        if (path.Length < 3 || !(path[0] is "user" or "node" && (path[1] == "timeline_list_feed_units" || path[1] == "profile_pinned_post" && path[2] == "pinned_post_story") || path[0] == "viewer" && path[1] == "news_feed" && path[2] == "edges") || !(path[^1] == "media" || path.TakeLast(3).SequenceEqual(new[] { "media", "video_grid_renderer", "video" })) || data.ValueKind != JsonValueKind.Object) return false;
+        // The label and the field set identify such a fragment. The path only says where it attaches,
+        // and that place changes with each container Facebook adds (a comment link, a message range,
+        // an album grid, a memory collage). So there is no rule per path: any place under a story qualifies.
+        if (!UnderStory(path) || ContainsPostContent(data)) return false;
         var label = Get(root, "label")?.Split("$defer$").Last();
         string[] fields = label switch
         {
@@ -423,6 +415,31 @@ public static class PayloadParser
         };
         return fields.Length > 0 && data.EnumerateObject().Any() && data.EnumerateObject().All(p => fields.Contains(p.Name));
     }
+    static bool TimelineEdge(string?[] p) => p.Length > 4 && (p[0] is "user" or "node" && p[1] == "timeline_list_feed_units" || p[0] == "viewer" && p[1] == "news_feed") && p[2] == "edges" && int.TryParse(p[3], out var n) && n >= 0 && p[4] == "node";
+    // The path of a deferred fragment that hangs below a story: an edge node of a profile timeline or the home
+    // feed, or the pinned post. A path that only names the timeline (not one of its edges) is not under a story.
+    static bool UnderStory(string?[] p) => TimelineEdge(p) || p.Length >= 3 && p[0] is "user" or "node" && p[1] == "profile_pinned_post" && p[2] == "pinned_post_story";
+    // An unknown deferred fragment under a story with no post fields, no links and no text. It cannot hold
+    // a post or a part of one, so it must not block the capture: Facebook adds player and telemetry
+    // fragments faster than an allowlist can follow. The caller records it as a warning, so a new shape
+    // stays visible on the recovery page. A fragment with any content stays a diagnostic.
+    static bool ContentFreeFragment(JsonElement root)
+    {
+        var data = At(root, "data");
+        return At(root, "errors").ValueKind == JsonValueKind.Undefined && Get(root, "label") is { } label && label.Contains("$defer$", StringComparison.Ordinal)
+            && UnderStory(Array(At(root, "path")).Select(Text).ToArray()) && data.ValueKind == JsonValueKind.Object
+            && !ContainsPostContent(data) && !CarriesText(data);
+    }
+    // Ids, enum names and tracking blobs are ASCII without spaces. Captions and names have spaces or
+    // non-ASCII letters, and media arrive as links. Facebook wraps display text as {"text": ...}, so a `text`
+    // string counts even as one plain word. Only `data` is checked: `extensions` always holds prefetch links.
+    static bool CarriesText(JsonElement e) => e.ValueKind switch
+    {
+        JsonValueKind.Object => e.EnumerateObject().Any(p => p.NameEquals("text") && p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() != "" || CarriesText(p.Value)),
+        JsonValueKind.Array => e.EnumerateArray().Any(CarriesText),
+        JsonValueKind.String => e.GetString() is { } s && (s.StartsWith("http", StringComparison.OrdinalIgnoreCase) || s.Any(c => c > 127 || char.IsWhiteSpace(c))),
+        _ => false
+    };
     static bool UnavailableFacebookStory(JsonElement n)
     {
         var attachments = Array(At(n, "attachments")).ToArray();

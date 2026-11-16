@@ -31,13 +31,13 @@ public sealed class ResilientCaptureTests
         Assert.Empty(PayloadParser.Parse("facebook", Story(1700000000).Replace("\"id\":\"456\"", "\"unknown\":\"456\"")).Posts);
     }
     [Theory][InlineData("preferred_body")][InlineData("body_renderer")]
-    public void CommentVideoMetadataRequiresExactBoundaryAndRejectsContent(string field)
+    public void CommentVideoMetadataIsAuxiliaryAnywhereUnderStoryAndRejectsContent(string field)
     {
         var raw = JsonSerializer.Serialize(new { label = "VideoPlayerRelay_video$defer$InstreamVideoAdBreaksPlayer_video", path = new object[] { "node", "timeline_list_feed_units", "edges", 2, "node", "comet_sections", "feedback", "story", "story_ufi_container", "story", "feedback_context", "interesting_top_level_comments", 0, "comment", field, "ranges", 1, "entity" }, data = new { id = "synthetic-video", instream_extra_config = (object?)null, instream_video_ad_breaks_comet = new { } } });
         var parsed = PayloadParser.Parse("facebook", raw); Assert.Empty(parsed.Diagnostics); Assert.Empty(parsed.Posts); Assert.False(parsed.ExplicitEmpty);
-        Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("interesting_top_level_comments", "unknown_content")).Diagnostics);
+        Assert.Empty(PayloadParser.Parse("facebook", raw.Replace("interesting_top_level_comments", "unknown_content")).Issues);
         Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("\"instream_extra_config\":null", "\"instream_extra_config\":{\"post_id\":\"hidden\"}")).Diagnostics);
-        Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("VideoPlayerRelay_video", "Unknown")).Diagnostics);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("\"node\",\"timeline_list_feed_units\"", "\"node\",\"unknown_surface\"")).Diagnostics);
     }
     [Fact] public async Task ParserBlockedVisitRetainsGapWithoutBrowserRetry()
     {

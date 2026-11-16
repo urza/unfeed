@@ -4,7 +4,9 @@ using Feed.Core.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 namespace Feed.Core.Queries;
 
-public enum RecoveryDisposition { Attention, Automatic, Paused, Compatibility, Informational }
+// Compatibility: a parser-blocked response where posts can be missing. Backlog: a parser-blocked response
+// beside captured posts; parser work with nothing for the owner to do, so it lights no dot and stays off the overview.
+public enum RecoveryDisposition { Attention, Automatic, Paused, Compatibility, Informational, Backlog }
 public sealed record RecoveryIssue(string Platform, string Item, string Problem, int Attempts, DateTime? LastAttempt, DateTime? RetryAfter, string Recovery, bool Informational = false)
 {
     public RecoveryDisposition Disposition { get; init; } = RecoveryDisposition.Attention;
@@ -33,7 +35,7 @@ public static class RecoveryQuery
         foreach (var issue in issues)
         {
             if (issue.Disposition == RecoveryDisposition.Attention) return DiagnosticLevel.Alert;
-            if (issue.Disposition != RecoveryDisposition.Informational) level = DiagnosticLevel.Notice;
+            if (issue.Disposition is not (RecoveryDisposition.Informational or RecoveryDisposition.Backlog)) level = DiagnosticLevel.Notice;
         }
         return level;
     }
@@ -102,7 +104,17 @@ public static class RecoveryQuery
         var selection = eligible.OrderByDescending(r => r.Id).AsQueryable();
         if (fingerprint is not null) selection = selection.Skip((Math.Max(1, page) - 1) * 50).Take(50);
         var raws = summaryOnly ? await selection.Select(r => new RawSnapshot { Id = r.Id, Platform = r.Platform, Parsed = r.Parsed, RunId = r.RunId,
-            AttemptedAt = r.AttemptedAt, BlockedParserVersion = r.BlockedParserVersion }).ToArrayAsync(ct) : await selection.ToArrayAsync(ct);
+            AttemptedAt = r.AttemptedAt, BlockedParserVersion = r.BlockedParserVersion, CaptureToken = r.CaptureToken }).ToArrayAsync(ct) : await selection.ToArrayAsync(ct);
+        // An unrecognized response is a coverage risk only when its visit observed no posts. The visit row is the
+        // evidence; a home page has no visit row, so its run stands in. Without either, the risk stays assumed.
+        var blockedRaws = raws.Where(r => !r.Parsed && r.BlockedParserVersion == PayloadParser.Version).ToArray();
+        var tokens = blockedRaws.Select(r => r.CaptureToken).OfType<string>().Distinct().ToArray(); var runIds = blockedRaws.Select(r => r.RunId).OfType<long>().Distinct().ToArray();
+        var visitPosts = (await db.TimelineVisits.AsNoTracking().Where(v => v.CaptureToken != null && tokens.Contains(v.CaptureToken)).Select(v => new { v.CaptureToken, v.PostsFound }).ToArrayAsync(ct))
+            .GroupBy(v => v.CaptureToken!).ToDictionary(g => g.Key, g => g.Sum(v => v.PostsFound));
+        var runPosts = await db.Runs.AsNoTracking().Where(run => runIds.Contains(run.Id)).ToDictionaryAsync(run => run.Id, run => run.PostsFound, ct);
+        bool PostsObserved(RawSnapshot r) => r.CaptureToken is { } token && visitPosts.TryGetValue(token, out var found) ? found > 0 : r.RunId is { } run && runPosts.GetValueOrDefault(run) > 0;
+        // In the capture list of one group there are no group rows; every capture of a fingerprint shares its code and impact.
+        var detail = fingerprint is null ? null : await db.RawDiagnostics.AsNoTracking().Where(d => d.Fingerprint == fingerprint).Select(d => new { d.Code, d.Impact }).FirstOrDefaultAsync(ct);
         foreach (var r in raws)
         {
             var retry = new[] { r.AttemptedAt?.AddMinutes(30), Delay("process:not_before") }.Max();
@@ -111,11 +123,14 @@ public static class RecoveryQuery
             {
             var count = group?.Count ?? 1;
             var informational = group is not null ? group.Impact is "auxiliary" or "partial" : r.Parsed;
-            var recovery = r.Parsed ? "Recorded upstream warning; no replay needed" : r.BlockedParserVersion == PayloadParser.Version ? "Needs parser update; saved raw will retry after parser upgrade (explicit reparse also available)" : State(r.Platform, retry);
+            var blocked = !r.Parsed && r.BlockedParserVersion == PayloadParser.Version;
+            var backlog = blocked && (group?.Code ?? detail?.Code) == "unknown_response" && (group?.Impact ?? detail?.Impact) == "unknown_or_content" && PostsObserved(r);
+            var recovery = r.Parsed ? "Recorded upstream warning; no replay needed" : blocked ? "Needs parser update; saved raw will retry after parser upgrade (explicit reparse also available)" : State(r.Platform, retry);
             if (!informational && group?.Impact == "content") recovery = "Identifiable post content may be missing. " + recovery;
+            else if (backlog) recovery = "Unrecognized response beside captured posts; no post is known to be missing. " + recovery;
             else if (!informational && group?.Impact == "unknown_or_content") recovery = "Unrecognized response; content impact unresolved. " + recovery;
-            issues.Add(new(r.Platform, $"raw #{r.Id} · run #{r.RunId}", summaryOnly ? group?.Code ?? "capture_issue" : r.Error ?? r.Warning ?? "Waiting for ingest", 0, r.AttemptedAt, r.Parsed || r.BlockedParserVersion == PayloadParser.Version ? null : retry,
-                informational ? "Recorded upstream warning; no replay needed for this issue" : recovery, informational) { Disposition = informational ? RecoveryDisposition.Informational : r.BlockedParserVersion == PayloadParser.Version ? RecoveryDisposition.Compatibility : Disposition(r.Platform), RunId = r.RunId,
+            issues.Add(new(r.Platform, $"raw #{r.Id} · run #{r.RunId}", summaryOnly ? group?.Code ?? "capture_issue" : r.Error ?? r.Warning ?? "Waiting for ingest", 0, r.AttemptedAt, r.Parsed || blocked ? null : retry,
+                informational ? "Recorded upstream warning; no replay needed for this issue" : recovery, informational) { Disposition = informational ? RecoveryDisposition.Informational : backlog ? RecoveryDisposition.Backlog : blocked ? RecoveryDisposition.Compatibility : Disposition(r.Platform), RunId = r.RunId,
                 RawId = r.Id, CaptureCount = count, Fingerprint = group?.Fingerprint ?? fingerprint, Code = group?.Code,
                 RunCount = group?.Runs ?? 1, FirstSeen = group?.First, LastSeen = group?.Last });
             }

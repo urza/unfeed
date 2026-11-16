@@ -45,7 +45,7 @@ public static class CaptureDiagnostics
     }
     public static CaptureDiagnostic Create(string platform, string? operation, JsonElement root, int index, string message, bool warning)
     {
-        var code = message.StartsWith("parser uncertainty:", StringComparison.Ordinal) ? "unknown_response" : message.Contains("/GraphQL:", StringComparison.Ordinal) ? "upstream_error" : "invalid_json";
+        var code = message.StartsWith("parser uncertainty:", StringComparison.Ordinal) ? "unknown_response" : message.Contains("/GraphQL:", StringComparison.Ordinal) ? "upstream_error" : message.Contains("/deferred:", StringComparison.Ordinal) ? "unknown_fragment" : "invalid_json";
         var path = message.Contains("; path=", StringComparison.Ordinal) ? message.Split("; path=", 2)[1].Split(';')[0] : "";
         path = System.Text.RegularExpressions.Regex.Replace(path, @"(?<=/)[0-9]+(?=/|$)", "*");
         var impact = warning ? message.Contains("partial metadata unavailable", StringComparison.Ordinal) ? "partial" : "auxiliary"

@@ -1,7 +1,10 @@
 @* The feed's Manage dot links here, so the overview must say what the dot means before anything else.
    Red items are listed in full. Yellow items are split by disposition, because only "automatic" rows clear
    on their own: a paused row waits for a config change and a compatibility row waits for a parser update,
-   so one "no action needed" line for all three sent the owner away from work that was theirs. *@
+   so one "no action needed" line for all three sent the owner away from work that was theirs.
+   A compatibility row is one response shape, not one capture: the same shape can sit in many captures and one
+   capture can hold two shapes. The text counts shapes and each row names its shape, so two rows never read the same.
+   Backlog rows (a blocked response beside captured posts) are parser work only and stay on the recovery page. *@
 @if(Relogin.Length > 0 || Attention.Length > 0){
  <section class="manage-panel glass attention-panel alert" aria-label="Needs your attention"><h2>Needs your attention</h2>
   @foreach(var p in Relogin){<p><strong>@Management.PlatformName(p.Platform) login expired.</strong> Collection stops until you log in again below.</p>}
@@ -14,7 +17,7 @@ else if(Notices.Length > 0 || Pending > 0){
   @if(Pending > 0){<p>@Pending @(Pending == 1 ? "post waits" : "posts wait") for the model. The scheduler processes them in order.</p>}
   @if(Automatic.Length > 0){<p><strong>@Automatic.Length @(Automatic.Length == 1 ? "item retries" : "items retry") automatically.</strong> @NextRetry</p>@Rows(Automatic)}
   @if(Paused.Length > 0){<p><strong>@Paused.Length @(Paused.Length == 1 ? "item waits" : "items wait") because recovery is paused.</strong> Nothing retries until you enable the disabled part in the config.</p>@Rows(Paused)}
-  @if(Compatibility.Length > 0){<p><strong>@Compatibility.Length saved @(Compatibility.Length == 1 ? "capture needs" : "captures need") a parser update.</strong> The raw file stays until then, and you can reparse it from the recovery page.</p>@Rows(Compatibility)}
+  @if(Compatibility.Length > 0){<p><strong>@Compatibility.Length unrecognized response @(Compatibility.Length == 1 ? "shape needs" : "shapes need") a parser update.</strong> Posts can be missing from the affected visits. The raw files stay until then, and you can reparse them from the recovery page.</p>@Rows(Compatibility)}
   <p class="muted">People whose timeline is behind schedule are listed under <a href="/manage?section=coverage">Coverage</a>.</p>
   @if(Notices.Length > 0){<a href="/manage?section=recovery">Open recovery</a>}
  </section>}
@@ -39,7 +42,7 @@ else if(Notices.Length > 0 || Pending > 0){
  } }
  // One list shape for every disposition: item, problem, then the recovery text and the last attempt in grey.
  RenderFragment Rows(RecoveryIssue[] items) => @<text>
-   <ul>@foreach(var i in items.Take(8)){<li><PlatformGlyph Platform="@i.Platform"/> @i.Item · @i.Problem<br/><span class="muted">@RecoveryPresentation.Timing(i, Clock.Now)@(i.LastAttempt is { } at ? " · last attempt " + RecoveryPresentation.At(at, Zone) : "")</span></li>}</ul>
+   <ul>@foreach(var i in items.Take(8)){<li><PlatformGlyph Platform="@i.Platform"/> @i.Item@(i.CaptureCount > 1 ? $" (+{i.CaptureCount - 1} more {(i.CaptureCount == 2 ? "capture" : "captures")})" : "")@(i.Fingerprint is { Length: >= 8 } shape && !shape.StartsWith("legacy-") ? " · shape " + shape[..8] : "") · @i.Problem<br/><span class="muted">@RecoveryPresentation.Timing(i, Clock.Now)@(i.LastAttempt is { } at ? " · last attempt " + RecoveryPresentation.At(at, Zone) : "")</span></li>}</ul>
    @if(items.Length > 8){<p class="muted">@(items.Length - 8) more on the recovery page.</p>}
   </text>;
 }

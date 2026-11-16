@@ -157,12 +157,17 @@ public sealed class ParserTests
     {
         const string logging = """{"label":"CometShowMoreShowLessCallToAction_renderer$defer$useShowMoreShowLessCallToActionLogger_logData","path":["viewer","news_feed","edges",1,"node","comet_sections","call_to_action","story","bumpers","persistent_bumper","cta_renderer","comet_action"],"data":{"affected_display_names":["Fixture"],"affected_ids":[],"bumper_class":"IFRPersistentBroadTransientPreferenceSignalBumper","bumper_scope":"broad","generator_uuid":"fixture","ifr_show_rate_increase":false,"show_rate_n":25,"trigger_reason":"persistent"}}""";
         var parsed = PayloadParser.Parse("facebook", logging); Assert.Empty(parsed.Posts); Assert.Empty(parsed.Diagnostics); Assert.False(parsed.ExplicitEmpty);
-        Assert.NotEmpty(PayloadParser.Parse("facebook", logging.Replace("show_rate_n", "unknown_fixture_field")).Diagnostics);
-        Assert.NotEmpty(PayloadParser.Parse("facebook", logging.Replace("\"comet_action\"", "\"unknown_fixture_path\"")).Diagnostics);
+        // An unknown field or place makes it an unknown fragment. Without text it passes with a warning; a display name blocks.
+        foreach (var unknown in new[] { logging.Replace("show_rate_n", "unknown_fixture_field"), logging.Replace("\"comet_action\"", "\"unknown_fixture_path\"") })
+        {
+            parsed = PayloadParser.Parse("facebook", unknown); Assert.Empty(parsed.Diagnostics); Assert.Equal("unknown_fragment", Assert.Single(parsed.Issues).Code);
+            Assert.NotEmpty(PayloadParser.Parse("facebook", unknown.Replace("[\"Fixture\"]", "[\"Fixture Person\"]")).Diagnostics);
+        }
         const string player = """{"label":"VideoPlayerRelay_video$defer$InstreamVideoAdBreaksPlayer_video","path":["node","timeline_list_feed_units","edges",1,"node","comet_sections","content","story","attached_story","comet_sections","message","story","message","ranges",3,"entity"],"data":{"id":"fixture","instream_extra_config":{"instream_halo_delay_time_seconds":0},"instream_video_ad_breaks_comet":null}}""";
         parsed = PayloadParser.Parse("facebook", player); Assert.Empty(parsed.Posts); Assert.Empty(parsed.Diagnostics); Assert.False(parsed.ExplicitEmpty);
         Assert.Empty(PayloadParser.Parse("facebook", player.Replace("\"attached_story\",\"comet_sections\",", "\"comet_sections\",\"attached_story\",\"story\",\"attached_story\",\"comet_sections\",\"attached_story_layout\",\"story\",\"comet_sections\",")).Diagnostics);
-        Assert.NotEmpty(PayloadParser.Parse("facebook", player.Replace("\"entity\"]", "\"unknown_fixture_path\"]")).Diagnostics);
+        // The place under the story does not matter for a known player fragment.
+        Assert.Empty(PayloadParser.Parse("facebook", player.Replace("\"entity\"]", "\"unknown_fixture_path\"]")).Issues);
         Assert.NotEmpty(PayloadParser.Parse("facebook", player.Replace("\"id\":\"fixture\"", "\"id\":\"fixture\",\"message\":{\"text\":\"Hello\"}")).Diagnostics);
     }
     [Fact]
@@ -286,7 +291,7 @@ public sealed class ParserTests
     [InlineData("VideoPlayerWithVideoCardsOverlay_video", "comet_video_player_with_video_card_renderer")]
     [InlineData("CometFeedStoryVideoAttachmentScreenOverlay_video", "can_viewer_share")]
     [InlineData("InstreamVideoAdBreaksPlayer_video", "instream_video_ad_breaks_comet")]
-    public void KnownTimelinePlayerMetadataIsAuxiliaryButUnexpectedFieldsRemainDiagnostic(string label, string field)
+    public void KnownPlayerMetadataIsAuxiliaryAnywhereUnderStoryButPostContentRemainsDiagnostic(string label, string field)
     {
         var raw = System.Text.Json.JsonSerializer.Serialize(new { label = "Fixture$defer$" + label, path = new object[] { "user", "timeline_list_feed_units", "edges", 0, "node", "media" }, data = new Dictionary<string, object?> { [field] = null } });
         var parsed = PayloadParser.Parse("facebook", raw); Assert.Empty(parsed.Diagnostics); Assert.Empty(parsed.Posts); Assert.False(parsed.ExplicitEmpty);
@@ -294,8 +299,26 @@ public sealed class ParserTests
         Assert.Empty(PayloadParser.Parse("facebook", raw.Replace("\"timeline_list_feed_units\",\"edges\",0,\"node\"", "\"profile_pinned_post\",\"pinned_post_story\"")).Diagnostics);
         Assert.Empty(PayloadParser.Parse("facebook", raw.Replace("\"user\",\"timeline_list_feed_units\"", "\"viewer\",\"news_feed\"")).Diagnostics);
         Assert.Empty(PayloadParser.Parse("facebook", raw.Replace("\"media\"]", "\"media\",\"video_grid_renderer\",\"video\"]")).Diagnostics);
-        Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace(field, "unknown_fixture_field")).Diagnostics);
+        // Observed 2026-11-15: a memory collage holds its videos in a media array, so an index sits before the grid.
+        Assert.Empty(PayloadParser.Parse("facebook", raw.Replace("\"media\"]", "\"throwbackStyles\",\"attachment_target_renderer\",\"media\",6,\"video_grid_renderer\",\"video\"]")).Issues);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("null", "{\"post_id\":\"hidden\"}")).Diagnostics);
         Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("timeline_list_feed_units", "unknown_surface")).Diagnostics);
+    }
+    [Fact]
+    public void UnknownDeferredFragmentUnderStoryPassesWithWarningOnlyWithoutContent()
+    {
+        const string raw = """{"label":"Fixture_video$defer$UnknownFixtureFragment_video","path":["viewer","news_feed","edges",3,"node","comet_sections","content","story"],"data":{"id":"123","mode":"FIXTURE_ENUM","blob":"QWxhZGRpbjpvcGVuIHNlc2FtZQ==","nested":[{"count":2,"flag":true,"none":null}]},"extensions":{"prefetch_uris_v2":[{"uri":"https://example.test/a.jpg"}]}}""";
+        var parsed = PayloadParser.Parse("facebook", raw); Assert.Empty(parsed.Posts); Assert.Empty(parsed.Diagnostics); Assert.False(parsed.ExplicitEmpty);
+        var issue = Assert.Single(parsed.Issues); Assert.Equal("unknown_fragment", issue.Code); Assert.Equal("auxiliary", issue.Impact);
+        Assert.Equal("viewer/news_feed/edges/*/node/comet_sections/content/story", issue.Path); Assert.Equal("auxiliary", Assert.Single(parsed.Parts).Kind);
+        // A link, a text, a non-ASCII word or a post field can be content, so each one keeps the block.
+        foreach (var content in new[] { "\"id\":\"https://example.test/v.mp4\"", "\"id\":\"Hello there\"", "\"id\":\"Dobr\u00fd\"", "\"id\":\"123\",\"message\":null", "\"id\":\"123\",\"title\":{\"text\":\"Wow\"}" })
+            Assert.Equal("unknown_response", Assert.Single(PayloadParser.Parse("facebook", raw.Replace("\"id\":\"123\"", content)).Issues).Code);
+        // Only a deferred fragment under a story qualifies.
+        Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("$defer$", "$stream$")).Diagnostics);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("\"news_feed\"", "\"unknown_surface\"")).Diagnostics);
+        Assert.NotEmpty(PayloadParser.Parse("facebook", raw.Replace("\"edges\",3,\"node\",", "")).Diagnostics);
+        Assert.NotEmpty(PayloadParser.Parse("instagram", raw).Diagnostics);
     }
     [Theory][InlineData("/api/v1/feed/timeline/",true)][InlineData("/api/v1/media/1/like/",false)][InlineData("/api/v1/direct/inbox/",false)][InlineData("/api/v1/clips/user/",true)]public void InstagramCaptureGate(string path,bool expected)=>Assert.Equal(expected,Site.Gate("instagram","https://www.instagram.com"+path,"POST",200,"application/json",null,false));
     [Fact]public void FacebookFriendlyNameQueryPrecedesForm()=>Assert.True(Site.Gate("facebook","https://www.facebook.com/api/graphql/?fb_api_req_friendly_name=CometNewsFeedQuery","POST",200,"application/json","fb_api_req_friendly_name=Other",false));

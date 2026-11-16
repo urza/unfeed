@@ -43,6 +43,27 @@ public sealed class FeedPerformanceTests
         }
     }
 
+    // A parser-blocked response is the owner's concern only when posts can be missing. Beside captured posts it is
+    // parser backlog: it stays on the recovery page and lights no dot. The visit row is the evidence; a home page
+    // has no visit row, so its run stands in. A visit without posts stays a risk even when the run found some.
+    [Theory]
+    [InlineData("unknown_or_content", "visit", 3, RecoveryDisposition.Backlog)]
+    [InlineData("unknown_or_content", "visit", 0, RecoveryDisposition.Compatibility)]
+    [InlineData("content", "visit", 3, RecoveryDisposition.Compatibility)]
+    [InlineData("unknown_or_content", "run", 3, RecoveryDisposition.Backlog)]
+    [InlineData("unknown_or_content", "run", 0, RecoveryDisposition.Compatibility)]
+    public async Task BlockedResponseBesideCapturedPostsIsBacklog(string impact, string evidence, int posts, RecoveryDisposition expected)
+    {
+        await using var i = new TestInstance(); await i.Init(); await using var db = i.Factory.Open();
+        db.Runs.Add(new Run { Id = 1, Kind = "collect", Platform = "facebook", Status = "ok", FinishedAt = Clock.Now, PostsFound = evidence == "run" ? posts : 50 });
+        if (evidence == "visit") db.TimelineVisits.Add(new TimelineVisit { Platform = "facebook", Url = "https://www.facebook.com/10", RunId = 1, CaptureToken = "visit", Status = "rendered", PostsFound = posts });
+        var raw = new RawSnapshot { Platform = "facebook", RunId = 1, Path = "blocked.json", CaptureToken = "visit", Error = "unknown", CapturedAt = Clock.Now, BlockedParserVersion = PayloadParser.Version };
+        db.RawSnapshots.Add(raw); await db.SaveChangesAsync();
+        db.Add(new RawDiagnostic { RawSnapshotId = raw.Id, Code = "unknown_response", Fingerprint = "shape-1", Impact = impact, ParserVersion = PayloadParser.Version }); await db.SaveChangesAsync();
+        foreach (var rows in new[] { await RecoveryQuery.Read(db, Snapshot, grouped: true, summaryOnly: true), await RecoveryQuery.Read(db, Snapshot, fingerprint: "shape-1") })
+            Assert.Equal(expected, Assert.Single(rows, r => r.RawId == raw.Id).Disposition);
+        Assert.Equal(expected == RecoveryDisposition.Backlog ? DiagnosticLevel.None : DiagnosticLevel.Notice, await RecoveryQuery.Level(db, Snapshot));
+    }
     // The dot must agree with the Manage page: an upstream warning the page files as informational cannot
     // light it, an unparsed capture the scheduler will retry is a notice, and a failed task the owner must
     // act on is an alert.
