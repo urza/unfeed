@@ -1,16 +1,114 @@
 <span class="rich-text">@((MarkupString)Html)</span>
 @code {
+ static readonly System.Text.RegularExpressions.Regex UrlRegex = new(@"https?://[^\s<>""']+", System.Text.RegularExpressions.RegexOptions.Compiled);
  [Parameter] public string? Text { get; set; }
  [Parameter] public Tag[] Tags {get;set;}=[];
+
+ // Matches .NET Unicode \w semantics so tag word-boundary checks agree with (?<!\w)...(?!\w) without compiling a per-card regex.
+ static bool IsWordChar(char c)
+ {
+  if (c < 128) return char.IsAsciiLetterOrDigit(c) || c == '_';
+  return System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) is
+   System.Globalization.UnicodeCategory.UppercaseLetter or System.Globalization.UnicodeCategory.LowercaseLetter or
+   System.Globalization.UnicodeCategory.TitlecaseLetter or System.Globalization.UnicodeCategory.ModifierLetter or
+   System.Globalization.UnicodeCategory.OtherLetter or System.Globalization.UnicodeCategory.NonSpacingMark or
+   System.Globalization.UnicodeCategory.DecimalDigitNumber or System.Globalization.UnicodeCategory.ConnectorPunctuation;
+ }
+
+ static void AppendTag(System.Text.StringBuilder b, Tag tag, string encoded)
+ {
+  if (Uri.TryCreate(tag.Url, UriKind.Absolute, out var u) && u.Scheme == "https")
+   b.Append("<a class=\"tag\" href=\"").Append(System.Net.WebUtility.HtmlEncode(tag.Url)).Append("\" target=\"_blank\" rel=\"noopener noreferrer\"><strong>").Append(encoded).Append("</strong></a>");
+  else b.Append("<strong>").Append(encoded).Append("</strong>");
+ }
+
  string Html { get {
-   var text=Text??"";var b=new System.Text.StringBuilder();int offset=0;var names=Tags.Where(t=>t.Name.Length>0).OrderByDescending(t=>t.Name.Length).Select(t=>System.Text.RegularExpressions.Regex.Escape(t.Name)).ToArray();
-   var pattern=@"https?://[^\s<>""']+"+(names.Length>0?"|(?<!\\w)(?:"+string.Join("|",names)+")(?!\\w)":"");
-   foreach(System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text,pattern)) {
-     b.Append(System.Net.WebUtility.HtmlEncode(text[offset..m.Index]));var encoded=System.Net.WebUtility.HtmlEncode(m.Value);
-     if(m.Value.StartsWith("http://")||m.Value.StartsWith("https://"))b.Append($"<a href=\"{encoded}\" target=\"_blank\" rel=\"noopener noreferrer\">{encoded}</a>");
-     else {var tag=Tags.First(t=>t.Name==m.Value);if(Uri.TryCreate(tag.Url,UriKind.Absolute,out var u)&&u.Scheme=="https")b.Append($"<a class=\"tag\" href=\"{System.Net.WebUtility.HtmlEncode(tag.Url)}\" target=\"_blank\" rel=\"noopener noreferrer\"><strong>{encoded}</strong></a>");else b.Append($"<strong>{encoded}</strong>");}
-     offset=m.Index+m.Length;
+   var text = Text ?? "";
+   if (text.Length == 0) return "";
+   bool hasUrl = text.Contains("http://", StringComparison.Ordinal) || text.Contains("https://", StringComparison.Ordinal);
+
+   // Keep only non-empty deduplicated tags that actually occur in this text, longest-first for exact tie-breaking.
+   List<Tag>? activeTags = null;
+   if (Tags.Length > 0)
+   {
+    HashSet<string>? seen = null;
+    for (int i = 0; i < Tags.Length; i++)
+    {
+     var t = Tags[i];
+     if (t.Name.Length == 0 || !text.Contains(t.Name, StringComparison.Ordinal)) continue;
+     if (Tags.Length > 1) { seen ??= new(StringComparer.Ordinal); if (!seen.Add(t.Name)) continue; }
+     (activeTags ??= new(Tags.Length)).Add(t);
+    }
+    if (activeTags is { Count: > 1 }) activeTags.Sort((a, b) => b.Name.Length.CompareTo(a.Name.Length));
    }
-   return b.Append(System.Net.WebUtility.HtmlEncode(text[offset..])).ToString();
+
+   if (activeTags is null && !hasUrl) return System.Net.WebUtility.HtmlEncode(text);
+
+   if (activeTags is null)
+   {
+    var matches = UrlRegex.Matches(text);
+    if (matches.Count == 0) return System.Net.WebUtility.HtmlEncode(text);
+    var b = new System.Text.StringBuilder(text.Length + matches.Count * 48);
+    int offset = 0;
+    foreach (System.Text.RegularExpressions.Match m in matches)
+    {
+     if (m.Index > offset) b.Append(System.Net.WebUtility.HtmlEncode(text.Substring(offset, m.Index - offset)));
+     var encoded = System.Net.WebUtility.HtmlEncode(m.Value);
+     b.Append("<a href=\"").Append(encoded).Append("\" target=\"_blank\" rel=\"noopener noreferrer\">").Append(encoded).Append("</a>");
+     offset = m.Index + m.Length;
+    }
+    if (offset < text.Length) b.Append(System.Net.WebUtility.HtmlEncode(text.Substring(offset)));
+    return b.ToString();
+   }
+
+   // Left-to-right scan matching exact alternation priority: URL first, then longest tag name at the earliest index.
+   System.Text.RegularExpressions.Match? nextUrl = hasUrl ? UrlRegex.Match(text) : null;
+   if (nextUrl is { Success: false }) nextUrl = null;
+   var sb = new System.Text.StringBuilder(text.Length + 64);
+   int pos = 0;
+   bool matchedAny = false;
+   while (pos < text.Length)
+   {
+    while (nextUrl is not null && nextUrl.Index < pos)
+    {
+     nextUrl = nextUrl.NextMatch();
+     if (!nextUrl.Success) nextUrl = null;
+    }
+    int bestIdx = nextUrl is not null ? nextUrl.Index : int.MaxValue;
+    int bestLen = nextUrl is not null ? nextUrl.Length : 0;
+    Tag? bestTag = null;
+
+    for (int i = 0; i < activeTags.Count; i++)
+    {
+     var t = activeTags[i];
+     var name = t.Name;
+     int search = pos;
+     while (search < bestIdx)
+     {
+      int idx = text.IndexOf(name, search, StringComparison.Ordinal);
+      if (idx < 0 || idx >= bestIdx) break;
+      int end = idx + name.Length;
+      if ((idx == 0 || !IsWordChar(text[idx - 1])) && (end == text.Length || !IsWordChar(text[end])))
+      {
+       bestIdx = idx; bestLen = name.Length; bestTag = t;
+       break;
+      }
+      search = idx + 1;
+     }
+    }
+
+    if (bestIdx == int.MaxValue) break;
+    matchedAny = true;
+    if (bestIdx > pos) sb.Append(System.Net.WebUtility.HtmlEncode(text.Substring(pos, bestIdx - pos)));
+    var encoded = System.Net.WebUtility.HtmlEncode(text.Substring(bestIdx, bestLen));
+    if (bestTag is null)
+     sb.Append("<a href=\"").Append(encoded).Append("\" target=\"_blank\" rel=\"noopener noreferrer\">").Append(encoded).Append("</a>");
+    else
+     AppendTag(sb, bestTag, encoded);
+    pos = bestIdx + bestLen;
+   }
+   if (!matchedAny) return System.Net.WebUtility.HtmlEncode(text);
+   if (pos < text.Length) sb.Append(System.Net.WebUtility.HtmlEncode(text.Substring(pos)));
+   return sb.ToString();
  } }
 }

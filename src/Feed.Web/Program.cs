@@ -25,10 +25,12 @@ builder.Services.AddAntiforgery();builder.Services.AddSingleton<ManagementFiles>
 var app=builder.Build();app.UseResponseCompression();
 var assets=Path.Combine(app.Environment.ContentRootPath,"wwwroot"); if(!Directory.Exists(assets))assets=Path.Combine(AppContext.BaseDirectory,"wwwroot");
 var stamp=Directory.Exists(assets)?Prompts.Sha(string.Join("",Directory.EnumerateFiles(assets,"*",SearchOption.AllDirectories).Order().Select(File.ReadAllText)))[..12]:"dev";
-app.Use(async(context,next)=>{context.Items["instance"]=files.Refresh();var watch=Stopwatch.StartNew();context.Response.OnStarting(()=>{context.Response.Headers["X-Render-Ms"]=watch.Elapsed.TotalMilliseconds.ToString("0.00",System.Globalization.CultureInfo.InvariantCulture);return Task.CompletedTask;});await next();});
-InstanceSnapshot Snapshot(HttpContext c)=>(InstanceSnapshot)c.Items["instance"]!;
+var contentTypes=new FileExtensionContentTypeProvider();
+app.Use(async(context,next)=>{var watch=Stopwatch.StartNew();context.Response.OnStarting(()=>{context.Response.Headers["X-Render-Ms"]=watch.Elapsed.TotalMilliseconds.ToString("0.00",System.Globalization.CultureInfo.InvariantCulture);return Task.CompletedTask;});await next();});
+// Refresh instance files lazily on routes that read them so static /media, /assets, /backgrounds and /healthz requests avoid disk reads and locks.
+InstanceSnapshot Snapshot(HttpContext c)=>(InstanceSnapshot)(c.Items["instance"]??=files.Refresh());
 IResult Back(HttpContext c){var referer=c.Request.Headers.Referer.ToString();return Results.Redirect(Uri.TryCreate(referer,UriKind.Absolute,out var u)&&u.Authority==c.Request.Host.Value?u.PathAndQuery:"/");}
-string Type(string path){new FileExtensionContentTypeProvider().TryGetContentType(path,out var type);return type??"application/octet-stream";}
+string Type(string path)=>contentTypes.TryGetContentType(path,out var type)?type:"application/octet-stream";
 string Logs(string? which,int count){var names=which is "cli" or "web"?new[]{which}:new[]{"cli","web"};return string.Join('\n',names.SelectMany(n=>File.Exists(paths.Get("logs",$"feed-{n}.log"))?File.ReadLines(paths.Get("logs",$"feed-{n}.log")).TakeLast(count):[]).Order(StringComparer.Ordinal).TakeLast(count));}
 app.MapGet("/",async(HttpContext ctx,FeedQuery query,Backgrounds backgrounds)=>{
  var s=Snapshot(ctx);var view=ctx.Request.Query["view"].ToString();if(view.Length==0)view=s.Taxonomy.Views.Any(v=>v.Key==s.Config.Ui.DefaultView)?s.Config.Ui.DefaultView:"all";

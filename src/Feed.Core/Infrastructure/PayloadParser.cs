@@ -9,22 +9,80 @@ public sealed record ParsedCapture(IReadOnlyList<Observation> Posts, IReadOnlyLi
     public IReadOnlyList<CapturePart> Parts { get; init; } = [];
     public IReadOnlyList<CaptureDiagnostic> Issues { get; init; } = [];
 }
-public static class PayloadParser
+public static partial class PayloadParser
 {
     // Advance when a parser change can recover previously rejected immutable snapshots.
     public const int Version = 17;
+    [GeneratedRegex("\"originated_from_recommendation\"\\s*:\\s*\"?1")] private static partial Regex RecommendationRegex();
+    [GeneratedRegex("<script[^>]*type=[\"']application/json[\"'][^>]*>(.*?)</script>", RegexOptions.Singleline | RegexOptions.IgnoreCase)] private static partial Regex ScriptJsonRegex();
+
+    public static JsonElement At(JsonElement e, string k1) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(k1, out var v) ? v : default;
+    public static JsonElement At(JsonElement e, string k1, string k2) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(k1, out var v1) && v1.ValueKind == JsonValueKind.Object && v1.TryGetProperty(k2, out var v2) ? v2 : default;
+    public static JsonElement At(JsonElement e, string k1, string k2, string k3) => At(At(e, k1, k2), k3);
     public static JsonElement At(JsonElement e, params string[] path) { foreach (var key in path) { if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(key, out e)) return default; } return e; }
     public static string? Text(JsonElement e) => e.ValueKind switch { JsonValueKind.String => e.GetString(), JsonValueKind.Number => e.GetRawText(), JsonValueKind.Object => Text(At(e, "text")), _ => null };
-    public static string? Get(JsonElement e, params string[] keys) => keys.Select(k => Text(At(e, k))).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
+    public static string? Get(JsonElement e, string k1) { var s = Text(At(e, k1)); return string.IsNullOrWhiteSpace(s) ? null : s; }
+    public static string? Get(JsonElement e, string k1, string k2) => Get(e, k1) ?? Get(e, k2);
+    public static string? Get(JsonElement e, string k1, string k2, string k3) => Get(e, k1) ?? Get(e, k2) ?? Get(e, k3);
+    public static string? Get(JsonElement e, string k1, string k2, string k3, string k4) => Get(e, k1) ?? Get(e, k2) ?? Get(e, k3) ?? Get(e, k4);
+    public static string? Get(JsonElement e, params string[] keys)
+    {
+        foreach (var k in keys) { var s = Text(At(e, k)); if (!string.IsNullOrWhiteSpace(s)) return s; }
+        return null;
+    }
     public static IEnumerable<JsonElement> Array(JsonElement e) => e.ValueKind == JsonValueKind.Array ? e.EnumerateArray() : [];
     public static IEnumerable<(JsonElement Node, JsonElement[] Parents)> Walk(JsonElement e, JsonElement[]? parents = null)
     {
-        parents ??= []; if (e.ValueKind == JsonValueKind.Object) { yield return (e, parents); foreach (var p in e.EnumerateObject()) foreach (var n in Walk(p.Value, [.. parents, e])) yield return n; }
-        else if (e.ValueKind == JsonValueKind.Array) foreach (var child in e.EnumerateArray()) foreach (var n in Walk(child, parents)) yield return n;
+        var result = new List<(JsonElement, JsonElement[])>();
+        var stack = new List<JsonElement>(16);
+        if (parents is not null) stack.AddRange(parents);
+        void Visit(JsonElement node)
+        {
+            if (node.ValueKind == JsonValueKind.Object)
+            {
+                result.Add((node, stack.Count == 0 ? [] : stack.ToArray()));
+                stack.Add(node);
+                foreach (var p in node.EnumerateObject())
+                    if (p.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array) Visit(p.Value);
+                stack.RemoveAt(stack.Count - 1);
+            }
+            else if (node.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var child in node.EnumerateArray())
+                    if (child.ValueKind is JsonValueKind.Object or JsonValueKind.Array) Visit(child);
+            }
+        }
+        Visit(e);
+        return result;
+    }
+    internal static bool HasPostIdOrShortcode(JsonElement e)
+    {
+        if (e.ValueKind == JsonValueKind.Object)
+        {
+            if (Get(e, "post_id", "shortcode") is not null) return true;
+            foreach (var p in e.EnumerateObject())
+                if (p.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array && HasPostIdOrShortcode(p.Value)) return true;
+        }
+        else if (e.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var child in e.EnumerateArray())
+                if (child.ValueKind is JsonValueKind.Object or JsonValueKind.Array && HasPostIdOrShortcode(child)) return true;
+        }
+        return false;
     }
     static bool Truth(JsonElement e) => e.ValueKind == JsonValueKind.True || e.ValueKind == JsonValueKind.Number && e.TryGetInt64(out var n) && n != 0 || e.ValueKind == JsonValueKind.String && e.GetString() is { Length: > 0 } s && s != "0";
     static DateTime? Date(string? value) => long.TryParse(value, out var n) && n >= -62135596800 && n < 253402300800 && n != 0 ? DateTimeOffset.FromUnixTimeSeconds(n).UtcDateTime : null;
-    static string? Url(string? s, string platform) { if (s is null) return null; if (s.StartsWith('/')) s = Platforms.Home(platform).TrimEnd('/') + s; return Uri.TryCreate(s, UriKind.Absolute, out var u) && u.Scheme is "http" or "https" ? new UriBuilder(u) { Scheme = "https", Port = -1 }.Uri.ToString() : null; }
+    static string? Url(string? s, string platform)
+    {
+        if (s is null) return null;
+        if (s.StartsWith('/')) s = Platforms.Home(platform).TrimEnd('/') + s;
+        if (!Uri.TryCreate(s, UriKind.Absolute, out var u) || u.Scheme is not ("http" or "https")) return null;
+        // Fast path avoids UriBuilder allocation when the URL is already canonical https on the default port.
+        if (u.Scheme == "https" && u.IsDefaultPort && u.Fragment.Length == 0 && u.Query != "?") return u.ToString();
+        return new UriBuilder(u) { Scheme = "https", Port = -1 }.Uri.ToString();
+    }
+    static string? NonBlankText(JsonElement e) { var s = Text(e); return string.IsNullOrWhiteSpace(s) ? null : s; }
+    static bool HasAnyProperty(JsonElement obj) { foreach (var _ in obj.EnumerateObject()) return true; return false; }
     // Media identity, never a fetch URL. Meta CDN links rotate most query parameters per request
     // (signatures, cache ids, delivery hints such as _nc_gid or efg), and also the host and the rendition
     // (stp): on 2026-11-10 the live instance held 1,216 groups of one asset under several keys, 948 of them
@@ -36,38 +94,80 @@ public static class PayloadParser
     public static string SourceKey(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var u)) return url;
-        var query = u.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries); var file = u.AbsolutePath[(u.AbsolutePath.LastIndexOf('/') + 1)..];
-        // The host condition keeps a generic name such as image.jpg on a third-party host from joining two pictures.
-        if (file.Contains('.') && !query.Any(x => x.Split('=')[0].ToLowerInvariant() == "url") && (u.Host.EndsWith(".fbcdn.net", StringComparison.OrdinalIgnoreCase) || u.Host.EndsWith(".cdninstagram.com", StringComparison.OrdinalIgnoreCase))) return "file:" + file;
-        var kept = query.Where(x => x.Split('=')[0].ToLowerInvariant() is "stp" or "url").Order(StringComparer.Ordinal);
+        var path = u.AbsolutePath;
+        var file = path[(path.LastIndexOf('/') + 1)..];
+        var rawQuery = u.Query;
+        // Fast path for Meta CDN links without a proxied `url=` query parameter: avoids query splitting and UriBuilder.
+        if (file.Contains('.') && (u.Host.EndsWith(".fbcdn.net", StringComparison.OrdinalIgnoreCase) || u.Host.EndsWith(".cdninstagram.com", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (rawQuery.Length <= 1 || !HasQueryParam(rawQuery.AsSpan(1), "url")) return "file:" + file;
+        }
+        var query = rawQuery.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries);
+        var kept = query.Where(x => { int eq = x.IndexOf('='); var key = eq < 0 ? x : x[..eq]; return key.Equals("stp", StringComparison.OrdinalIgnoreCase) || key.Equals("url", StringComparison.OrdinalIgnoreCase); }).Order(StringComparer.Ordinal);
         return new UriBuilder(u) { Query = string.Join('&', kept), Fragment = "" }.Uri.ToString();
     }
+    static bool HasQueryParam(ReadOnlySpan<char> query, ReadOnlySpan<char> name)
+    {
+        while (!query.IsEmpty)
+        {
+            int amp = query.IndexOf('&');
+            var part = amp < 0 ? query : query[..amp];
+            int eq = part.IndexOf('=');
+            var key = eq < 0 ? part : part[..eq];
+            if (key.Equals(name, StringComparison.OrdinalIgnoreCase)) return true;
+            if (amp < 0) break;
+            query = query[(amp + 1)..];
+        }
+        return false;
+    }
+    static bool HasMoreThanOneProperty(JsonElement obj)
+    {
+        int count = 0;
+        foreach (var _ in obj.EnumerateObject()) if (++count > 1) return true;
+        return false;
+    }
+    static bool LooksLikeJsonl(string body)
+        => body.StartsWith("for (;;);", StringComparison.Ordinal)
+            || body.Contains("}\n{", StringComparison.Ordinal)
+            || body.Contains("}\r\n{", StringComparison.Ordinal)
+            || body.Contains("}\nfor (;;);", StringComparison.Ordinal)
+            || body.Contains("}\r\nfor (;;);", StringComparison.Ordinal);
     public static ParsedCapture Parse(string platform, string body, bool people = false, CaptureContext? context = null)
     {
-        var roots = new List<string>();
-        try { using var doc = JsonDocument.Parse(body); roots.Add(body); }
-        catch (JsonException) { roots.AddRange(body.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.StartsWith("for (;;);", StringComparison.Ordinal) ? l[9..] : l)); }
-        if (roots.Count == 0) roots.Add(body);
         var observations = new Dictionary<string, Observation>(); var persons = new List<Person>();
         var parts = new List<CapturePart>(); var issues = new List<CaptureDiagnostic>(); var errors = new List<string>(); var warnings = new List<string>();
-        for (var index = 0; index < roots.Count; index++)
+
+        void ProcessRoot(int index, JsonElement root, string? parseError)
         {
-            var parsed = ParseCore(platform, roots[index], people); JsonElement root = default;
-            try { using var doc = JsonDocument.Parse(roots[index]); root = doc.RootElement.Clone(); } catch (JsonException) { }
-            // Inspect independent data siblings as well as JSONL roots. A successful
-            // post branch cannot establish that an unfamiliar sibling is harmless.
-            var data = At(root, "data");
-            if (!people && parsed.Posts.Count > 0 && data.ValueKind == JsonValueKind.Object && data.EnumerateObject().Count() > 1)
+            ParsedCapture parsed;
+            HashSet<string>? postDataBranches = null;
+            if (parseError is not null)
             {
-                foreach (var branch in data.EnumerateObject())
+                parsed = new([], [], false, [parseError]);
+            }
+            else
+            {
+                var data = At(root, "data");
+                bool checkSiblings = !people && data.ValueKind == JsonValueKind.Object && HasMoreThanOneProperty(data);
+                if (checkSiblings) postDataBranches = new HashSet<string>(StringComparer.Ordinal);
+                parsed = ParseRoot(platform, root, people, postDataBranches);
+                // Inspect independent data siblings as well as JSONL roots. A successful
+                // post branch cannot establish that an unfamiliar sibling is harmless.
+                if (checkSiblings && parsed.Posts.Count > 0)
                 {
-                    if (branch.Value.ValueKind is JsonValueKind.Null or JsonValueKind.False || EnvelopeMetadata(platform, branch)) continue;
-                    var wrapped = JsonSerializer.Serialize(new { data = new Dictionary<string, JsonElement> { [branch.Name] = branch.Value } });
-                    var sibling = ParseCore(platform, wrapped);
-                    if (sibling.Posts.Count == 0 && !sibling.ExplicitEmpty && sibling.Diagnostics.Count > 0)
+                    foreach (var branch in data.EnumerateObject())
                     {
-                        var message = "parser uncertainty: unrecognized data branch; path=data/" + branch.Name;
-                        parsed = parsed with { Diagnostics = parsed.Diagnostics.Append(message).ToArray() };
+                        if (branch.Value.ValueKind is JsonValueKind.Null or JsonValueKind.False || EnvelopeMetadata(platform, branch)) continue;
+                        // A branch that already produced a post in ParseRoot is recognized; skip re-serializing and re-parsing it.
+                        if (postDataBranches!.Contains(branch.Name)) continue;
+                        var wrapped = JsonSerializer.Serialize(new { data = new Dictionary<string, JsonElement> { [branch.Name] = branch.Value } });
+                        using var siblingDoc = JsonDocument.Parse(wrapped);
+                        var sibling = ParseRoot(platform, siblingDoc.RootElement, false, null);
+                        if (sibling.Posts.Count == 0 && !sibling.ExplicitEmpty && sibling.Diagnostics.Count > 0)
+                        {
+                            var message = "parser uncertainty: unrecognized data branch; path=data/" + branch.Name;
+                            parsed = parsed with { Diagnostics = parsed.Diagnostics.Append(message).ToArray() };
+                        }
                     }
                 }
             }
@@ -76,8 +176,40 @@ public static class PayloadParser
                 else observations.Add(o.Post.PlatformPostId, o);
             persons.AddRange(parsed.People); errors.AddRange(parsed.Diagnostics); warnings.AddRange(parsed.Warnings);
             parts.Add(new(index, parsed.Posts.Count > 0 ? "posts" : parsed.ExplicitEmpty ? "explicit_empty" : parsed.Diagnostics.Count == 0 ? "auxiliary" : "unknown", parsed.Posts.Count, parsed.ExplicitEmpty));
-            issues.AddRange(parsed.Diagnostics.Select(m => CaptureDiagnostics.Create(platform, context?.Operation, root, index, m, false)));
-            issues.AddRange(parsed.Warnings.Select(m => CaptureDiagnostics.Create(platform, context?.Operation, root, index, m, true)));
+            foreach (var m in parsed.Diagnostics) issues.Add(CaptureDiagnostics.Create(platform, context?.Operation, root, index, m, false));
+            foreach (var m in parsed.Warnings) issues.Add(CaptureDiagnostics.Create(platform, context?.Operation, root, index, m, true));
+        }
+
+        // Parse each JSON root once without throwing JsonException on normal compact JSONL captures or cloning DOM trees.
+        bool parsedAsSingle = false;
+        if (!LooksLikeJsonl(body))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                ProcessRoot(0, doc.RootElement, null);
+                parsedAsSingle = true;
+            }
+            catch (JsonException) { }
+        }
+        if (!parsedAsSingle)
+        {
+            var lines = body.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            if (lines.Length == 0) lines = [body];
+            for (var index = 0; index < lines.Length; index++)
+            {
+                var line = lines[index];
+                if (line.StartsWith("for (;;);", StringComparison.Ordinal)) line = line[9..];
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    ProcessRoot(index, doc.RootElement, null);
+                }
+                catch (JsonException e)
+                {
+                    ProcessRoot(index, default, e.Message);
+                }
+            }
         }
         return new(observations.Values.ToArray(), persons.DistinctBy(p => (p.Id, p.Url)).ToArray(), parts.Any(p => p.ExplicitEmpty), errors) { Warnings = warnings, Parts = parts, Issues = issues };
     }
@@ -91,18 +223,20 @@ public static class PayloadParser
         if (platform != "facebook") return false;
         if (branch.Name is "cursor" or "deduplication_key" or "min_gap_type_index_string" or "sposnsor_new_distac_action" or "top_story_cache_score" or "brs_content_label" or "is_ad_eligible_for_ad_pod") return Scalar(value);
         if (value.ValueKind != JsonValueKind.Object) return false;
-        string[] fields = branch.Name switch { "cat_sensitive" => ["enc", "cat"], "feed_backend_data" => ["qid", "original_qid", "vsid", "vspos", "should_recent_vpv_fetch_tracking_data", "serialized_payloads"], _ => [] };
-        return fields.Length > 0 && value.EnumerateObject().Any() && value.EnumerateObject().All(p => fields.Contains(p.Name) && Scalar(p.Value));
+        if (branch.Name == "cat_sensitive")
+            return value.EnumerateObject().Any() && value.EnumerateObject().All(p => p.Name is "enc" or "cat" && Scalar(p.Value));
+        if (branch.Name == "feed_backend_data")
+            return value.EnumerateObject().Any() && value.EnumerateObject().All(p => p.Name is "qid" or "original_qid" or "vsid" or "vspos" or "should_recent_vpv_fetch_tracking_data" or "serialized_payloads" && Scalar(p.Value));
+        return false;
     }
-    static ParsedCapture ParseCore(string platform, string body, bool people = false)
+    static ParsedCapture ParseRoot(string platform, JsonElement root, bool people, HashSet<string>? postDataBranches)
     {
-        var roots = new List<JsonElement>(); var errors = new List<string>(); var warnings = new List<string>();
-        try { using var d = JsonDocument.Parse(body); roots.Add(d.RootElement.Clone()); }
-        catch (JsonException) { foreach (var line in body.Split('\n', StringSplitOptions.RemoveEmptyEntries)) { try { using var d = JsonDocument.Parse(line.StartsWith("for (;;);") ? line[9..] : line); roots.Add(d.RootElement.Clone()); } catch (JsonException e) { errors.Add(e.Message); } } }
+        var errors = new List<string>(); var warnings = new List<string>();
         var posts = new Dictionary<string, Observation>(); var persons = new List<Person>(); var empty = false;
-        foreach (var root in roots)
+        var damaged = new List<JsonElement>(); var partial = new List<JsonElement>();
+        bool hasRootErrors = At(root, "errors").ValueKind != JsonValueKind.Undefined;
+        if (hasRootErrors)
         {
-            var damaged = new List<JsonElement>(); var partial = new List<JsonElement>();
             foreach (var error in Array(At(root, "errors")))
             {
                 var path = string.Join('/', Array(At(error, "path")).Select(Text));
@@ -115,36 +249,131 @@ public static class PayloadParser
                 }
                 else { errors.Add(detail); damaged.Add(ErrorScope(platform, root, error)); }
             }
-            var nodes = Walk(root).ToArray(); var children = nodes.SelectMany(x => Array(At(x.Node, "carousel_media"))).Select(Id).Where(s => s is not null).ToHashSet();
-            foreach (var (n, parents) in nodes)
+        }
+        bool isInstagram = platform == "instagram";
+        HashSet<string?>? children = null;
+        if (isInstagram && !people)
+        {
+            children = new HashSet<string?>();
+            void CollectCarouselChildren(JsonElement e)
             {
-                if (damaged.Any(scope => scope.Equals(n) || parents.Contains(scope))) continue;
-                foreach (var key in platform == "instagram" ? new[] { "user_timeline", "xdt_api__v1__feed__user_timeline_graphql_connection" } : new[] { "user_timeline" })
-                    if (At(n, key) is var timeline && timeline.ValueKind == JsonValueKind.Object && At(timeline, "edges").ValueKind == JsonValueKind.Array && !Array(At(timeline, "edges")).Any() && At(timeline, "page_info", "has_next_page").ValueKind == JsonValueKind.False && At(root, "errors").ValueKind == JsonValueKind.Undefined) empty = true;
-                if (people) { var person = PersonFrom(platform, n, parents); if (person is not null) persons.Add(person); continue; }
-                var observation = platform == "instagram" ? Instagram(n, parents, children) : Facebook(n, parents);
-                if (observation is not null)
+                if (e.ValueKind == JsonValueKind.Object)
                 {
-                    observation = observation with { IsPartial = partial.Any(scope => scope.Equals(n) || parents.Contains(scope)) };
-                    // A Facebook wall can contain posts by somebody other than its
-                    // owner. Attribute coverage through the enclosing profile response,
-                    // without changing who authored the post or granting filter bypasses.
-                    var owners = platform == "facebook" ? new[] { At(root, "data", "user"), At(root, "data", "node") }
-                        .Where(p => Get(p, "id") is not null && parents.Contains(At(p, "timeline_list_feed_units")))
-                        .Select(p => Get(p, "id")!).ToArray() : observation.TimelineOwnerIds.ToArray();
-                    if (posts.TryGetValue(observation.Post.PlatformPostId, out var existing))
-                        posts[observation.Post.PlatformPostId] = (existing.IsPartial && !observation.IsPartial ? observation : existing) with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(owners).Distinct().ToArray() };
-                    else posts.Add(observation.Post.PlatformPostId, observation with { TimelineOwnerIds = owners });
+                    if (e.TryGetProperty("carousel_media", out var cm) && cm.ValueKind == JsonValueKind.Array)
+                        foreach (var item in cm.EnumerateArray()) if (Id(item) is { } cid) children.Add(cid);
+                    foreach (var p in e.EnumerateObject())
+                        if (p.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array) CollectCarouselChildren(p.Value);
+                }
+                else if (e.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in e.EnumerateArray())
+                        if (item.ValueKind is JsonValueKind.Object or JsonValueKind.Array) CollectCarouselChildren(item);
                 }
             }
+            CollectCarouselChildren(root);
         }
+
+        // Precompute Facebook profile timeline owners once per root instead of re-reading At(root, "data", "user"/"node") per story.
+        (JsonElement Units, string OwnerId)[] fbOwners = [];
+        if (!isInstagram && !people)
+        {
+            var data = At(root, "data");
+            if (data.ValueKind == JsonValueKind.Object)
+            {
+                var u = At(data, "user"); var n = At(data, "node");
+                var list = new List<(JsonElement, string)>(2);
+                if (Get(u, "id") is { } uid && At(u, "timeline_list_feed_units") is { ValueKind: not JsonValueKind.Undefined } uu) list.Add((uu, uid));
+                if (Get(n, "id") is { } nid && At(n, "timeline_list_feed_units") is { ValueKind: not JsonValueKind.Undefined } nu) list.Add((nu, nid));
+                if (list.Count > 0) fbOwners = list.ToArray();
+            }
+        }
+
+        var parentStack = new List<JsonElement>(24);
+        static bool ContainsElement(List<JsonElement> scopes, JsonElement n, List<JsonElement> parents)
+        {
+            foreach (var scope in scopes)
+            {
+                if (scope.Equals(n)) return true;
+                for (int i = 0; i < parents.Count; i++) if (parents[i].Equals(scope)) return true;
+            }
+            return false;
+        }
+        static bool CheckEmptyTimeline(JsonElement n, ReadOnlySpan<byte> key)
+            => n.TryGetProperty(key, out var timeline) && timeline.ValueKind == JsonValueKind.Object
+                && timeline.TryGetProperty("edges"u8, out var edges) && edges.ValueKind == JsonValueKind.Array && edges.GetArrayLength() == 0
+                && timeline.TryGetProperty("page_info"u8, out var pi) && pi.ValueKind == JsonValueKind.Object
+                && pi.TryGetProperty("has_next_page"u8, out var next) && next.ValueKind == JsonValueKind.False;
+
+        void WalkNode(JsonElement n, string? dataBranch, bool inData)
+        {
+            if (n.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var child in n.EnumerateArray())
+                    if (child.ValueKind is JsonValueKind.Object or JsonValueKind.Array) WalkNode(child, dataBranch, false);
+                return;
+            }
+            if (n.ValueKind != JsonValueKind.Object) return;
+            bool skip = damaged.Count > 0 && ContainsElement(damaged, n, parentStack);
+            if (!skip)
+            {
+                if (!hasRootErrors && (CheckEmptyTimeline(n, "user_timeline"u8) || isInstagram && CheckEmptyTimeline(n, "xdt_api__v1__feed__user_timeline_graphql_connection"u8)))
+                    empty = true;
+                if (people)
+                {
+                    var person = PersonFrom(platform, n, parentStack);
+                    if (person is not null) persons.Add(person);
+                }
+                else
+                {
+                    var observation = isInstagram ? Instagram(n, parentStack, children!) : Facebook(n, parentStack);
+                    if (observation is not null)
+                    {
+                        if (dataBranch is not null) postDataBranches?.Add(dataBranch);
+                        bool isPartial = partial.Count > 0 && ContainsElement(partial, n, parentStack);
+                        if (isPartial) observation = observation with { IsPartial = true };
+                        // A Facebook wall can contain posts by somebody other than its
+                        // owner. Attribute coverage through the enclosing profile response,
+                        // without changing who authored the post or granting filter bypasses.
+                        IReadOnlyList<string> owners;
+                        if (!isInstagram)
+                        {
+                            if (fbOwners.Length == 0) owners = [];
+                            else
+                            {
+                                List<string>? found = null;
+                                foreach (var (units, oid) in fbOwners)
+                                    for (int i = 0; i < parentStack.Count; i++)
+                                        if (parentStack[i].Equals(units)) { (found ??= []).Add(oid); break; }
+                                owners = found is null ? [] : found.ToArray();
+                            }
+                        }
+                        else owners = observation.TimelineOwnerIds;
+                        if (posts.TryGetValue(observation.Post.PlatformPostId, out var existing))
+                            posts[observation.Post.PlatformPostId] = (existing.IsPartial && !observation.IsPartial ? observation : existing) with { TimelineOwnerIds = existing.TimelineOwnerIds.Concat(owners).Distinct().ToArray() };
+                        else posts.Add(observation.Post.PlatformPostId, !isInstagram ? observation with { TimelineOwnerIds = owners } : observation);
+                    }
+                }
+            }
+            int depth = parentStack.Count;
+            parentStack.Add(n);
+            foreach (var prop in n.EnumerateObject())
+            {
+                if (prop.Value.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array)) continue;
+                bool childInData = postDataBranches is not null && depth == 0 && prop.Name == "data";
+                string? nextBranch = inData ? prop.Name : dataBranch;
+                WalkNode(prop.Value, nextBranch, childInData);
+            }
+            parentStack.RemoveAt(depth);
+        }
+
+        WalkNode(root, null, false);
         if (!people && posts.Count == 0 && !empty)
         {
             // Known auxiliary roots pass in silence. Unknown deferred fragments without content pass with a
             // warning each (ContentFreeFragment). Any other root makes the whole response uncertain.
-            JsonElement[] unknown = platform == "facebook" ? roots.Where(r => !FacebookAuxiliary(r)).ToArray() : [];
-            if (platform == "facebook" && roots.Count > 0 && unknown.All(ContentFreeFragment))
-                warnings.AddRange(unknown.Select(r => $"facebook/deferred: unrecognized fragment {Get(r, "label")!.Split("$defer$").Last()}; no post fields, links or text; path={string.Join('/', Array(At(r, "path")).Select(Text))}"));
+            if (!isInstagram && FacebookAuxiliary(root)) { }
+            else if (!isInstagram && ContentFreeFragment(root))
+                warnings.Add($"facebook/deferred: unrecognized fragment {Get(root, "label")!.Split("$defer$").Last()}; no post fields, links or text; path={string.Join('/', Array(At(root, "path")).Select(Text))}");
             else errors.Add("parser uncertainty: no recognized posts or explicit empty response");
         }
         return new(posts.Values.ToArray(), persons.DistinctBy(p => (p.Id, p.Url)).ToArray(), empty, errors) { Warnings = warnings };
@@ -370,7 +599,7 @@ public static class PayloadParser
             && At(data, "node", "content", "item_objects") is var trays && trays.ValueKind == JsonValueKind.Array && trays.GetArrayLength() > 0
             && Array(trays).All(t => Get(At(t, "data"), "__typename") == "DirectMessageThreadBucket" && Get(At(t, "data"), "__isStoryBucket") == "DirectMessageThreadBucket"
                 && t.EnumerateObject().All(p => p.Name is "data" or "id"))
-            && !Walk(data).Any(n => At(n.Node, "post_id").ValueKind != JsonValueKind.Undefined || At(n.Node, "attachments").ValueKind != JsonValueKind.Undefined)) return true;
+            && !HasAnyPostIdOrAttachments(data)) return true;
         var viewer = At(data, "viewer");
         if (FacebookComposerWithPrivacy(data)) return true;
         if (data.EnumerateObject().All(p => p.Name == "viewer") && At(viewer, "feed_comet_composer").ValueKind == JsonValueKind.Object && viewer.EnumerateObject().All(p => p.Name is "actor" or "feed_comet_composer")) return true;
@@ -457,19 +686,54 @@ public static class PayloadParser
             && At(n, "attached_story").ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
             && At(n, "attachments").ValueKind == JsonValueKind.Array && !Array(At(n, "attachments")).Any()
             && Facebook(n, []) is null;
-    static bool ContainsPostContent(JsonElement node) => Walk(node).Any(x => x.Node.EnumerateObject()
-        .Any(p => p.Name is "post_id" or "message" or "caption" or "attachments" or "attached_story" or "timeline_list_feed_units" or "news_feed"));
-    static string? Id(JsonElement n) => Get(n, "pk", "id", "media_id", "shortcode", "code");
-    static Observation? Instagram(JsonElement n, JsonElement[] parents, HashSet<string?> children)
+    static bool ContainsPostContent(JsonElement node)
+    {
+        if (node.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var p in node.EnumerateObject())
+            {
+                if (p.NameEquals("post_id"u8) || p.NameEquals("message"u8) || p.NameEquals("caption"u8) || p.NameEquals("attachments"u8) || p.NameEquals("attached_story"u8) || p.NameEquals("timeline_list_feed_units"u8) || p.NameEquals("news_feed"u8)) return true;
+                if (p.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array && ContainsPostContent(p.Value)) return true;
+            }
+        }
+        else if (node.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in node.EnumerateArray())
+                if (item.ValueKind is JsonValueKind.Object or JsonValueKind.Array && ContainsPostContent(item)) return true;
+        }
+        return false;
+    }
+    static bool HasAnyPostIdOrAttachments(JsonElement node)
+    {
+        if (node.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var p in node.EnumerateObject())
+            {
+                if (p.NameEquals("post_id"u8) || p.NameEquals("attachments"u8)) return true;
+                if (p.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array && HasAnyPostIdOrAttachments(p.Value)) return true;
+            }
+        }
+        else if (node.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in node.EnumerateArray())
+                if (item.ValueKind is JsonValueKind.Object or JsonValueKind.Array && HasAnyPostIdOrAttachments(item)) return true;
+        }
+        return false;
+    }
+    static string? Id(JsonElement n) => Get(n, "pk", "id", "media_id", "shortcode") ?? Get(n, "code");
+    static Observation? Instagram(JsonElement n, List<JsonElement> parents, HashSet<string?> children)
     {
         var code = Get(n, "code", "shortcode", "media_code", "pk_string"); var id = Id(n); if (code is null || id is null || children.Contains(id)) return null;
         var user = At(n, "user"); if (user.ValueKind != JsonValueKind.Object) user = At(n, "owner"); var handle = Get(user, "username") ?? Get(n, "username"); var uid = Get(user, "pk", "id") ?? Get(n, "user_id", "owner") ?? handle;
-        if (uid is null && !new[] { "image_versions2", "display_resources", "display_url", "thumbnail_src", "video_versions", "carousel_media", "media_type" }.Any(k => At(n, k).ValueKind != JsonValueKind.Undefined)) return null;
+        if (uid is null && At(n, "image_versions2").ValueKind == JsonValueKind.Undefined && At(n, "display_resources").ValueKind == JsonValueKind.Undefined && At(n, "display_url").ValueKind == JsonValueKind.Undefined && At(n, "thumbnail_src").ValueKind == JsonValueKind.Undefined && At(n, "video_versions").ValueKind == JsonValueKind.Undefined && At(n, "carousel_media").ValueKind == JsonValueKind.Undefined && At(n, "media_type").ValueKind == JsonValueKind.Undefined) return null;
         var p = new Post { Platform = "instagram", PlatformPostId = id, LikeRef = id, PostedAt = Date(Get(n, "taken_at", "taken_at_timestamp", "timestamp", "published")), Text = Get(n, "caption", "text", "caption_text"), ObservedAuthorName = Get(user, "full_name") ?? handle, ObservedAuthorUrl = handle is null ? null : $"https://www.instagram.com/{handle}/" };
         var product = Get(n, "product_type"); p.IsReel = product is "clips" or "igtv" or "reel" || Get(n, "media_type") is "2" or "5";
-        p.Permalink = Url(Get(n, "permalink", "share_url"), p.Platform) ?? $"https://www.instagram.com/{(p.IsReel ? "reel" : "p")}/{code}/"; p.IsReel |= p.Permalink.Contains("/reel/");
-        p.IsSponsored = new[] { "is_paid_partnership", "paid_partener", "is_paid_sponsored", "ad_id_latest", "ad_id" }.Any(k => Truth(At(n, k))) || product == "ad";
-        p.IsSuggested = parents.Append(n).Any(x => Truth(At(x, "suggested_for_you")) || new[] { "unit_title", "title", "feed_type", "type" }.Any(k => Suggested(Get(x, k))));
+        p.Permalink = Url(Get(n, "permalink", "share_url"), p.Platform) ?? $"https://www.instagram.com/{(p.IsReel ? "reel" : "p")}/{code}/"; p.IsReel |= p.Permalink.Contains("/reel/", StringComparison.Ordinal);
+        p.IsSponsored = Truth(At(n, "is_paid_partnership")) || Truth(At(n, "paid_partener")) || Truth(At(n, "is_paid_sponsored")) || Truth(At(n, "ad_id_latest")) || Truth(At(n, "ad_id")) || product == "ad";
+        static bool IgSuggestedNode(JsonElement x) => Truth(At(x, "suggested_for_you")) || Suggested(Get(x, "unit_title")) || Suggested(Get(x, "title")) || Suggested(Get(x, "feed_type")) || Suggested(Get(x, "type"));
+        bool isSuggested = IgSuggestedNode(n);
+        if (!isSuggested) for (int i = 0; i < parents.Count; i++) if (IgSuggestedNode(parents[i])) { isSuggested = true; break; }
+        p.IsSuggested = isSuggested;
         var tags = Array(At(n, "coauthor_producers")).Concat(Array(At(n, "coauthors"))).Select(x => new Tag(Get(x, "full_name", "username") ?? "", Get(x, "username") is { } h ? $"https://www.instagram.com/{h}/" : null)).ToArray(); if (tags.Length > 0) p.TagsJson = JsonSerializer.Serialize(tags, InstanceValidation.Json);
         var slides = Array(At(n, "carousel_media")).ToArray(); if (slides.Length == 0) slides = [n]; var media = new List<MediaSource>();
         foreach (var slide in slides) if (Image(slide) is { } image) media.Add(new("image", image, SourceKey(image)));
@@ -479,7 +743,7 @@ public static class PayloadParser
         return new(p, uid, p.ObservedAuthorName, p.ObservedAuthorUrl, Limit(media, 10))
         { TimelineOwnerIds = Array(At(n, "coauthor_producers")).Concat(Array(At(n, "coauthors"))).Select(x => Get(x, "pk", "id")).OfType<string>().Distinct().ToArray() };
     }
-    static bool Suggested(string? s) => s is not null && (new[] { "discover_media", "discover_top_media", "explore_grid_media", "feed_backtracking_unit", "feed_follow_requests", "feed_suggestions_unit", "media_with_liked_by", "top_reels_media", "suggested_for_you", "suggested_for_you_unit" }.Contains(s) || s.Contains("suggested for you", StringComparison.OrdinalIgnoreCase) || s.Contains("for you page", StringComparison.OrdinalIgnoreCase));
+    static bool Suggested(string? s) => s is not null && (s is "discover_media" or "discover_top_media" or "explore_grid_media" or "feed_backtracking_unit" or "feed_follow_requests" or "feed_suggestions_unit" or "media_with_liked_by" or "top_reels_media" or "suggested_for_you" or "suggested_for_you_unit" || s.Contains("suggested for you", StringComparison.OrdinalIgnoreCase) || s.Contains("for you page", StringComparison.OrdinalIgnoreCase));
     static string? Image(JsonElement n)
     {
         var candidates = Array(At(n, "image_versions2", "candidates")).ToArray(); if (candidates.Length == 0) candidates = Array(At(n, "display_resources")).ToArray();
@@ -499,18 +763,139 @@ public static class PayloadParser
         return Get(At(owner, "feedback_context", "feedback_target_with_context",
             "comet_ufi_summary_and_actions_renderer", "feedback"), "id", "targetID");
     }
-    static Observation? Facebook(JsonElement n, JsonElement[] parents)
+    static bool IsFacebookSponsoredNode(JsonElement x)
     {
-        var substory = parents.Length >= 4 && Get(parents[^4], "__typename") == "CometStoryAggregatedStoriesStrategy"
+        if (x.ValueKind != JsonValueKind.Object) return false;
+        foreach (var prop in x.EnumerateObject())
+        {
+            if (prop.NameEquals("sponsored_data"u8) || prop.NameEquals("th_dat_spo"u8))
+            {
+                if (prop.Value.ValueKind == JsonValueKind.Object && HasAnyProperty(prop.Value)) return true;
+            }
+            else if (prop.NameEquals("ad_id"u8))
+            {
+                if (prop.Value.ValueKind != JsonValueKind.Null) return true;
+            }
+            else if (prop.NameEquals("__typename"u8))
+            {
+                if ((Text(prop.Value) ?? "").Contains("sponsored", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        return false;
+    }
+    static bool AnyFacebookSponsored(JsonElement e)
+    {
+        if (e.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var p in e.EnumerateObject())
+            {
+                var val = p.Value;
+                if (p.NameEquals("sponsored_data"u8) || p.NameEquals("th_dat_spo"u8))
+                {
+                    if (val.ValueKind == JsonValueKind.Object && HasAnyProperty(val)) return true;
+                }
+                else if (p.NameEquals("ad_id"u8))
+                {
+                    if (val.ValueKind != JsonValueKind.Null) return true;
+                }
+                else if (p.NameEquals("__typename"u8))
+                {
+                    if ((Text(val) ?? "").Contains("sponsored", StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                if (val.ValueKind is JsonValueKind.Object or JsonValueKind.Array && AnyFacebookSponsored(val)) return true;
+            }
+        }
+        else if (e.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in e.EnumerateArray())
+                if (item.ValueKind is JsonValueKind.Object or JsonValueKind.Array && AnyFacebookSponsored(item)) return true;
+        }
+        return false;
+    }
+    static bool IsFacebookSuggestedNode(JsonElement x)
+    {
+        if (x.ValueKind != JsonValueKind.Object) return false;
+        foreach (var prop in x.EnumerateObject())
+        {
+            if (prop.NameEquals("badge"u8))
+            {
+                if ((Get(prop.Value, "text") ?? "").Contains("suggested", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            else if (prop.NameEquals("tracking"u8))
+            {
+                var tracking = NonBlankText(prop.Value);
+                if (tracking is not null && tracking.Contains("originated_from_recommendation", StringComparison.Ordinal) && RecommendationRegex().IsMatch(tracking)) return true;
+            }
+        }
+        return false;
+    }
+    static JsonElement FindSharedStory(JsonElement e)
+    {
+        if (e.ValueKind == JsonValueKind.Object)
+        {
+            if (e.TryGetProperty("actors"u8, out var a) && a.ValueKind == JsonValueKind.Array
+                && e.TryGetProperty("message"u8, out var m) && NonBlankText(m) is not null) return e;
+            foreach (var p in e.EnumerateObject())
+                if (p.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                {
+                    var found = FindSharedStory(p.Value);
+                    if (found.ValueKind != JsonValueKind.Undefined) return found;
+                }
+        }
+        else if (e.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in e.EnumerateArray())
+                if (item.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                {
+                    var found = FindSharedStory(item);
+                    if (found.ValueKind != JsonValueKind.Undefined) return found;
+                }
+        }
+        return default;
+    }
+    static void ExtractTags(string text, JsonElement ranges, List<Tag> tags)
+    {
+        // Compute UTF-16 char offsets from Unicode scalar (rune) indices only when ranges exist.
+        var runeStarts = new List<int>(text.Length + 1);
+        int charPos = 0;
+        foreach (var rune in text.EnumerateRunes()) { runeStarts.Add(charPos); charPos += rune.Utf16SequenceLength; }
+        runeStarts.Add(charPos);
+        int runeCount = runeStarts.Count - 1;
+        var withStart = text.IndexOf(" is with ", StringComparison.Ordinal); var atEnd = text.LastIndexOf(" at ", StringComparison.Ordinal);
+        foreach (var range in ranges.EnumerateArray())
+        {
+            var entity = At(range, "entity"); if (Get(entity, "__typename") != "User") continue;
+            if (!int.TryParse(Get(range, "offset"), out var offset) || !int.TryParse(Get(range, "length"), out var length) || offset < 0 || length < 1 || offset + length > runeCount) continue;
+            int utfOffset = runeStarts[offset];
+            var name = text.Substring(utfOffset, runeStarts[offset + length] - utfOffset);
+            tags.Add(new(name, Url(Get(entity, "url", "profile_url"), "facebook"), withStart >= 0 && utfOffset >= withStart + 9 && (atEnd < withStart || utfOffset < atEnd) ? "with" : null));
+        }
+    }
+    static Observation? Facebook(JsonElement n, List<JsonElement> parents)
+    {
+        var substory = parents.Count >= 4 && Get(parents[^4], "__typename") == "CometStoryAggregatedStoriesStrategy"
             && At(parents[^4], "story").Equals(parents[^3]) && At(parents[^3], "interesting_substories").Equals(parents[^2]) && At(parents[^1], "node").Equals(n);
-        if (!substory && !(Get(n, "__typename") ?? "").Contains("Story", StringComparison.Ordinal)) return null;
+        if (!substory && !(n.TryGetProperty("__typename"u8, out var tnEl) && (Text(tnEl) ?? "").Contains("Story", StringComparison.Ordinal))) return null;
         var id = Get(n, "post_id", "id"); if (id is null || id == "0") return null;
-        bool Sponsored(JsonElement x) => new[] { "sponsored_data", "th_dat_spo" }.Any(k => At(x, k).ValueKind == JsonValueKind.Object && At(x, k).EnumerateObject().Any()) || At(x, "ad_id").ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null) || (Get(x, "__typename") ?? "").Contains("sponsored", StringComparison.OrdinalIgnoreCase);
-        var sponsored = parents.Concat(Walk(n).Select(x => x.Node)).Any(Sponsored); var time = Date(Get(n, "creation_time"));
+        bool sponsored = false;
+        for (int i = 0; i < parents.Count; i++) if (IsFacebookSponsoredNode(parents[i])) { sponsored = true; break; }
+        var time = Date(Get(n, "creation_time"));
         if (time is null && substory) time = Array(At(n, "comet_sections", "context_layout", "story", "comet_sections", "metadata")).Select(m => Date(Get(At(m, "story"), "creation_time"))).FirstOrDefault(t => t is not null);
-        if (time is null && !sponsored) return null;
+        // Check sponsored early only when creation_time is absent (so non-sponsored nested Story nodes bail out cheaply);
+        // dated stories detect sponsored, suggested, media, tags and memory in one combined subtree pass below.
+        if (time is null && !sponsored)
+        {
+            sponsored = AnyFacebookSponsored(n);
+            if (!sponsored) return null;
+        }
         var actor = Array(At(n, "actors")).FirstOrDefault(); var authorUrl = Url(Get(actor, "wwwURL", "url"), "facebook");
-        var shared = new[] { At(n, "attached_story"), At(n, "comet_sections", "content", "story", "attached_story") }.Concat(Walk(At(n, "attachments")).Select(x => x.Node)).FirstOrDefault(x => At(x, "actors").ValueKind == JsonValueKind.Array && Get(x, "message") is not null);
+        var shared = At(n, "attached_story");
+        if (!(At(shared, "actors").ValueKind == JsonValueKind.Array && Get(shared, "message") is not null))
+        {
+            shared = At(n, "comet_sections", "content", "story", "attached_story");
+            if (!(At(shared, "actors").ValueKind == JsonValueKind.Array && Get(shared, "message") is not null))
+                shared = FindSharedStory(At(n, "attachments"));
+        }
         var caption = Get(n, "message") ?? Get(At(n, "comet_sections", "content", "story"), "message") ?? Get(n, "text");
         var p = new Post { Platform = "facebook", PlatformPostId = id, Text = caption, PostedAt = time, IsSponsored = sponsored, ObservedAuthorName = Get(actor, "name"), ObservedAuthorUrl = authorUrl, LikeRef = FacebookLikeRef(n, id), Permalink = Url(Get(n, "wwwURL", "permalink", "permalink_url", "url"), "facebook"), SharedAuthor = Get(Array(At(shared, "actors")).FirstOrDefault(), "name"), SharedText = Get(shared, "message"), SharedUrl = Url(Get(shared, "wwwURL", "permalink_url"), "facebook") };
         p.StoryTitle = Get(At(n, "comet_sections", "context_layout", "story", "comet_sections", "title", "story"), "title");
@@ -534,9 +919,12 @@ public static class PayloadParser
             p.SharedText = Get(link, "title_with_entities"); p.SharedAuthor = Get(link, "source");
             p.SharedUrl = Url(Get(At(link, "story_attachment_link_renderer", "attachment", "web_link"), "url"), "facebook");
         }
-        p.IsReel = p.Permalink?.Contains("/reel/") == true || p.Permalink?.Contains("/reels/") == true; p.IsEvent = p.Permalink?.Contains("/events/") == true;
-        p.IsSuggested = parents.Concat(Walk(n).Select(x => x.Node)).Any(x => (Get(At(x, "badge"), "text") ?? "").Contains("suggested", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(Get(x, "tracking") ?? "", "\"originated_from_recommendation\"\\s*:\\s*\"?1"));
+        p.IsReel = p.Permalink?.Contains("/reel/", StringComparison.Ordinal) == true || p.Permalink?.Contains("/reels/", StringComparison.Ordinal) == true; p.IsEvent = p.Permalink?.Contains("/events/", StringComparison.Ordinal) == true;
+        bool isSuggested = false;
+        for (int i = 0; i < parents.Count; i++) if (IsFacebookSuggestedNode(parents[i])) { isSuggested = true; break; }
         var media = new List<MediaSource>(); var widths = new Dictionary<string, int>(); bool videoHint = false;
+        var tags = new List<Tag>();
+        var childBuf = new List<(JsonElement Elem, bool Media)>(32);
         void AddImage(string url, string? width)
         {
             var source = new MediaSource("image", url, SourceKey(url)); int.TryParse(width, out var w);
@@ -545,46 +933,136 @@ public static class PayloadParser
             var index = media.FindIndex(m => m.Kind == "image" && m.SourceKey == source.SourceKey);
             if (index < 0) { media.Add(source); widths[source.SourceKey] = w; } else if (w > widths[source.SourceKey]) { media[index] = source; widths[source.SourceKey] = w; }
         }
-        void MediaWalk(JsonElement x)
+        // Single pre-order traversal of the Story subtree with one EnumerateObject() per node using UTF-8 property comparisons
+        // instead of four separate walks and ~19 TryGetProperty linear scans per object.
+        void InspectStory(JsonElement x, bool collectMedia)
         {
-            if (x.ValueKind == JsonValueKind.Array) { foreach (var a in x.EnumerateArray()) MediaWalk(a); return; } if (x.ValueKind != JsonValueKind.Object) return;
-            var image = Get(At(x, "image"), "uri") ?? (At(x, "width").ValueKind != JsonValueKind.Undefined || At(x, "height").ValueKind != JsonValueKind.Undefined ? Get(x, "uri") : null);
-            if (image is not null && !image.Contains("/rsrc.php/")) AddImage(image, Get(At(x, "image"), "width") ?? Get(x, "width"));
-            var progressive = Array(At(x, "videoDeliveryResponseFragment", "videoDeliveryResponseResult", "progressive_urls"))
-                .Where(v => At(v, "failure_reason").ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-                .OrderByDescending(v => Get(At(v, "metadata"), "quality") == "HD")
-                .Select(v => Url(Get(v, "progressive_url"), "facebook")).FirstOrDefault(v => v is not null);
-            if ((Get(x, "browser_native_hd_url", "browser_native_sd_url", "playable_url") ?? progressive) is { } video) { media.Add(new("video", video, SourceKey(video))); videoHint = true; }
-            foreach (var property in x.EnumerateObject()) { if (property.Name == "video") videoHint = true; if (!new[] { "actors", "feedback", "badge", "profile_picture", "profilePicture", "interesting_substories" }.Contains(property.Name)) MediaWalk(property.Value); }
+            if (x.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var a in x.EnumerateArray())
+                    if (a.ValueKind is JsonValueKind.Object or JsonValueKind.Array) InspectStory(a, collectMedia);
+                return;
+            }
+            if (x.ValueKind != JsonValueKind.Object) return;
+
+            JsonElement imgObj = default, uriEl = default, widthEl = default, videoDeliveryEl = default;
+            JsonElement hdUrlEl = default, sdUrlEl = default, playableUrlEl = default;
+            JsonElement rangesEl = default, textEl = default;
+            bool hasWidthOrHeight = false, isThrowback = false;
+            int childStart = childBuf.Count;
+
+            foreach (var prop in x.EnumerateObject())
+            {
+                var val = prop.Value;
+                if (!sponsored)
+                {
+                    if (prop.NameEquals("sponsored_data"u8) || prop.NameEquals("th_dat_spo"u8))
+                    {
+                        if (val.ValueKind == JsonValueKind.Object && HasAnyProperty(val)) sponsored = true;
+                    }
+                    else if (prop.NameEquals("ad_id"u8))
+                    {
+                        if (val.ValueKind != JsonValueKind.Null) sponsored = true;
+                    }
+                }
+                if (prop.NameEquals("__typename"u8))
+                {
+                    var tn = Text(val);
+                    if (tn is not null)
+                    {
+                        if (!sponsored && tn.Contains("sponsored", StringComparison.OrdinalIgnoreCase)) sponsored = true;
+                        if (tn.Contains("Throwback", StringComparison.OrdinalIgnoreCase)) isThrowback = true;
+                    }
+                }
+                else if (!isSuggested && prop.NameEquals("badge"u8))
+                {
+                    if ((Get(val, "text") ?? "").Contains("suggested", StringComparison.OrdinalIgnoreCase)) isSuggested = true;
+                }
+                else if (!isSuggested && prop.NameEquals("tracking"u8))
+                {
+                    var tracking = NonBlankText(val);
+                    if (tracking is not null && tracking.Contains("originated_from_recommendation", StringComparison.Ordinal) && RecommendationRegex().IsMatch(tracking))
+                        isSuggested = true;
+                }
+                else if (prop.NameEquals("ranges"u8))
+                {
+                    if (val.ValueKind == JsonValueKind.Array && val.GetArrayLength() > 0) rangesEl = val;
+                }
+                else if (prop.NameEquals("text"u8))
+                {
+                    textEl = val;
+                }
+
+                if (collectMedia)
+                {
+                    if (prop.NameEquals("image"u8)) imgObj = val;
+                    else if (prop.NameEquals("uri"u8)) uriEl = val;
+                    else if (prop.NameEquals("width"u8)) { hasWidthOrHeight = true; widthEl = val; }
+                    else if (prop.NameEquals("height"u8)) hasWidthOrHeight = true;
+                    else if (prop.NameEquals("videoDeliveryResponseFragment"u8)) videoDeliveryEl = val;
+                    else if (prop.NameEquals("browser_native_hd_url"u8)) hdUrlEl = val;
+                    else if (prop.NameEquals("browser_native_sd_url"u8)) sdUrlEl = val;
+                    else if (prop.NameEquals("playable_url"u8)) playableUrlEl = val;
+                    else if (prop.NameEquals("video"u8)) videoHint = true;
+                }
+
+                if (val.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                {
+                    bool childMedia = collectMedia
+                        && !prop.NameEquals("actors"u8) && !prop.NameEquals("feedback"u8) && !prop.NameEquals("badge"u8)
+                        && !prop.NameEquals("profile_picture"u8) && !prop.NameEquals("profilePicture"u8) && !prop.NameEquals("interesting_substories"u8);
+                    childBuf.Add((val, childMedia));
+                }
+            }
+
+            if (isThrowback) { p.MemoryLabel = Get(x, "title"); p.MemoryText = Get(At(x, "target"), "message"); }
+            if (rangesEl.ValueKind == JsonValueKind.Array && NonBlankText(textEl) is { } rangeText)
+                ExtractTags(rangeText, rangesEl, tags);
+            if (collectMedia)
+            {
+                var image = Get(imgObj, "uri") ?? (hasWidthOrHeight ? NonBlankText(uriEl) : null);
+                if (image is not null && !image.Contains("/rsrc.php/", StringComparison.Ordinal))
+                    AddImage(image, Get(imgObj, "width") ?? NonBlankText(widthEl));
+                string? video = NonBlankText(hdUrlEl) ?? NonBlankText(sdUrlEl) ?? NonBlankText(playableUrlEl);
+                if (video is null && videoDeliveryEl.ValueKind == JsonValueKind.Object)
+                {
+                    video = Array(At(videoDeliveryEl, "videoDeliveryResponseResult", "progressive_urls"))
+                        .Where(v => At(v, "failure_reason").ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                        .OrderByDescending(v => Get(At(v, "metadata"), "quality") == "HD")
+                        .Select(v => Url(Get(v, "progressive_url"), "facebook")).FirstOrDefault(v => v is not null);
+                }
+                if (video is not null) { media.Add(new("video", video, SourceKey(video))); videoHint = true; }
+            }
+
+            int childEnd = childBuf.Count;
+            for (int i = childStart; i < childEnd; i++)
+            {
+                var child = childBuf[i];
+                InspectStory(child.Elem, child.Media);
+            }
+            if (childEnd > childStart) childBuf.RemoveRange(childStart, childEnd - childStart);
         }
-        MediaWalk(n); if (videoHint && media.All(x => x.Kind != "video") && p.Permalink is not null) media.Add(new("video", p.Permalink, "permalink:" + id));
+        InspectStory(n, true);
+        p.IsSponsored = sponsored;
+        p.IsSuggested = isSuggested;
+        if (videoHint && media.All(x => x.Kind != "video") && p.Permalink is not null) media.Add(new("video", p.Permalink, "permalink:" + id));
         if (string.IsNullOrWhiteSpace(p.Text) && string.IsNullOrWhiteSpace(p.SharedText) && media.Count == 0
             && (string.IsNullOrWhiteSpace(p.StoryTitle) || Get(actor, "id") is null
                 || At(n, "comet_sections", "content", "story", "comet_sections", "aggregated_stories").ValueKind == JsonValueKind.Object)) return null;
-        var tags = new List<Tag>();
-        foreach (var (block, _) in Walk(n))
-        {
-            if ((Get(block, "__typename") ?? "").Contains("Throwback", StringComparison.OrdinalIgnoreCase)) { p.MemoryLabel = Get(block, "title"); p.MemoryText = Get(At(block, "target"), "message"); }
-            var text = Get(block, "text"); if (text is null) continue; var runes = text.EnumerateRunes().ToArray();
-            var withStart = text.IndexOf(" is with ", StringComparison.Ordinal); var atEnd = text.LastIndexOf(" at ", StringComparison.Ordinal);
-            foreach (var range in Array(At(block, "ranges")))
-            {
-                var entity = At(range, "entity"); if (Get(entity, "__typename") != "User") continue;
-                if (!int.TryParse(Get(range, "offset"), out var offset) || !int.TryParse(Get(range, "length"), out var length) || offset < 0 || length < 1 || offset + length > runes.Length) continue;
-                var name = string.Concat(runes.Skip(offset).Take(length).Select(x => x.ToString()));
-                var utfOffset = string.Concat(runes.Take(offset).Select(x => x.ToString())).Length;
-                tags.Add(new(name, Url(Get(entity, "url", "profile_url"), "facebook"), withStart >= 0 && utfOffset >= withStart + 9 && (atEnd < withStart || utfOffset < atEnd) ? "with" : null));
-            }
-            if ((Get(block, "__typename") ?? "").Contains("Throwback", StringComparison.OrdinalIgnoreCase)) { p.MemoryLabel = Get(block, "title"); p.MemoryText = Get(At(block, "target"), "message"); }
-        }
         if (tags.Count > 0) p.TagsJson = JsonSerializer.Serialize(tags.DistinctBy(t => (t.Name, t.Url)), InstanceValidation.Json);
         var aid = Get(actor, "id", "idString", "__dr") ?? Identity.UrlRef("facebook", authorUrl)?[3..];
         return new(p, aid, p.ObservedAuthorName, authorUrl, Limit(media, 8));
     }
     static MediaSource[] Limit(List<MediaSource> media, int limit) => media.Where(x => x.Kind == "image").DistinctBy(x => x.SourceKey).Take(limit).Concat(media.Where(x => x.Kind == "video").Take(1)).ToArray();
-    static Person? PersonFrom(string platform, JsonElement n, JsonElement[] parents)
+    static Person? PersonFrom(string platform, JsonElement n, List<JsonElement> parents)
     {
-        if (platform == "instagram") { var handle = Get(n, "username"); if (handle is null || Get(n, "code", "shortcode") is not null || parents.Any(x => Get(x, "code", "shortcode") is not null)) return null; return new(Get(n, "pk", "id") ?? handle, Get(n, "full_name") ?? handle, $"https://www.instagram.com/{handle}/", Get(n, "profile_pic_url_hd", "profile_pic_url")); }
+        if (platform == "instagram")
+        {
+            var handle = Get(n, "username");
+            if (handle is null || Get(n, "code", "shortcode") is not null) return null;
+            for (int i = 0; i < parents.Count; i++) if (Get(parents[i], "code", "shortcode") is not null) return null;
+            return new(Get(n, "pk", "id") ?? handle, Get(n, "full_name") ?? handle, $"https://www.instagram.com/{handle}/", Get(n, "profile_pic_url_hd", "profile_pic_url"));
+        }
         var hint = Get(n, "type") == "FRIEND"; var name = Get(n, "title"); var url = Url(Get(n, "url", "link_url"), platform); if (name is null || url is null || !(hint || At(n, "profile_picture").ValueKind == JsonValueKind.Object || (Get(n, "__typename") ?? "").Contains("User"))) return null;
         var reference = Identity.UrlRef(platform, url); if (reference is null) return null;
         var numeric = new[] { reference[3..], Get(n, "userID", "id", "idString", "__dr") }.FirstOrDefault(x => long.TryParse(x, out _));
@@ -592,7 +1070,7 @@ public static class PayloadParser
     }
     public static IEnumerable<(string Body, string Operation)> EmbeddedCaptures(string html)
     {
-        foreach (Match match in Regex.Matches(html, "<script[^>]*type=[\"']application/json[\"'][^>]*>(.*?)</script>", RegexOptions.Singleline | RegexOptions.IgnoreCase))
+        foreach (Match match in ScriptJsonRegex().Matches(html))
         {
             JsonElement root; try { using var doc = JsonDocument.Parse(match.Groups[1].Value); root = doc.RootElement.Clone(); } catch (JsonException) { continue; }
             foreach (var payload in EmbeddedWalk(root)) yield return payload;

@@ -23,23 +23,51 @@ public sealed class InstancePaths
 }
 public sealed class InstanceFiles
 {
-    readonly InstancePaths paths; readonly object gate = new(); string signature = ""; InstanceSnapshot current;
+    static readonly string[] Names = ["config.json", "taxonomy.json", "preferences.md"];
+    readonly InstancePaths paths; readonly string[] filePaths; readonly object gate = new(); byte[]? signature; InstanceSnapshot current;
     public string? Error { get; private set; }
-    public InstanceFiles(InstancePaths paths) { this.paths = paths; current = Read(out signature); }
-    public InstanceSnapshot Current => Volatile.Read(ref current);
-    InstanceSnapshot Read(out string hash)
+    public InstanceFiles(InstancePaths paths)
     {
-        var texts = new[] { "config.json", "taxonomy.json", "preferences.md" }.Select(n => File.Exists(paths.Get(n)) ? File.ReadAllText(paths.Get(n)) : null).ToArray();
-        hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\0', texts))));
-        if (hash == signature && current is not null) return current;
-        var c = InstanceValidation.Parse<FeedConfig>(texts[0]); var t = InstanceValidation.Parse<Taxonomy>(texts[1]);
-        InstanceValidation.Validate(c, t); return new(c, t, Preferences.Parse(texts[2] ?? ""));
+        this.paths = paths;
+        filePaths = Names.Select(n => paths.Get(n)).ToArray();
+        current = Read(out signature);
+    }
+    public InstanceSnapshot Current => Volatile.Read(ref current);
+    InstanceSnapshot Read(out byte[] hash)
+    {
+        // Hash raw file bytes first so unchanged refreshes avoid UTF-8 decoding, string concatenation and re-encoding
+        // while still detecting sub-tick edits reliably across any filesystem timestamp granularity.
+        var raw = new byte[]?[3];
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> header = stackalloc byte[5];
+        for (int i = 0; i < 3; i++)
+        {
+            if (File.Exists(filePaths[i]))
+            {
+                var bytes = File.ReadAllBytes(filePaths[i]);
+                raw[i] = bytes;
+                header[0] = 1;
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(header[1..], bytes.Length);
+                hasher.AppendData(header);
+                hasher.AppendData(bytes);
+            }
+            else
+            {
+                header.Clear();
+                hasher.AppendData(header);
+            }
+        }
+        hash = hasher.GetHashAndReset();
+        if (signature is not null && current is not null && hash.AsSpan().SequenceEqual(signature)) return current;
+        static string? Decode(byte[]? bytes) => bytes is null ? null : Encoding.UTF8.GetString(bytes.AsSpan(bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF ? 3 : 0));
+        var c = InstanceValidation.Parse<FeedConfig>(Decode(raw[0])); var t = InstanceValidation.Parse<Taxonomy>(Decode(raw[1]));
+        InstanceValidation.Validate(c, t); return new(c, t, Preferences.Parse(Decode(raw[2]) ?? ""));
     }
     public InstanceSnapshot Refresh()
     {
         lock (gate)
         {
-            try { var next = Read(out var hash); if (hash != signature) { Volatile.Write(ref current, next); signature = hash; } Error = null; }
+            try { var next = Read(out var hash); if (signature is null || !hash.AsSpan().SequenceEqual(signature)) { Volatile.Write(ref current, next); signature = hash; } Error = null; }
             catch (Exception e) when (e is FormatException or System.Text.Json.JsonException or IOException or UnauthorizedAccessException) { Error = e.Message; }
             return current;
         }
