@@ -1,6 +1,6 @@
 # Feed v3
 
-Feed v3 is a self-hosted, chronological reader for Facebook and Instagram. It uses a real browser logged into your accounts to collect posts, applies your written rules and optional AI classification, and presents the results in one private feed with categories and views you control. It runs on .NET 10, SQLite and Playwright, with server-rendered HTML, plain JavaScript and CSS.
+Feed v3 is a self-hosted, chronological reader for Facebook and Instagram. It uses a real browser logged into your accounts to collect posts, applies your written rules and optional AI classification, and presents the results in one private feed with categories and views you control. It runs on .NET 11, SQLite and Playwright, with server-rendered HTML, plain JavaScript and CSS.
 
 ## Why it exists
 

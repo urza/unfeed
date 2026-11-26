@@ -15,7 +15,7 @@ public sealed class Ingest(InstancePaths paths, DbFactory factory, MediaFiles me
     public async Task Register(string platform, string file, long? runId, CancellationToken ct)
     {
         var relative = Path.GetRelativePath(paths.Root, file); var info = new FileInfo(file); await using var db = factory.Open();
-        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT OR IGNORE INTO RawSnapshots (Platform,RunId,Path,Kind,CapturedAt,Parsed,Deleted,Bytes) VALUES ({platform},{runId},{relative},{(FriendsDirectory(info.DirectoryName!) ? "friends" : "feed")},{info.LastWriteTimeUtc},0,0,{info.Length})", ct);
+        await db.Database.ExecuteSqlAsync($"INSERT OR IGNORE INTO RawSnapshots (Platform,RunId,Path,Kind,CapturedAt,Parsed,Deleted,Bytes) VALUES ({platform},{runId},{relative},{(FriendsDirectory(info.DirectoryName!) ? "friends" : "feed")},{info.LastWriteTimeUtc},0,0,{info.Length})", ct);
         if (!System.IO.File.Exists(file + ".context") && !System.IO.File.Exists(file + ".visits")) return;
         if (!System.IO.File.Exists(file + ".visits") && await db.RawSnapshots.AnyAsync(r => r.Path == relative && r.CaptureToken != null, ct)) return;
         try {
