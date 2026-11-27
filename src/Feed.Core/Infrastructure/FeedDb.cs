@@ -1,14 +1,25 @@
 using Feed.Core.Domain;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using System.Data.Common;
+using System.Runtime.CompilerServices;
 namespace Feed.Core.Infrastructure;
 
-public sealed class FeedDb(InstancePaths paths) : DbContext
+public sealed class FeedDb : DbContext
 {
+    static readonly Pragmas PragmasInterceptor = new();
+    readonly InstancePaths paths;
+    public FeedDb(InstancePaths paths) => this.paths = paths;
+    internal FeedDb(InstancePaths paths, DbContextOptions<FeedDb> options) : base(options) => this.paths = paths;
     public DbSet<Author> Authors => Set<Author>(); public DbSet<AuthorKey> AuthorKeys => Set<AuthorKey>(); public DbSet<Post> Posts => Set<Post>(); public DbSet<Media> Media => Set<Media>(); public DbSet<RawSnapshot> RawSnapshots => Set<RawSnapshot>(); public DbSet<Run> Runs => Set<Run>(); public DbSet<RunRequest> RunRequests => Set<RunRequest>(); public DbSet<Feedback> Feedback => Set<Feedback>(); public DbSet<Like> Likes => Set<Like>(); public DbSet<PlatformState> PlatformStates => Set<PlatformState>(); public DbSet<TimelineVisit> TimelineVisits => Set<TimelineVisit>(); public DbSet<SweepTarget> SweepTargets => Set<SweepTarget>(); public DbSet<Kv> Kv => Set<Kv>();
     public DbSet<RawDiagnostic> RawDiagnostics => Set<RawDiagnostic>(); public DbSet<IdentityEvent> IdentityEvents => Set<IdentityEvent>();
-    protected override void OnConfiguring(DbContextOptionsBuilder b) => b.UseSqlite($"Data Source={paths.Database};Default Timeout=30;Pooling=True").AddInterceptors(new Pragmas());
+    internal static DbContextOptions<FeedDb> BuildOptions(InstancePaths paths)
+        => new DbContextOptionsBuilder<FeedDb>().UseSqlite($"Data Source={paths.Database};Default Timeout=30;Pooling=True").AddInterceptors(PragmasInterceptor).Options;
+    protected override void OnConfiguring(DbContextOptionsBuilder b)
+    {
+        if (!b.IsConfigured) b.UseSqlite($"Data Source={paths.Database};Default Timeout=30;Pooling=True").AddInterceptors(PragmasInterceptor);
+    }
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<Author>().HasIndex(x => new { x.Platform, x.PlatformAuthorId }).IsUnique(); b.Entity<Author>().HasIndex(x => new { x.Platform, x.IsFriend });
@@ -64,9 +75,33 @@ public sealed class FeedDb(InstancePaths paths) : DbContext
     public async Task<string?> Get(string key, CancellationToken ct = default) => await Kv.Where(x => x.Key == key).Select(x => x.Value).FirstOrDefaultAsync(ct);
     sealed class Pragmas : DbConnectionInterceptor
     {
-        static void Apply(DbConnection connection) { using var cmd = connection.CreateCommand(); cmd.CommandText = "PRAGMA busy_timeout=30000; PRAGMA cache_size=-65536; PRAGMA mmap_size=268435456; PRAGMA temp_store=MEMORY;"; cmd.ExecuteNonQuery(); }
+        // Connection pooling reuses the underlying native sqlite3 handle across Open/Close cycles, and SQLite
+        // preserves these per-connection PRAGMAs on that handle. Apply them once per native handle instead of
+        // paying four PRAGMA round-trips on every pooled checkout.
+        static readonly ConditionalWeakTable<object, object> Configured = new();
+        static readonly object Marker = new();
+        static void Apply(DbConnection connection)
+        {
+            if (connection is SqliteConnection sqlite && sqlite.Handle is { } handle)
+            {
+                if (Configured.TryGetValue(handle, out _)) return;
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = "PRAGMA busy_timeout=30000; PRAGMA cache_size=-65536; PRAGMA mmap_size=268435456; PRAGMA temp_store=MEMORY;";
+                cmd.ExecuteNonQuery();
+                Configured.AddOrUpdate(handle, Marker);
+                return;
+            }
+            using var fallback = connection.CreateCommand();
+            fallback.CommandText = "PRAGMA busy_timeout=30000; PRAGMA cache_size=-65536; PRAGMA mmap_size=268435456; PRAGMA temp_store=MEMORY;";
+            fallback.ExecuteNonQuery();
+        }
         public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData) => Apply(connection);
         public override Task ConnectionOpenedAsync(DbConnection connection, ConnectionEndEventData eventData, CancellationToken cancellationToken = default) { Apply(connection); return Task.CompletedTask; }
     }
 }
-public sealed class DbFactory(InstancePaths paths) { public InstancePaths Paths => paths; public FeedDb Open() => new(paths); }
+public sealed class DbFactory(InstancePaths paths)
+{
+    readonly DbContextOptions<FeedDb> options = FeedDb.BuildOptions(paths);
+    public InstancePaths Paths => paths;
+    public FeedDb Open() => new(paths, options);
+}

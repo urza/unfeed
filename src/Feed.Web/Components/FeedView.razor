@@ -51,22 +51,26 @@
 @if(Model.Scope != "live"){<aside class="banner">@(Model.Scope == "hidden" ? $"Debug: showing {Model.HiddenCount} hidden posts ({Model.TotalHidden} total){(Model.Owner is null ? "" : $", only those hidden by {Model.Owner}")}. Each card states which filter hid it and why." : $"Unsorted: {Model.TotalUnsorted} posts waiting for a judgment of their current content ({Model.UnsortedCount} in this scope).") @if(Model.Owner is not null){<a href="@Link(Model.View,Model.Platform,"hidden")">All hidden posts</a>} <a href="@Link(Model.View,Model.Platform)">Back to feed</a></aside>}
 @if(Model.Items.Length == 0){<section class="empty glass"><p>@Model.EmptyMessage</p>@if(Model.Platform is not null){<a href="@Link(Model.View,null)">show all platforms</a>}@if(Model.View != "all"){<a href="@Link("all",Model.Platform)">All</a>}@if(Model.EmptyMessage == "The feed is empty. Nothing collected yet."){<form action="/collect" method="post"><button class="primary" disabled="@(!Enabled.Any())">Collect now</button></form>}</section>}
 else {
- @if(FreshCount>0 && FreshCount<Model.Items.Length){<UnitList Items="Model.Items.Take(FreshCount).ToArray()" Model="Model"/><div class="new-divider">new posts above · @FeedQuery.Relative(Model.Items[FreshCount-1].Lead.Post.PostedAt) and older below</div><UnitList Items="Model.Items.Skip(FreshCount).ToArray()" Model="Model"/>}else{<UnitList Items="Model.Items" Model="Model"/>}
+ @if(freshCount>0 && freshCount<Model.Items.Length){<UnitList Items="Model.Items.Take(freshCount).ToArray()" Model="Model"/><div class="new-divider">new posts above · @FeedQuery.Relative(Model.Items[freshCount-1].Lead.Post.PostedAt) and older below</div><UnitList Items="Model.Items.Skip(freshCount).ToArray()" Model="Model"/>}else{<UnitList Items="Model.Items" Model="Model"/>}
 }
 </Shell>
 @code {
  [Parameter, EditorRequired] public FeedPage Model { get; set; } = null!;
  [Parameter] public string Stamp { get; set; } = "dev";
  [Parameter] public string? Background { get; set; }
- IEnumerable<ViewDefinition> Views => Model.Instance.Taxonomy.Views.Append(new() { Key="all",Label="All" });
- IEnumerable<string> Enabled => Platforms.All.Where(Model.Instance.Config.Enabled);
- IEnumerable<string> PickerPlatforms => Model.KnownPlatforms.Where(p => Model.Instance.Config.Enabled(p) || Model.Platform == p);
- int FreshCount => Model.Scope == "live" && DateTime.TryParse(Model.LastVisit,out var at) ? Model.Items.TakeWhile(u=>u.Lead.Post.PostedAt>at.ToUniversalTime()).Count() : 0;
- Run? LastCollect => Model.Runs.FirstOrDefault(r => r.Kind == "collect" && r.FinishedAt != null && (Model.Platform is null ? Model.Instance.Config.Enabled(r.Platform ?? "") : r.Platform == Model.Platform));
+ ViewDefinition[] Views = []; string[] Enabled = []; string[] PickerPlatforms = []; int freshCount; DiagnosticLevel Level; Run? LastCollect;
+ protected override void OnParametersSet()
+ {
+  Views = Model.Instance.Taxonomy.Views.Append(new() { Key = "all", Label = "All" }).ToArray();
+  Enabled = Platforms.All.Where(Model.Instance.Config.Enabled).ToArray();
+  PickerPlatforms = Model.KnownPlatforms.Where(p => Model.Instance.Config.Enabled(p) || Model.Platform == p).ToArray();
+  freshCount = Model.Scope == "live" && DateTime.TryParse(Model.LastVisit, out var at) ? Model.Items.TakeWhile(u => u.Lead.Post.PostedAt > at.ToUniversalTime()).Count() : 0;
+  LastCollect = Model.Runs.FirstOrDefault(r => r.Kind == "collect" && r.FinishedAt != null && (Model.Platform is null ? Model.Instance.Config.Enabled(r.Platform ?? "") : r.Platform == Model.Platform));
+  Level = Model.Diagnostics == DiagnosticLevel.Alert || Model.Issues is { Length: > 0 } || Model.States.Any(s => s.NeedsRelogin) ? DiagnosticLevel.Alert
+   : Model.Diagnostics == DiagnosticLevel.Notice || Model.Coverage.Any(c => c.Stale || c.Incomplete) || Model.Instance.Config.Llm.Enabled && Model.UnsortedCount > 0 ? DiagnosticLevel.Notice : DiagnosticLevel.None;
+ }
  string CollectLabel => Model.Runs.Any(r => r.Kind == "collect" && r.Status == "running") ? "Collecting…" : Model.Requests.Any(r => r.Kind == "collect") ? "Collect requested ✓" : "Collect";
  bool Open(string p) => !Model.States.Any(s => s.Platform == p && s.NeedsRelogin) && !Model.Runs.Any(r => r.Platform == p && r.Kind == "collect" && r.Status == "running") && !Model.Requests.Any(r => r.Platform == p && r.Kind == "collect");
- DiagnosticLevel Level => Model.Diagnostics == DiagnosticLevel.Alert || Model.Issues is { Length: > 0 } || Model.States.Any(s => s.NeedsRelogin) ? DiagnosticLevel.Alert
-  : Model.Diagnostics == DiagnosticLevel.Notice || Model.Coverage.Any(c => c.Stale || c.Incomplete) || Model.Instance.Config.Llm.Enabled && Model.UnsortedCount > 0 ? DiagnosticLevel.Notice : DiagnosticLevel.None;
  string DebugTitle => Level switch { DiagnosticLevel.Alert => "Diagnostics to review: a failure or login needs you", DiagnosticLevel.Notice => "Diagnostics: coverage or model processing is behind; the scheduler catches up on its own", _ => "Manage platforms, people, schedules and settings" };
  static string PlatformName(string? p) => p switch { null => "All platforms", "facebook" => "Facebook", "instagram" => "Instagram", _ => p };
  static string ModeName(string mode) => mode switch { "home" => "Home", "close_friends" => "Close friends", "all_followed" => "All followed", _ => mode.Replace('_',' ') };

@@ -14,12 +14,13 @@ public static class HeartsQuery
     public static async Task<HeartRow[]> Read(FeedDb db, int limit = 100, CancellationToken ct = default)
     {
         var likes = await db.Likes.AsNoTracking().OrderByDescending(l => l.Id).Take(limit).ToArrayAsync(ct);
+        if (likes.Length == 0) return [];
         var postIds = likes.Select(l => l.PostId).Distinct().ToArray();
-        var posts = await db.Posts.AsNoTracking().Where(p => postIds.Contains(p.Id)).ToDictionaryAsync(p => p.Id, ct);
+        var posts = await db.Posts.AsNoTracking().Where(p => EF.Parameter(postIds).Contains(p.Id)).ToDictionaryAsync(p => p.Id, ct);
         var authorIds = posts.Values.Where(p => p.AuthorId != null).Select(p => p.AuthorId!.Value).Distinct().ToArray();
-        var authors = await db.Authors.AsNoTracking().Where(a => authorIds.Contains(a.Id)).ToDictionaryAsync(a => a.Id, ct);
+        var authors = authorIds.Length == 0 ? [] : await db.Authors.AsNoTracking().Where(a => EF.Parameter(authorIds).Contains(a.Id)).ToDictionaryAsync(a => a.Id, ct);
         // A post keeps every row it ever had; only a post with no pending or sent row accepts a new press.
-        var active = (await db.Likes.AsNoTracking().Where(l => postIds.Contains(l.PostId) && (l.State == "pending" || l.State == "sent")).Select(l => l.PostId).ToArrayAsync(ct)).ToHashSet();
+        var active = (await db.Likes.AsNoTracking().Where(l => EF.Parameter(postIds).Contains(l.PostId) && (l.State == "pending" || l.State == "sent")).Select(l => l.PostId).ToArrayAsync(ct)).ToHashSet();
         return likes.Where(l => posts.ContainsKey(l.PostId)).Select(l =>
         {
             var post = posts[l.PostId];

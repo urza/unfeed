@@ -8,12 +8,15 @@ public static class IdentityStore
 {
     // Caller owns a short ingest transaction. No IO apart from database operations.
     public static async Task<Author?> Resolve(FeedDb db, string platform, Person person, bool friend, CancellationToken ct, InstanceSnapshot? instance = null)
+        => (await ResolveDetailed(db, platform, person, friend, ct, instance)).Author;
+
+    internal static async Task<(Author? Author, bool RulesAffected, bool Merged)> ResolveDetailed(FeedDb db, string platform, Person person, bool friend, CancellationToken ct, InstanceSnapshot? instance = null)
     {
-        var refs = Identity.Refs(platform, person.Id, person.Url); if (refs.Length == 0) return null;
+        var refs = Identity.Refs(platform, person.Id, person.Url); if (refs.Length == 0) return (null, false, false);
         var idKey = Identity.IdRef(platform, person.Id);
         var owners = await db.AuthorKeys.Where(k => k.Platform == platform && refs.Contains(k.Key)).ToListAsync(ct);
         var ownerIds = owners.Select(k => k.AuthorId).Distinct().ToList();
-        var authors = await db.Authors.Where(a => ownerIds.Contains(a.Id)).ToListAsync(ct);
+        var authors = ownerIds.Count == 0 ? [] : await db.Authors.Where(a => ownerIds.Contains(a.Id)).ToListAsync(ct);
         // Rows that are one account with this observation: the owner of the id key, and alias owners that carry no platform
         // id of their own (created from an observation without an id, or from a slug fallback). A slug or handle never joins
         // two rows that both have a platform id: a reclaimed handle would merge two people. The id key's owner joins whatever
@@ -25,13 +28,19 @@ public static class IdentityStore
         var candidates = authors.Where(a => owners.Any(k => k.AuthorId == a.Id && (k.Key == idKey || !Identity.IsPlatformId(a.PlatformAuthorId)))).ToList();
         if (candidates.Count == 0 && idKey is null && authors.Count > 0) candidates.Add(authors.MinBy(a => a.Id)!);
         Author? author = null; var movedPosts = new List<Post>(); var removed = new List<long>();
-        if (candidates.Count > 0)
+        bool merged = false, rulesAffected = false;
+        if (candidates.Count == 1)
+        {
+            author = candidates[0];
+        }
+        else if (candidates.Count > 1)
         {
             var counts = await db.Posts.Where(p => p.AuthorId != null && ownerIds.Contains(p.AuthorId.Value)).GroupBy(p => p.AuthorId!.Value).Select(g => new { Id = g.Key, Count = g.Count() }).ToDictionaryAsync(x => x.Id, x => x.Count, ct);
             // The row with the platform id is kept: the merged rows are the id-less ones, and the unique index allows one row per id.
             author = candidates.OrderByDescending(a => Identity.IsPlatformId(a.PlatformAuthorId)).ThenByDescending(a => a.IsFriend).ThenByDescending(a => a.AvatarPath != null).ThenByDescending(a => counts.GetValueOrDefault(a.Id)).ThenBy(a => a.Id).First();
             foreach (var duplicate in candidates.Where(a => a != author))
             {
+                merged = rulesAffected = true;
                 var posts = await db.Posts.Where(p => p.AuthorId == duplicate.Id).ToListAsync(ct);
                 foreach (var post in posts) { post.AuthorId = author.Id; post.ContentRevision++; post.VisibilityRevision++; post.LlmAttemptedAt = post.SummaryAttemptedAt = null; post.LlmError = post.SummaryError = null; post.LlmFailures = post.SummaryFailures = 0; post.LlmTokenLimit = null; movedPosts.Add(post); }
                 db.IdentityEvents.Add(new() { Platform = platform, Kind = "merge", Key = string.Join(" ", owners.Where(k => k.AuthorId == duplicate.Id).Select(k => k.Key)), ObservedId = person.Id, KeptAuthorId = author.Id, RemovedAuthorId = duplicate.Id,
@@ -52,10 +61,15 @@ public static class IdentityStore
                 db.Remove(duplicate); removed.Add(duplicate.Id);
             }
         }
-        if (author is null) { author = new() { Platform = platform, PlatformAuthorId = person.Id }; db.Authors.Add(author); await db.SaveChangesAsync(ct); }
+        bool keysChanged = merged;
+        if (author is null) { author = new() { Platform = platform, PlatformAuthorId = person.Id }; db.Authors.Add(author); await db.SaveChangesAsync(ct); rulesAffected = keysChanged = true; }
         // A numeric id is more evidence than a slug fallback or nothing, so it fills in; a known numeric id is never replaced.
-        else if (!Identity.IsPlatformId(author.PlatformAuthorId) && Identity.IsPlatformId(person.Id)) author.PlatformAuthorId = person.Id;
-        author.DisplayName = person.Name ?? author.DisplayName; author.Url = person.Url ?? author.Url; author.IsFriend |= friend; author.LastSeenAt = Clock.Now;
+        else if (!Identity.IsPlatformId(author.PlatformAuthorId) && Identity.IsPlatformId(person.Id)) { author.PlatformAuthorId = person.Id; }
+        var newName = person.Name ?? author.DisplayName;
+        var newUrl = person.Url ?? author.Url;
+        var newFriend = author.IsFriend || friend;
+        if (newName != author.DisplayName || newFriend != author.IsFriend) rulesAffected = true;
+        author.DisplayName = newName; author.Url = newUrl; author.IsFriend = newFriend; author.LastSeenAt = Clock.Now;
         // An alias that another id-bearing row owns stays there (its mute and close-friend entries keep their person); the log tells the owner.
         if (idKey is not null) foreach (var other in owners.Where(k => k.Key != idKey && k.AuthorId != author.Id && !removed.Contains(k.AuthorId)))
         {
@@ -63,21 +77,35 @@ public static class IdentityStore
             if (conflict is null) db.IdentityEvents.Add(new() { Platform = platform, Kind = "alias_conflict", Key = other.Key, ObservedId = person.Id, KeptAuthorId = other.AuthorId, DetailJson = JsonSerializer.Serialize(new { person.Name, person.Url, AuthorId = author.Id }) });
             else { conflict.Count++; conflict.LastAt = Clock.Now; }
         }
-        foreach (var r in refs) if (!await db.AuthorKeys.AnyAsync(k => k.Key == r, ct) && !db.AuthorKeys.Local.Any(k => k.Key == r)) db.AuthorKeys.Add(new() { Key = r, Platform = platform, AuthorId = author.Id });
-        await db.SaveChangesAsync(ct); author.RefsJson = JsonSerializer.Serialize(await db.AuthorKeys.Where(k => k.AuthorId == author.Id).OrderBy(k => k.Key).Select(k => k.Key).ToArrayAsync(ct)); await db.SaveChangesAsync(ct);
+        foreach (var r in refs)
+        {
+            if (owners.Any(k => k.Key == r)) continue;
+            if (!db.AuthorKeys.Local.Any(k => k.Key == r) && !await db.AuthorKeys.AnyAsync(k => k.Key == r, ct))
+            {
+                db.AuthorKeys.Add(new() { Key = r, Platform = platform, AuthorId = author.Id });
+                keysChanged = rulesAffected = true;
+            }
+        }
+        await db.SaveChangesAsync(ct);
+        if (keysChanged)
+        {
+            author.RefsJson = JsonSerializer.Serialize(await db.AuthorKeys.Where(k => k.AuthorId == author.Id).OrderBy(k => k.Key).Select(k => k.Key).ToArrayAsync(ct));
+            await db.SaveChangesAsync(ct);
+        }
         if (movedPosts.Count > 0)
         {
             var allAuthors = await db.Authors.ToListAsync(ct);
+            var sharedRules = instance is null ? null : new ResolvedRules(allAuthors, instance);
             foreach (var post in movedPosts)
             {
                 var sources = JsonSerializer.Deserialize<MediaSource[]>(post.MediaManifestJson) ?? [];
                 var media = await db.Media.Where(m => m.PostId == post.Id).ToListAsync(ct);
                 post.ContentHash = Ingest.ContentHash(post, sources, media);
-                if (instance is not null) Filters.Apply(post, new(author, allAuthors, instance));
+                if (instance is not null) Filters.Apply(post, new(author, allAuthors, instance, sharedRules));
             }
             await db.SaveChangesAsync(ct);
         }
-        return author;
+        return (author, rulesAffected, merged);
     }
     // The log with names for the operator: the kept row's current name, and the other side's name from the snapshot.
     public static async Task<IdentityEventRow[]> Events(FeedDb db, int take, string? kind = null, CancellationToken ct = default)

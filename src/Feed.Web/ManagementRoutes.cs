@@ -13,6 +13,7 @@ public static class ManagementRoutes
     public static void MapManagement(this WebApplication app, string stamp)
     {
         app.MapGet("/manage", async (HttpContext ctx, Management management, Backgrounds backgrounds, IAntiforgery antiforgery, Feed.Core.Infrastructure.InstanceFiles files, Scheduler scheduler) => {
+            files.Refresh();
             var section = ctx.Request.Query["section"].ToString(); if (!Sections.Contains(section)) section = "overview";
             try {
                 var model = await management.Read(section, ctx.Request.Query["q"].ToString(), ctx.Request.Query["platform"].ToString(), ctx.Request.Query["filter"].ToString(), int.TryParse(ctx.Request.Query["page"], out var page) ? page : 1, ctx.RequestAborted, long.TryParse(ctx.Request.Query["collection"], out var collection) ? collection : null, ctx.Request.Query["signature"].FirstOrDefault());

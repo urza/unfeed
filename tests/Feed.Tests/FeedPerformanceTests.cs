@@ -1,8 +1,15 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using Feed.Core.Domain;
 using Feed.Core.Infrastructure;
 using Feed.Core.Queries;
+using Feed.Web.Components;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Feed.Tests;
@@ -117,5 +124,148 @@ public sealed class FeedPerformanceTests
         db.Add(new TimelineVisit { Platform = "facebook", AuthorId = author.Id, At = Clock.Now, CaptureStatus = "incomplete" });
         await db.SaveChangesAsync(); await Check(); Assert.True(await CoverageQuery.HasIssues(db, Snapshot));
         Assert.False(await CoverageQuery.HasIssues(db, Snapshot, "instagram"));
+    }
+
+    [Theory]
+    [InlineData("2026-11-26 14:05:09")]
+    [InlineData("2026-11-26T14:05:09")]
+    [InlineData("2024-02-29 23:59:59.1")]
+    [InlineData("2026-11-26 14:05:09.1234567")]
+    [InlineData("2026-11-26T14:05:09Z")]
+    [InlineData("2026-11-26 14:05:09.123+02:00")]
+    public void SqliteDatesMatchesStandardDateTimeParse(string raw)
+    {
+        var expected = DateTime.Parse(raw, CultureInfo.InvariantCulture);
+        var actual = SqliteDates.Parse(raw);
+        Assert.Equal(expected.Ticks, actual.Ticks);
+        Assert.Equal(expected.Kind, actual.Kind);
+    }
+
+    [Fact] public async Task FeedQueryTieBreaksEqualPostedAtAcrossRenderCapAndPlatforms()
+    {
+        await using var i = new TestInstance(); await i.Init();
+        var newest = Clock.Now;
+        var tie = newest.AddMinutes(-5);
+        var older = newest.AddMinutes(-10);
+        await using (var db = i.Factory.Open())
+        {
+            var fb = new Author { Platform = "facebook", IsFriend = true, RefsJson = "[\"fb:1\"]" };
+            var ig = new Author { Platform = "instagram", IsFriend = true, RefsJson = "[\"ig:1\"]" };
+            db.AddRange(fb, ig); await db.SaveChangesAsync();
+            // Interleave 8 tied posts across both platforms so the cap=4 boundary splits the tie group.
+            db.Posts.Add(new() { Platform = "facebook", PlatformPostId = "newest", AuthorId = fb.Id, PostedAt = newest, CategoriesJson = "[\"topic\"]", VerdictContentRevision = 1 });
+            for (int n = 0; n < 8; n++)
+            {
+                bool isFb = n % 2 == 0;
+                db.Posts.Add(new()
+                {
+                    Platform = isFb ? "facebook" : "instagram", PlatformPostId = $"tie-{n}",
+                    AuthorId = isFb ? fb.Id : ig.Id, PostedAt = tie,
+                    CategoriesJson = "[\"topic\"]", VerdictContentRevision = 1
+                });
+            }
+            db.Posts.Add(new() { Platform = "instagram", PlatformPostId = "older", AuthorId = ig.Id, PostedAt = older, CategoriesJson = "[\"topic\"]", VerdictContentRevision = 1 });
+            await db.SaveChangesAsync();
+        }
+        var snapshot = new InstanceSnapshot(
+            new() { Platforms = ImmutableDictionary<string, PlatformConfig>.Empty.Add("facebook", new()).Add("instagram", new()), Llm = new() { Enabled = true }, Ui = new() { RenderCap = 4, Stack = new() { MinPosts = 0 } } },
+            new() { Categories = [new() { Key = "topic", Label = "Topic" }], Views = [new() { Key = "topic", Category = "topic" }, new() { Key = "people", Authors = ["fb:1", "ig:1"] }] },
+            Preferences.Parse(""));
+        await using var check = i.Factory.Open();
+        var expected = (await check.Posts.AsNoTracking().ToArrayAsync())
+            .OrderByDescending(p => p.PostedAt).ThenByDescending(p => p.Id).Take(4).Select(p => p.Id).ToArray();
+        var query = new FeedQuery(i.Factory);
+        foreach (var view in new[] { "all", "topic", "people" })
+        {
+            var page = await query.Read(snapshot, view, null, "live", default);
+            Assert.Equal(10, page.VisibleCount);
+            Assert.Equal(expected, page.Items.Select(u => u.Lead.Post.Id).ToArray());
+        }
+    }
+
+    [Fact] public async Task CoverageQueryHandlesOutOfOrderVisitsAndFailureBarriers()
+    {
+        await using var i = new TestInstance(); await i.Init();
+        var now = Clock.Now;
+        await using var db = i.Factory.Open();
+        var author = new Author { Platform = "facebook", IsFriend = true, DisplayName = "Fixture", Url = "https://example.test/person/" };
+        db.Add(author); await db.SaveChangesAsync();
+        // Insert out of chronological order across both AuthorId and legacy URL-only rows.
+        db.TimelineVisits.AddRange(
+            new() { Platform = "facebook", AuthorId = author.Id, Url = "https://example.test/person", At = now.AddMinutes(-2), CaptureStatus = "incomplete", Status = "unrendered", Note = "newer failure" },
+            new() { Platform = "facebook", Url = "https://example.test/person", At = now.AddMinutes(-5), CaptureStatus = "captured", Status = "rendered", StopReason = "seen", OldestPostedAt = now.AddDays(-3), NewestPostedAt = now.AddHours(-1) },
+            new() { Platform = "facebook", AuthorId = author.Id, Url = "https://example.test/person", At = now.AddMinutes(-1), CaptureStatus = "incomplete", Status = "unrendered", Note = "latest failure" },
+            new() { Platform = "facebook", AuthorId = author.Id, Url = "https://example.test/person", At = now.AddMinutes(-10), CaptureStatus = "incomplete", Status = "unrendered", Note = "before barrier" },
+            new() { Platform = "facebook", AuthorId = author.Id, Url = "https://example.test/person", At = now.AddDays(-65), CaptureStatus = "incomplete", Status = "unrendered", Note = "too old" });
+        await db.SaveChangesAsync();
+        var row = Assert.Single(await CoverageQuery.Read(db, Snapshot));
+        Assert.Equal("latest failure", row.Note);
+        Assert.Equal(2, row.Failures);
+        Assert.True(row.Incomplete);
+        Assert.False(row.Stale);
+        Assert.Equal(now.AddDays(-3), row.OldestPost);
+        Assert.Equal(now.AddHours(-1), row.NewestPost);
+        Assert.True(await CoverageQuery.HasIssues(db, Snapshot));
+    }
+
+    [Fact] public async Task RecoveryReadWithSummaryMatchesSeparateReads()
+    {
+        await using var i = new TestInstance(); await i.Init();
+        await using var db = i.Factory.Open();
+        db.Runs.Add(new Run { Id = 1, Kind = "collect", Platform = "facebook", Status = "ok", FinishedAt = Clock.Now });
+        var raw = new RawSnapshot { Platform = "facebook", RunId = 1, Path = "warned.json", Parsed = true, Warning = "upstream detail", CapturedAt = Clock.Now };
+        db.RawSnapshots.Add(raw); await db.SaveChangesAsync();
+        db.Add(new RawDiagnostic { RawSnapshotId = raw.Id, Code = "upstream_error", Fingerprint = "fp-1", Impact = "auxiliary", ParserVersion = PayloadParser.Version });
+        db.Posts.Add(new Post { Platform = "facebook", PlatformPostId = "p1", IngestReadyAt = Clock.Now, LlmAttemptedAt = Clock.Now.AddHours(-1), LlmError = "timeout" });
+        await db.SaveChangesAsync();
+        var expectedSummary = await RecoveryQuery.Read(db, Snapshot, grouped: true, summaryOnly: true);
+        var expectedPage = await RecoveryQuery.Read(db, Snapshot, grouped: true, page: 1, summaryOnly: false);
+        var (actualSummary, actualPage) = await RecoveryQuery.ReadWithSummary(db, Snapshot, null, 1);
+        Assert.Equal(expectedSummary, actualSummary);
+        Assert.Equal(expectedPage, actualPage);
+    }
+
+    [Fact] public async Task HotQueriesUseCoveringAndPartialIndexes()
+    {
+        await using var i = new TestInstance(); await i.Init();
+        await using var db = i.Factory.Open();
+        await db.Database.OpenConnectionAsync();
+        var conn = (SqliteConnection)db.Database.GetDbConnection();
+        async Task<string> Plan(string sql)
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "EXPLAIN QUERY PLAN " + sql;
+            var lines = new List<string>();
+            await using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync()) lines.Add(r.GetString(3));
+            return string.Join("\n", lines);
+        }
+        Assert.Contains("COVERING INDEX IX_Posts_FeedMembership", await Plan("SELECT Id, PostedAt FROM Posts WHERE Platform = 'facebook' AND Hidden = 0 AND CategoriesJson IS NOT NULL AND VerdictContentRevision = ContentRevision ORDER BY PostedAt DESC"));
+        Assert.Contains("COVERING INDEX IX_Posts_FeedMembership", await Plan("SELECT Id, PostedAt FROM Posts WHERE Platform = 'facebook' AND Hidden = 1 ORDER BY PostedAt DESC"));
+        Assert.Contains("IX_Posts_JudgeQueue", await Plan("SELECT Id FROM Posts WHERE Platform = 'facebook' AND LlmAttemptedAt IS NOT NULL AND IngestReadyAt IS NOT NULL AND (Hidden = 0 OR HiddenBy = 'llm') AND (CategoriesJson IS NULL OR VerdictContentRevision IS NULL OR VerdictContentRevision <> ContentRevision OR LlmTokenLimit IS NOT NULL)"));
+        Assert.Contains("IX_Posts_SummaryQueue", await Plan("SELECT Id FROM Posts WHERE Platform = 'facebook' AND SummaryAttemptedAt IS NOT NULL AND IngestReadyAt IS NOT NULL AND Hidden = 0 AND (Summary IS NULL OR SummaryContentRevision IS NULL OR SummaryContentRevision <> ContentRevision)"));
+        var rarePlan = await Plan("SELECT p.AuthorId, p.PostedAt, p.Id FROM Authors a JOIN Posts p ON p.AuthorId = a.Id WHERE a.Platform = 'facebook' AND a.IsFriend = 1 AND p.PostedAt IS NOT NULL ORDER BY a.Id, p.PostedAt");
+        Assert.Contains("COVERING INDEX IX_Posts_AuthorHistory", rarePlan);
+        Assert.DoesNotContain("TEMP B-TREE", rarePlan);
+    }
+
+    [Fact] public async Task RichTextLinksUrlsAndLongestUnicodeTagOnWordBoundaries()
+    {
+        var services = new ServiceCollection().BuildServiceProvider();
+        await using var renderer = new HtmlRenderer(services, NullLoggerFactory.Instance);
+        async Task<string> Render(string text, Tag[] tags) => await renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            var output = await renderer.RenderComponentAsync<RichText>(ParameterView.FromDictionary(new Dictionary<string, object?> { ["Text"] = text, ["Tags"] = tags }));
+            return output.ToHtmlString();
+        });
+        Tag[] tags = [new("Jan", "https://example.test/jan"), new("Jan Novák", "https://example.test/jan-novak"), new("Dvořák", "https://example.test/dvorak")];
+        var html = await Render("Hi Jan Novák & Dvořáková and Dvořák at https://example.test/a?x=1&y=2", tags);
+        Assert.Contains("<a class=\"tag\" href=\"https://example.test/jan-novak\"", html);
+        Assert.Contains($"<strong>{System.Net.WebUtility.HtmlEncode("Jan Novák")}</strong>", html);
+        Assert.DoesNotContain("https://example.test/jan\"", html);
+        Assert.Contains($"&amp; {System.Net.WebUtility.HtmlEncode("Dvořáková")} and <a class=\"tag\" href=\"https://example.test/dvorak\"", html);
+        Assert.Contains("<a href=\"https://example.test/a?x=1&amp;y=2\"", html);
+        var plain = await Render("Just <b>plain</b> text", tags);
+        Assert.Equal("<span class=\"rich-text\">Just &lt;b&gt;plain&lt;/b&gt; text</span>", plain);
     }
 }

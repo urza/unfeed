@@ -5,6 +5,7 @@ using Feed.Core.Application;
 using Feed.Core.Domain;
 using Feed.Core.Infrastructure;
 using Feed.Core.Queries;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace Feed.Web;
@@ -58,39 +59,59 @@ public sealed class Management(InstancePaths paths, DbFactory factory, Managemen
         var platforms = section is "overview" or "schedule" ? await ReadPlatforms(db, s, ct) : [];
         // The recovery summary and the pending count feed the attention panel on Overview and the status block on Recovery and Processing.
         var summary = section is "overview" or "recovery" or "processing";
+        int pending = 0;
+        if (summary)
+            pending = await db.Database.SqlQueryRaw<int>("SELECT COUNT(*) AS Value FROM Posts WHERE Hidden = 0 AND (CategoriesJson IS NULL OR VerdictContentRevision IS NULL OR VerdictContentRevision <> ContentRevision)").FirstAsync(ct);
+        RecoveryIssue[] recoverySummary = [], recoveryPage = [];
+        if (section == "recovery") (recoverySummary, recoveryPage) = await RecoveryQuery.ReadWithSummary(db, s, signature, page, ct);
+        else if (summary) recoverySummary = await RecoveryQuery.Read(db, s, ct: ct, grouped: true, summaryOnly: true);
+        Run[] collections = [];
+        TimelineVisit[] collectionVisits = [];
+        if (section == "recovery")
+        {
+            var latestCollects = await db.Runs.AsNoTracking().Where(r => r.Kind == "collect").OrderByDescending(r => r.Id).Take(10).ToArrayAsync(ct);
+            collections = collectionId is { } cid && !latestCollects.Any(r => r.Id == cid)
+                ? latestCollects.Concat(await db.Runs.AsNoTracking().Where(r => r.Id == cid).ToArrayAsync(ct)).ToArray()
+                : latestCollects;
+            var collectionIds = collections.Select(r => r.Id).ToArray();
+            if (collectionIds.Length > 0)
+                collectionVisits = await db.TimelineVisits.AsNoTracking().Where(v => EF.Parameter(collectionIds).Contains(v.RunId)).ToArrayAsync(ct);
+        }
         return new(docs, s, platforms, people?.Rows ?? [], people?.Count ?? 0, page, query, platform, filter, section,
             section == "storage" ? await db.Get("disk:summary", ct) ?? "Not measured yet" : "", section == "storage" ? await db.Get("disk:at", ct) : null,
-            summary ? await db.Posts.CountAsync(p => !p.Hidden && (p.CategoriesJson == null || p.VerdictContentRevision != p.ContentRevision), ct) : 0) {
+            pending) {
             RecoverySignature = signature, RecoveryPage = page,
             Backup = section == "storage" ? await Maintenance.BackupLine(paths, db, ct) : "",
             Tools = section == "processing" ? await ToolHealth.Line(db, ct) : "",
             Coverage = section == "coverage" ? await CoverageQuery.Read(db, s, ct: ct) : [],
             Events = section == "people" ? await IdentityStore.Events(db, 20, ct: ct) : [],
             Hearts = section == "hearts" ? await HeartsQuery.Read(db, 100, ct) : [],
-            RecoverySummary = summary ? await RecoveryQuery.Read(db, s, ct: ct, grouped: true, summaryOnly: true) : [],
-            Recovery = section == "recovery" ? await RecoveryQuery.Read(db, s, ct: ct, grouped: signature is null, fingerprint: signature, page: page) : [],
-            Collections = section == "recovery" ? (await db.Runs.AsNoTracking().Where(r => r.Kind == "collect").OrderByDescending(r => r.Id).Take(10).ToArrayAsync(ct)).Concat(await db.Runs.AsNoTracking().Where(r => r.Id == collectionId).ToArrayAsync(ct)).DistinctBy(r => r.Id).ToArray() : [],
+            RecoverySummary = recoverySummary,
+            Recovery = recoveryPage,
+            Collections = collections,
             RecentCompletions = section == "recovery" ? (await db.Posts.AsNoTracking().Where(p => p.JudgedAt > Clock.Now.AddDays(-1) && p.VerdictContentRevision == p.ContentRevision && p.LlmError == null).OrderByDescending(p => p.JudgedAt).Take(10).Select(p => new ProcessingCompletion(p.Id, p.Platform, "Classification completed", p.JudgedAt!.Value)).ToArrayAsync(ct)) : [],
-            CollectionVisits = section == "recovery" ? await db.TimelineVisits.AsNoTracking().Where(v => db.Runs.Where(r => r.Kind == "collect").OrderByDescending(r => r.Id).Take(10).Select(r => r.Id).Contains(v.RunId) || v.RunId == collectionId).ToArrayAsync(ct) : []
+            CollectionVisits = collectionVisits
         };
     }
     sealed record PeopleSlice(PersonRow[] Rows, int Count, int Page);
     async Task<PeopleSlice> ReadPeople(FeedDb db, InstanceSnapshot s, string query, string platform, string filter, int page, CancellationToken ct)
     {
-        var authors = await db.Authors.AsNoTracking().OrderBy(a => a.DisplayName).ThenBy(a => a.Id).ToArrayAsync(ct);
+        await db.Database.OpenConnectionAsync(ct);
+        var authors = await SqliteDates.ReadAuthorsAsync((SqliteConnection)db.Database.GetDbConnection(), null, ct);
+        System.Array.Sort(authors, static (a, b) => { int c = string.CompareOrdinal(a.DisplayName, b.DisplayName); return c != 0 ? c : a.Id.CompareTo(b.Id); });
         var resolved = new ResolvedRules(authors, s); var needle = Identity.Normalize(query);
         // The membership rules decide the filter, so they are evaluated for every matching author. Post counts,
         // visits and retries are read only for the forty people on the page, and by key, not by a scan per author.
         var matching = authors.Where(a => (platform.Length == 0 || a.Platform == platform) && (query.Length == 0 || Identity.Normalize((a.DisplayName ?? "") + " " + a.RefsJson).Contains(needle)))
-            .Select(a => (Author: a, Close: new RuleContext(a, authors, s, resolved).CloseFriend, Muted: s.Preferences.Mutes.Any(e => Identity.Matches(e, a)), Always: resolved.Shown(a)))
+            .Select(a => (Author: a, Close: a.IsFriend && resolved.CloseFriend(a), Muted: resolved.Muted(a), Always: resolved.Shown(a)))
             .Where(p => filter switch { "friends" => p.Author.IsFriend, "removed" => !p.Author.IsFriend, "close" => p.Close, "muted" => p.Muted, "always" => p.Always, _ => true }).ToArray();
         page = Math.Clamp(page, 1, Math.Max(1, (matching.Length + PeoplePageSize - 1) / PeoplePageSize));
         var slice = matching.Skip((page - 1) * PeoplePageSize).Take(PeoplePageSize).ToArray(); var ids = slice.Select(p => p.Author.Id).ToArray();
-        var counts = await db.Posts.Where(p => p.AuthorId != null && ids.Contains(p.AuthorId.Value)).GroupBy(p => p.AuthorId!.Value).Select(g => new { Id = g.Key, Total = g.Count(), Hidden = g.Count(p => p.Hidden), Latest = g.Max(p => p.PostedAt) }).ToDictionaryAsync(c => c.Id, ct);
+        var counts = ids.Length == 0 ? [] : await db.Posts.Where(p => p.AuthorId != null && EF.Parameter(ids).Contains(p.AuthorId.Value)).GroupBy(p => p.AuthorId!.Value).Select(g => new { Id = g.Key, Total = g.Count(), Hidden = g.Count(p => p.Hidden), Latest = g.Max(p => p.PostedAt) }).ToDictionaryAsync(c => c.Id, ct);
         var visits = new Dictionary<long, TimelineVisit>();
-        foreach (var v in await db.TimelineVisits.AsNoTracking().Where(v => v.AuthorId != null && ids.Contains(v.AuthorId.Value)).OrderByDescending(v => v.At).ThenByDescending(v => v.Id).ToArrayAsync(ct)) visits.TryAdd(v.AuthorId!.Value, v);
+        if (ids.Length > 0) foreach (var v in await db.TimelineVisits.AsNoTracking().Where(v => v.AuthorId != null && EF.Parameter(ids).Contains(v.AuthorId.Value)).OrderByDescending(v => v.At).ThenByDescending(v => v.Id).ToArrayAsync(ct)) visits.TryAdd(v.AuthorId!.Value, v);
         var targets = new Dictionary<long, SweepTarget>();
-        foreach (var t in await db.SweepTargets.AsNoTracking().Where(t => ids.Contains(t.AuthorId) && t.State == "retry" && db.Kv.Any(k => k.Key == "sweep:" + t.Platform + ":cycle" && k.Value == t.CycleId)).ToArrayAsync(ct)) targets.TryAdd(t.AuthorId, t);
+        if (ids.Length > 0) foreach (var t in await db.SweepTargets.AsNoTracking().Where(t => EF.Parameter(ids).Contains(t.AuthorId) && t.State == "retry" && db.Kv.Any(k => k.Key == "sweep:" + t.Platform + ":cycle" && k.Value == t.CycleId)).ToArrayAsync(ct)) targets.TryAdd(t.AuthorId, t);
         var rows = slice.Select(p => {
             var count = counts.GetValueOrDefault(p.Author.Id);
             return new PersonRow(p.Author, p.Close, p.Muted, p.Always, count?.Total ?? 0, count?.Hidden ?? 0, count?.Latest, visits.GetValueOrDefault(p.Author.Id), targets.GetValueOrDefault(p.Author.Id) is { } t ? $"Retry {t.Attempts}/{TimelineCoverage.MaxAttempts}; due {t.RetryAt:u}" : null);

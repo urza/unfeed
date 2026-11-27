@@ -10,8 +10,8 @@ public static class PersonRoutes
 {
     public static void MapPeople(this WebApplication app, string stamp)
     {
-        app.MapGet("/people/{id:long}", async (long id, HttpContext ctx, People people, Backgrounds backgrounds, IAntiforgery antiforgery) => {
-            var s = (InstanceSnapshot)ctx.Items["instance"]!;
+        app.MapGet("/people/{id:long}", async (long id, HttpContext ctx, People people, Backgrounds backgrounds, IAntiforgery antiforgery, InstanceFiles files) => {
+            var s = files.Refresh();
             var category = ctx.Request.Query["category"].FirstOrDefault(); if (string.IsNullOrEmpty(category)) category = null;
             var scope = ctx.Request.Query["scope"].ToString(); if (scope is not ("hidden" or "unsorted")) scope = "live";
             if (scope != "live") category = null;
@@ -22,10 +22,10 @@ public static class PersonRoutes
                 return (IResult)new RazorComponentResult<PersonView>(new { Model = model, Stamp = stamp, Background = backgrounds.Current.SelectedUrl, RequestToken = antiforgery.GetAndStoreTokens(ctx).RequestToken!, Message = ctx.Request.Query["message"].FirstOrDefault() });
             } catch (ArgumentException) { return Results.Redirect($"/people/{id}"); }
         });
-        app.MapPost("/people/{id:long}/collect", async (long id, HttpContext ctx, People people, IAntiforgery antiforgery) => {
+        app.MapPost("/people/{id:long}/collect", async (long id, HttpContext ctx, People people, IAntiforgery antiforgery, InstanceFiles files) => {
             try {
                 await antiforgery.ValidateRequestAsync(ctx);
-                var error = await people.Collect(id, (InstanceSnapshot)ctx.Items["instance"]!, ctx.RequestAborted);
+                var error = await people.Collect(id, files.Refresh(), ctx.RequestAborted);
                 return Results.Redirect($"/people/{id}" + QueryString.Create("message", error ?? "Collection queued for this person. Refresh this page to see progress and new posts."));
             } catch (KeyNotFoundException) { return Results.NotFound(); }
             catch (AntiforgeryValidationException) { return Results.Text("This form expired. Reload the person page before collecting.", statusCode: 400); }

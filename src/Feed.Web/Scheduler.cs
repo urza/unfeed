@@ -87,13 +87,42 @@ public sealed class Scheduler(InstancePaths paths, InstanceFiles files, DbFactor
             await db.Put($"coverage:{p}:not_before", Clock.Now.AddHours(1).ToString("O"), ct);
             await Dispatch(request, "recovery", ct);
         }
-        var enabled = Platforms.All.Where(c.Enabled).ToArray(); var retry = Clock.Now.AddMinutes(-30);
+        var enabled = Platforms.All.Where(c.Enabled).ToArray(); var now = Clock.Now; var retry = now.AddMinutes(-30);
         var modelHash = Prompts.ConfigurationHash(snapshot); var judgeDelay = await db.Get($"model:{modelHash}:judge:not_before", ct); var summaryDelay = await db.Get($"model:{modelHash}:summary:not_before", ct);
-        bool judgeDue = !DateTime.TryParse(judgeDelay, out var jd) || jd.ToUniversalTime() <= Clock.Now; bool summaryDue = !DateTime.TryParse(summaryDelay, out var sd) || sd.ToUniversalTime() <= Clock.Now;
+        bool judgeDue = !DateTime.TryParse(judgeDelay, out var jd) || jd.ToUniversalTime() <= now; bool summaryDue = !DateTime.TryParse(summaryDelay, out var sd) || sd.ToUniversalTime() <= now;
         var ingestAvailable = enabled.Where(p => !ResourceLock.Busy(paths, "ingest-" + p)).ToArray();
-        var pendingJudgments = db.Posts.Where(p => enabled.Contains(p.Platform) && p.IngestReadyAt != null).Where(PendingWork.Judgment);
-        bool judgmentReady = c.Llm.Enabled && judgeDue && await pendingJudgments.AnyAsync(JudgmentRetry.Due(c.Llm, Clock.Now), ct);
-        bool due = enabled.Length > 0 && (startup && ingestAvailable.Length > 0 || await db.RawSnapshots.AnyAsync(r => ingestAvailable.Contains(r.Platform) && !r.Parsed && !r.Deleted && r.BlockedParserVersion != PayloadParser.Version && !db.Runs.Any(run => run.Id == r.RunId && run.Status == "running" && run.Phase == "browser") && (r.AttemptedAt == null || r.AttemptedAt <= retry), ct) || judgmentReady || c.Llm.Enabled && await db.Posts.AnyAsync(p => enabled.Contains(p.Platform) && p.IngestReadyAt != null && (summaryDue && !p.Hidden && (p.Summary == null || p.SummaryContentRevision != p.ContentRevision) && (p.SummaryAttemptedAt == null || p.SummaryAttemptedAt <= retry)), ct));
+        bool due = enabled.Length > 0 && startup && ingestAvailable.Length > 0;
+        if (!due && ingestAvailable.Length > 0)
+            due = await db.RawSnapshots.AnyAsync(r => ingestAvailable.Contains(r.Platform) && !r.Parsed && !r.Deleted && r.BlockedParserVersion != PayloadParser.Version && !db.Runs.Any(run => run.Id == r.RunId && run.Status == "running" && run.Phase == "browser") && (r.AttemptedAt == null || r.AttemptedAt <= retry), ct);
+        if (!due && enabled.Length > 0 && c.Llm.Enabled && judgeDue)
+        {
+            var tokenCutoff = now.AddMinutes(-c.Llm.TokenRetryDelayMinutes);
+            var ceiling = Math.Max(c.Llm.MaxTokens, c.Llm.TokenRetryBudgets.DefaultIfEmpty(0).Max());
+            // Match IX_Posts_JudgeQueue partial index filter (Hidden = 0) with LIMIT 1 per enabled platform.
+            foreach (var p in enabled)
+                if (await db.Database.SqlQuery<int>($"""
+                    SELECT 1 AS Value FROM Posts
+                    WHERE Platform = {p} AND IngestReadyAt IS NOT NULL
+                      AND (Hidden = 0 OR HiddenBy = 'llm')
+                      AND (CategoriesJson IS NULL OR VerdictContentRevision IS NULL OR VerdictContentRevision <> ContentRevision OR LlmTokenLimit IS NOT NULL)
+                      AND ((LlmTokenLimit IS NULL AND (LlmAttemptedAt IS NULL OR LlmAttemptedAt <= {retry}))
+                           OR (LlmTokenLimit IS NOT NULL AND LlmTokenLimit < {ceiling} AND (LlmAttemptedAt IS NULL OR LlmAttemptedAt <= {tokenCutoff})))
+                    LIMIT 1
+                    """).AnyAsync(ct)) { due = true; break; }
+        }
+        if (!due && enabled.Length > 0 && c.Llm.Enabled && summaryDue)
+        {
+            // Match IX_Posts_SummaryQueue partial index filter (Hidden = 0) with LIMIT 1 per enabled platform.
+            foreach (var p in enabled)
+                if (await db.Database.SqlQuery<int>($"""
+                    SELECT 1 AS Value FROM Posts
+                    WHERE Platform = {p} AND IngestReadyAt IS NOT NULL
+                      AND Hidden = 0
+                      AND (Summary IS NULL OR SummaryContentRevision IS NULL OR SummaryContentRevision <> ContentRevision)
+                      AND (SummaryAttemptedAt IS NULL OR SummaryAttemptedAt <= {retry})
+                    LIMIT 1
+                    """).AnyAsync(ct)) { due = true; break; }
+        }
         if (!due && enabled.Length > 0) due = await db.Media.Join(db.Posts.Where(p => enabled.Contains(p.Platform)), m => m.PostId, p => p.Id, (m, p) => new { m, p }).AnyAsync(x => x.m.IsCurrent && x.m.Path == null && x.m.PrunedAt == null && (x.m.AttemptedAt == null || x.m.AttemptedAt <= retry) && (x.m.Kind == "image" || x.m.Kind == "video" && (x.p.Hidden || !c.Llm.Enabled || x.p.CategoriesJson != null && x.p.VerdictContentRevision == x.p.ContentRevision)), ct);
         if (ingestAvailable.Length > 0) startup = false;
         await DispatchProcessing(db, due, ct);

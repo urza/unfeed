@@ -2,14 +2,16 @@ using Feed.Core.Application;
 using Feed.Core.Domain;
 using Feed.Core.Infrastructure;
 using Feed.Core.Queries;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace Feed.Web;
 
 public sealed record PersonPage(Author Author, FeedPage Feed, string? Category, bool Close, bool Muted, bool Always, bool HomeTimeline, string[] Views, TimelineVisit? Visit, RunRequest? Request, Run? Run, string? Blocked, string? ProfileUrl);
 
-public sealed class People(DbFactory factory)
+public sealed class People(DbFactory factory, FeedQuery? feedQuery = null)
 {
+    readonly FeedQuery query = feedQuery ?? new FeedQuery(factory);
     public const int CollectionScrolls = 10;
     public static string? ProfileUrl(Author author)
     {
@@ -29,17 +31,30 @@ public sealed class People(DbFactory factory)
         if (await db.RunRequests.AnyAsync(r => r.Platform == author.Platform && r.Kind == "collect" && (r.Status == "pending" || r.Status == "claimed"), ct)) return "A collection is already queued on this platform.";
         return null;
     }
+    static string? BlockedFromFeed(Author author, InstanceSnapshot s, FeedPage feed, string? profileUrl)
+    {
+        if (profileUrl is null) return "No usable platform profile is stored for this person.";
+        if (!s.Config.Enabled(author.Platform)) return "This platform is paused. Enable it in Manage before collecting.";
+        if (feed.States.Any(p => p.Platform == author.Platform && p.NeedsRelogin)) return "This platform needs login. Open Manage to log in.";
+        if (feed.Runs.Any(r => r.Platform == author.Platform && r.Kind == "collect" && r.Status == "running")) return "A collection is already running on this platform.";
+        if (feed.Requests.Any(r => r.Platform == author.Platform && r.Kind == "collect" && (r.Status == "pending" || r.Status == "claimed"))) return "A collection is already queued on this platform.";
+        return null;
+    }
     public async Task<PersonPage?> Read(long id, InstanceSnapshot s, string? category, string scope, CancellationToken ct)
     {
         await using var db = factory.Open();
-        var authors = await db.Authors.AsNoTracking().ToArrayAsync(ct);
+        await db.Database.OpenConnectionAsync(ct);
+        var authors = await SqliteDates.ReadAuthorsAsync((SqliteConnection)db.Database.GetDbConnection(), null, ct);
         var author = authors.FirstOrDefault(a => a.Id == id); if (author is null) return null;
-        var feed = await new FeedQuery(factory).Read(s, "all", author.Platform, scope, ct, id, category);
+        // Share the singleton FeedQuery (reusing diagnostics cache) and pass preloaded authors so we don't scan Authors twice.
+        var feed = await query.Read(s, "all", author.Platform, scope, ct, id, category, null, authors);
         var request = await db.RunRequests.AsNoTracking().Where(r => r.Kind == "collect" && r.PersonAuthorId == id).OrderByDescending(r => r.Id).FirstOrDefaultAsync(ct);
         var run = request is null ? null : await db.Runs.AsNoTracking().Where(r => r.RequestId == request.Id).OrderByDescending(r => r.Id).FirstOrDefaultAsync(ct);
         var visit = await db.TimelineVisits.AsNoTracking().Where(v => v.AuthorId == id).OrderByDescending(v => v.Id).FirstOrDefaultAsync(ct);
-        bool Matches(IEnumerable<string> entries) => entries.Any(e => Identity.Resolve(e, authors).Any(a => a.Id == id));
-        return new(author, feed, category, new RuleContext(author, authors, s).CloseFriend, s.Preferences.Mutes.Any(e => Identity.Matches(e, author)), Matches(s.Preferences.Shows), author.IsFriend && Matches(s.Config.Platform(author.Platform).HomeTimelineAuthors), s.Taxonomy.Views.Where(v => v.Authors is { } entries && Matches(entries)).Select(v => v.Label).ToArray(), visit, request, run, await Blocked(db, author, s, ct), ProfileUrl(author));
+        var resolved = new ResolvedRules(authors, s);
+        bool Matches(IEnumerable<string> entries) => entries.Any(e => resolved.Resolve(e).Any(a => a.Id == id));
+        var profileUrl = ProfileUrl(author);
+        return new(author, feed, category, author.IsFriend && resolved.CloseFriend(author), resolved.Muted(author), resolved.Shown(author), author.IsFriend && Matches(s.Config.Platform(author.Platform).HomeTimelineAuthors), s.Taxonomy.Views.Where(v => v.Authors is { } entries && Matches(entries)).Select(v => v.Label).ToArray(), visit, request, run, BlockedFromFeed(author, s, feed, profileUrl), profileUrl);
     }
     public async Task<string?> Collect(long id, InstanceSnapshot s, CancellationToken ct)
     {
