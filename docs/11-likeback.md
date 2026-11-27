@@ -2,7 +2,7 @@
 
 You are here: the one write. Everything before this chapter reads. This chapter specifies how a heart pressed on the page becomes a like on the original post, through the same browser session, with the same human pacing and the same dead-stop on a checkpoint. Chapter 12 shows how the scheduler starts the run. Chapter 15 shows the heart on the card.
 
-Source map: [LikeSender.cs](../src/Feed.Cli/LikeSender.cs) · [Actions.cs](../src/Feed.Core/Application/Actions.cs) · [BrowserSessionTests](../tests/Feed.Tests/BrowserSessionTests.cs).
+Source map: [LikeSender.cs](../src/Feed.Cli/LikeSender.cs) · [Actions.cs](../src/Feed.Core/Application/Actions.cs).
 
 ## 11.1 Rules
 

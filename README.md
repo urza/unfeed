@@ -49,13 +49,7 @@ Use **Manage** in the feed toolbar for platform actions, people controls, schedu
 - [Code map and design notes](IMPLEMENTATION.md): responsibilities and current limitations.
 - [Verification](docs/17-testing.md) and [synthetic measurements](measurements.md): checks and their limits.
 
-```bash
-dotnet test tests/Feed.Tests --filter 'Category!=Browser'
-dotnet out/Feed.Cli.dll browser install
-dotnet test tests/Feed.Tests --filter 'Category=Browser'
-```
-
-Browser tests use temporary synthetic instances, not platform accounts. They do not call a real model or send hearts. All personal configuration, captures, profiles and database state belong in `data/`; never add them to a commit or release archive.
+The repository has no automated tests. All personal configuration, captures, profiles and database state belong in `data/`; never add them to a commit or release archive.
 
 ## License
 

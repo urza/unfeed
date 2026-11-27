@@ -2,7 +2,7 @@
 
 You are here: the files the owner provides. Chapter 3 placed the instance directory at the center of the picture. This chapter specifies every file in it and every key the code reads. Chapter 5 specifies the database that lives next to these files.
 
-Source map: [Configuration.cs](../src/Feed.Core/Domain/Configuration.cs) · [InstanceFiles.cs](../src/Feed.Core/Infrastructure/InstanceFiles.cs) · [ConfigurationTests](../tests/Feed.Tests/ConfigurationTests.cs).
+Source map: [Configuration.cs](../src/Feed.Core/Domain/Configuration.cs) · [InstanceFiles.cs](../src/Feed.Core/Infrastructure/InstanceFiles.cs).
 
 ## 4.1 The instance directory
 

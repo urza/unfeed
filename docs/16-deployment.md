@@ -31,8 +31,7 @@ Baseline packages:
 | `Microsoft.EntityFrameworkCore.Sqlite` | the database |
 | `Microsoft.EntityFrameworkCore.Design` | migrations, build time only |
 | `Microsoft.Extensions.Logging` | the logging abstraction the file and console sinks implement |
-| `Microsoft.Playwright` | collection in the CLI; local UI browser tests in the test project |
-| `xunit`, `xunit.runner.visualstudio`, `Microsoft.NET.Test.Sdk` | tests only |
+| `Microsoft.Playwright` | collection in the CLI |
 
 Use standard-library HTTP and JSON where straightforward. Maintained CLI parsing, logging or image-inspection libraries are allowed when they reduce custom infrastructure and meet the contracts in this spec. A model SDK or scheduling helper is optional, not required; it must preserve endpoint compatibility, durable recovery, bounded work and explicit operation scope. Record why each added dependency is needed in the repository, avoid overlapping packages, and keep IO behind application interfaces. No distributed broker or microservice deployment is required. Versions use central package management and checked-in lock files; locked restore rejects drift.
 
@@ -40,18 +39,14 @@ Razor Components come from the ASP.NET Core shared framework. Frontend developme
 
 ## 16.3 Build
 
-`build.sh` publishes the web host and CLI into `out/`, so the web host finds the CLI next to itself. Both are framework-dependent. Publish order and MSBuild target organization are implementation choices; the final output must contain compatible dependencies and both runnable entry points. The build sets nullable and implicit usings on, treats the projects as one solution, and makes the test fixtures available to the tests.
+`build.sh` publishes the web host and CLI into `out/`, so the web host finds the CLI next to itself. Both are framework-dependent. Publish order and MSBuild target organization are implementation choices; the final output must contain compatible dependencies and both runnable entry points. The build sets nullable and implicit usings on, treats the projects as one solution.
 
 The same .NET build compiles Razor Components and publishes the plain CSS, JavaScript modules and favicon with the web host, using coherent asset versioning (14.2). The web host hashes the deployed CSS/JavaScript tree at startup and uses that stamp in asset URLs, including relative module imports (14.2). No frontend install, transpilation or bundling command is part of build.sh. Local development uses the ASP.NET host, optionally through dotnet watch, rather than a separate frontend server.
 
 ```bash
 dotnet build Feed.slnx -nologo -v q          # compile
-dotnet test tests/Feed.Tests -nologo -v q --filter 'Category!=Browser' # fast suite
-dotnet test tests/Feed.Tests -nologo -v q --filter 'Category=Browser'  # local UI browser checks
 ./build.sh                                    # publish web + cli into out/
 ```
-
-The publish workflow runs the fast suite before it builds the image (16.10); a failing test blocks the image.
 
 ## 16.4 Start and stop
 
@@ -143,7 +138,7 @@ docker compose exec feed tools/novnc.sh
 docker compose exec feed dotnet Feed.Cli.dll login --platform facebook
 ```
 
-[Publish Docker image](../.github/workflows/docker-publish.yml) runs the fast test suite in the SDK container, then builds and pushes a Linux AMD64 image on every push to `main` in `urza/unfeed`; it can also be run manually from `main`, and a manual run from another branch runs the tests only. The `publish` job needs the `test` job, so no image is published when a test fails. Successful builds publish `latest`, `main` and `sha-<full-commit-sha>` tags. The Dockerfile pins the standalone yt-dlp release binary (`ARG YTDLP_VERSION` and `ARG YTDLP_SHA256`, bumped together in one commit; the hash comes from the release's `SHA2-256SUMS` and lives in the repository) and refuses to build when `yt-dlp --version` or `ffmpeg -version` fails. The workflow uses the automatic `GITHUB_TOKEN` with `packages: write`; no personal access token or repository secret is needed. OCI labels link the package to the source repository and revision. ARM64 images are not currently published.
+[Publish Docker image](../.github/workflows/docker-publish.yml) builds and pushes a Linux AMD64 image on every push to `main` in `urza/unfeed`; it can also be run manually from `main`, and a manual run from another branch runs the tests only. The `publish` job needs the `test` job, so no image is published when a test fails. Successful builds publish `latest`, `main` and `sha-<full-commit-sha>` tags. The Dockerfile pins the standalone yt-dlp release binary (`ARG YTDLP_VERSION` and `ARG YTDLP_SHA256`, bumped together in one commit; the hash comes from the release's `SHA2-256SUMS` and lives in the repository) and refuses to build when `yt-dlp --version` or `ffmpeg -version` fails. The workflow uses the automatic `GITHUB_TOKEN` with `packages: write`; no personal access token or repository secret is needed. OCI labels link the package to the source repository and revision. ARM64 images are not currently published.
 
 After the first successful publish, the package owner must open the **unfeed package → Package settings → Change visibility → Public** to allow anonymous pulls. GitHub container packages initially default to private even for public repositories. If the package already exists, ensure this repository has Actions write access to it. Repository or organization policy must permit GitHub Actions to publish packages.
 

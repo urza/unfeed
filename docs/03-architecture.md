@@ -84,7 +84,6 @@ src/Feed.Web/       thin routes, rendering, scheduler and composition root
   wwwroot/css/      plain CSS, shared design tokens and responsive layout
   wwwroot/js/       native JavaScript modules for layout, gallery and actions
 src/Feed.Cli/       thin commands, composition root, Playwright adapters and browser sessions
-tests/Feed.Tests/   one test project, with a sanitized example instance and raw fixtures
 tools/              noVNC display helper and capture sanitizer
 docs/tools/         documentation HTML builder
 docs/               this specification

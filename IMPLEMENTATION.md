@@ -17,7 +17,7 @@ The [numbered specification](docs/README.md) defines behavior and compatibility.
 | Person pages and targeted collection | [People.cs](src/Feed.Web/People.cs), [PersonRoutes.cs](src/Feed.Web/PersonRoutes.cs), [PersonView.razor](src/Feed.Web/Components/PersonView.razor) |
 | HTTP routes and background images | [web Program.cs](src/Feed.Web/Program.cs), [Backgrounds.cs](src/Feed.Web/Backgrounds.cs) |
 | CLI and reaction sending | [CLI Program.cs](src/Feed.Cli/Program.cs), [LikeSender.cs](src/Feed.Cli/LikeSender.cs) |
-| Deployment and verification | [build.sh](build.sh), [Dockerfile](Dockerfile), [compose.yaml](compose.yaml), [tests](tests/Feed.Tests) |
+| Deployment and verification | [build.sh](build.sh), [Dockerfile](Dockerfile), [compose.yaml](compose.yaml) |
 
 ## Internal choices
 

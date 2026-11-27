@@ -2,7 +2,7 @@
 
 You are here: the HTTP surface. Chapter 12 put the scheduler inside the web host. This chapter specifies routes, read models and static server rendering with Razor Components. Chapter 15 describes what the owner sees. Plain JavaScript and CSS enhance the HTML served by ASP.NET Core minimal API routes.
 
-Source map: [Web routes](../src/Feed.Web/Program.cs) · [FeedQuery.cs](../src/Feed.Core/Queries/FeedQuery.cs) · [Backgrounds.cs](../src/Feed.Web/Backgrounds.cs) · [WebTests](../tests/Feed.Tests/WebTests.cs).
+Source map: [Web routes](../src/Feed.Web/Program.cs) · [FeedQuery.cs](../src/Feed.Core/Queries/FeedQuery.cs) · [Backgrounds.cs](../src/Feed.Web/Backgrounds.cs).
 
 ## 14.1 Shape
 

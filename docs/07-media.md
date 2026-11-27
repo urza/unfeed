@@ -2,7 +2,7 @@
 
 You are here: the files on disk. Chapter 6 captured the posts and their media URLs. This chapter specifies which files are downloaded, where they live, when the video waits, and when files are deleted again. The rules limit retained media while preserving post records. They do not promise a fixed disk bound: visible images and metadata can grow with history.
 
-Source map: [MediaFiles.cs](../src/Feed.Core/Infrastructure/MediaFiles.cs) · [VideoContext.cs](../src/Feed.Core/Infrastructure/VideoContext.cs) · [Maintenance.cs](../src/Feed.Core/Application/Maintenance.cs) · [MediaTests](../tests/Feed.Tests/MediaTests.cs).
+Source map: [MediaFiles.cs](../src/Feed.Core/Infrastructure/MediaFiles.cs) · [VideoContext.cs](../src/Feed.Core/Infrastructure/VideoContext.cs) · [Maintenance.cs](../src/Feed.Core/Application/Maintenance.cs).
 
 ## 7.1 Why local files
 

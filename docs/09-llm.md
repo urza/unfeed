@@ -2,7 +2,7 @@
 
 You are here: the judge. Chapter 8 left the visible posts. This chapter specifies how a model scores each one against the owner's policy, labels it with the owner's categories, and summarizes the long ones. It also specifies how the owner's thumbs reach the model as words. Chapter 10 then turns labels into views.
 
-Source map: [Prompts.cs](../src/Feed.Core/Application/Prompts.cs) · [Processing.cs](../src/Feed.Core/Application/Processing.cs) · [ModelClient.cs](../src/Feed.Core/Infrastructure/ModelClient.cs) · [ModelSafetyTests](../tests/Feed.Tests/ModelSafetyTests.cs).
+Source map: [Prompts.cs](../src/Feed.Core/Application/Prompts.cs) · [Processing.cs](../src/Feed.Core/Application/Processing.cs) · [ModelClient.cs](../src/Feed.Core/Infrastructure/ModelClient.cs).
 
 ## 9.1 The client
 

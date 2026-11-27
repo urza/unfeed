@@ -2,7 +2,7 @@
 
 You are here: the reading algorithm. Chapter 9 labeled the posts. This chapter specifies how the page turns labels, author lists and posting frequency into the views the owner picks, and how it folds an author's burst into one card. Chapter 14 exposes the result over HTTP and chapter 15 draws it.
 
-Source map: [FeedQuery.cs](../src/Feed.Core/Queries/FeedQuery.cs) · [ViewTests](../tests/Feed.Tests/ViewTests.cs) · [RecoveryHardeningTests](../tests/Feed.Tests/RecoveryHardeningTests.cs).
+Source map: [FeedQuery.cs](../src/Feed.Core/Queries/FeedQuery.cs).
 
 ## 10.1 Label versus view
 

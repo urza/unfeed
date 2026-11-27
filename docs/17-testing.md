@@ -2,7 +2,9 @@
 
 You are here: how you know it works. Every binding rule of chapter 2 and every behavioral contract of chapters 4 to 15 has verification that pins it. This chapter lists what the suite must cover, how it isolates itself, and what only a live pass can verify. Under 2.5, tests protect outcomes, compatibility and failure behavior. They do not require a reference class, queue type, query plan, traversal order or exact private call sequence. Public formats/defaults and versioned hashes still need exact checks. Use benchmark measurements for environment-dependent performance targets.
 
-Source map: [Test project](../tests/Feed.Tests) · [Synthetic fixtures](../tests/Feed.Tests/Fixtures) · [Measurements](../measurements.md).
+Source map: [Measurements](../measurements.md).
+
+**Status.** The repository holds no automated tests since the test project was removed (the former `tests/Feed.Tests`, xunit with Playwright browser checks). The publish workflow no longer runs a suite. This chapter keeps the regression contract as the list of behavior that a future suite must pin. Sections 17.1 and 17.2 describe that future suite, not one that exists now.
 
 ## 17.1 The suite
 
@@ -11,12 +13,11 @@ Source map: [Test project](../tests/Feed.Tests) · [Synthetic fixtures](../tests
 - The example config enables both platforms with slots, disables the model with a dead endpoint, sets jitter 0, the default view to a category, backgrounds off, and port 0. It contains a comment line, so it also tests comment handling.
 - Raw fixtures: a sanitized Facebook capture (line-delimited JSON, synthetically constructed) and a sanitized Instagram capture (JSON), produced by the sanitizer script in `tools/`, which keeps enum-shaped strings and rewrites every name, id, code, caption and URL. A new fixture follows the same method. No real name, handle or policy line appears in the tests.
 - Model calls use deterministic scripted responses and controllable completion gates. An HTTP handler is the reference fake; an equivalent local endpoint can verify actual request overlap and cancellation. Faking only the high-level worker count is insufficient to prove concurrent HTTP dispatch.
-- The publish workflow runs the fast suite in the SDK container before the image build; a failing test blocks the image (16.10).
 - The fast-suite target is a few seconds on the documented development environment: `dotnet test tests/Feed.Tests -nologo -v q --filter 'Category!=Browser'`. UI browser checks carry the xunit trait Category=Browser and run separately with `--filter 'Category=Browser'`, using Playwright for .NET against a throwaway local host. Neither suite calls real platforms or model services, and neither requires npm or a JavaScript test runner. A variable CI wall clock is not a correctness assertion.
 
 ## 17.2 What the tests pin
 
-The cases below define the regression contract for maintenance. The linked test project is the authority for which scenarios have automated coverage; live checks are separate. A missing test or current limitation is a gap to track, not permission to relax the behavior. Current implementation limitations are listed in [the code map](../IMPLEMENTATION.md#current-limitations).
+The cases below define the regression contract for maintenance. No automated suite exists now, so no scenario has automated coverage; live checks are separate. A missing test or current limitation is a gap to track, not permission to relax the behavior. Current implementation limitations are listed in [the code map](../IMPLEMENTATION.md#current-limitations).
 
 **Small contract edges.** An empty taxonomy generates a prompt requesting categories=[] and still produces a score. A timeline screenshot is served only from its published diagnostic media copy, and raw retention removes the copy; post-media retention leaves it alone.
 
