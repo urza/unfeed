@@ -145,7 +145,7 @@ public sealed class VisibilityTests
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Feed.slnx"))) root = root.Parent;
         var configuration = typeof(CliProgram).Assembly.GetCustomAttribute<AssemblyConfigurationAttribute>()!.Configuration;
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var arg in new[] { Path.Combine(root!.FullName, "src", "Feed.Cli", "bin", configuration, "net10.0", "Feed.Cli.dll"), "refilter", "--data", i.Paths.Root, "--all" }) start.ArgumentList.Add(arg);
+        foreach (var arg in new[] { Path.Combine(root!.FullName, "src", "Feed.Cli", "bin", configuration, "net11.0", "Feed.Cli.dll"), "refilter", "--data", i.Paths.Root, "--all" }) start.ArgumentList.Add(arg);
         using var child = Process.Start(start)!;
         var output = child.StandardOutput.ReadToEndAsync(); var error = child.StandardError.ReadToEndAsync();
         try

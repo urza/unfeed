@@ -3,7 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 namespace Feed.Tests;
 // Starts the Debug build of Feed.Web for one TestInstance and waits until /healthz answers.
-// The browser tests run src/Feed.Web/bin/Debug/net10.0/Feed.Web.dll, so build that project first.
+// The browser tests run src/Feed.Web/bin/Debug/net11.0/Feed.Web.dll, so build that project first.
 public sealed class WebHost : IAsyncDisposable
 {
     readonly Process process; readonly Task<string> stdout, stderr;
@@ -25,7 +25,7 @@ public sealed class WebHost : IAsyncDisposable
         if (root is null) throw new DirectoryNotFoundException("Feed.slnx not found above " + AppContext.BaseDirectory);
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         { WorkingDirectory = root.FullName, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var arg in new[] { Path.Combine(root.FullName, "src/Feed.Web/bin/Debug/net10.0/Feed.Web.dll"), "--data", instance.Paths.Root, "--urls", $"http://127.0.0.1:{port}" }) start.ArgumentList.Add(arg);
+        foreach (var arg in new[] { Path.Combine(root.FullName, "src/Feed.Web/bin/Debug/net11.0/Feed.Web.dll"), "--data", instance.Paths.Root, "--urls", $"http://127.0.0.1:{port}" }) start.ArgumentList.Add(arg);
         configure?.Invoke(start);
         var host = new WebHost(Process.Start(start)!, port);
         try

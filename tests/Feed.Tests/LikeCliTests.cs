@@ -22,7 +22,7 @@ public sealed class LikeCliTests
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Feed.slnx"))) root = root.Parent;
         var configuration = typeof(CliProgram).Assembly.GetCustomAttribute<AssemblyConfigurationAttribute>()!.Configuration;
-        var cli = Path.Combine(root!.FullName, "src", "Feed.Cli", "bin", configuration, "net10.0", "Feed.Cli.dll");
+        var cli = Path.Combine(root!.FullName, "src", "Feed.Cli", "bin", configuration, "net11.0", "Feed.Cli.dll");
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var arg in new[] { cli, "like", "--data", i.Paths.Root, "--platform", "facebook", "--post-id", id.ToString() }) start.ArgumentList.Add(arg);
         using var child = Process.Start(start)!;
