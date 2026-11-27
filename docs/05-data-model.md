@@ -317,7 +317,7 @@ The internal fairness cursor may be replaced by equivalent durable scheduling me
 
 ## 5.3 Closed value sets
 
-Every set below is a set of string constants. A value outside the set is a bug, and a test pins each set.
+Every set below is a set of string constants. A value outside the set is a bug, and a test should pin each set.
 
 | Set | Values |
 |---|---|

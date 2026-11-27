@@ -3,7 +3,6 @@ out
 **/bin
 **/obj
 .git
-TestResults
 
 # Local environment secrets (instance state belongs in data/)
 .env

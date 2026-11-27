@@ -64,13 +64,13 @@ The backend and frontend stack are fixed below, except helper choices explicitly
 | Video download | `yt-dlp` as an external process, fallback only |
 | Image shrink for the model | `ffmpeg` shrinks vision inputs; the size/provenance contract is in 7.6 |
 | Logging | `Microsoft.Extensions.Logging` with rotating file and console sinks |
-| Tests | xunit |
+| Tests | none in the repository (chapter 17 lists the contract for a future suite) |
 
 Dependency policy: prefer the standard library for simple work. Use a maintained library when it materially reduces infrastructure code and maintenance. Avoid duplicate packages for the same job. Versions are pinned by central package management and checked-in lock files. Chapter 16 defines the baseline and selection criteria. No message broker or distributed scheduler is needed.
 
 ## 3.3 Solution layout
 
-**Current organization.** The tree maps the source responsibilities. The build/CLI entry points, `out/`, instance paths and test commands remain the documented operator interfaces. Internal folders, class names, number of helper assemblies and placement of an interface may change while preserving the dependency and execution boundaries below. Extra layers are not required merely to reproduce this tree.
+**Current organization.** The tree maps the source responsibilities. The build/CLI entry points, `out/` and instance paths remain the documented operator interfaces. Internal folders, class names, number of helper assemblies and placement of an interface may change while preserving the dependency and execution boundaries below. Extra layers are not required merely to reproduce this tree.
 
 ```
 Feed.slnx

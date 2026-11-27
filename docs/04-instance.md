@@ -38,7 +38,7 @@ data/
 
 Every instance-using process creates the root and the folders `profiles`, `media`, `raw`, `logs`, `locks`, `backgrounds` at start when they are missing. The operation is idempotent. Nothing creates the three text files. The owner writes them, or copies them from the example instance.
 
-The instance directory is ignored by git. The repository ships one example instance with fake names under the tests. A fresh clone with an empty instance directory runs and shows an empty feed. `data/SETUP.md` is the place for private setup/handoff notes; diagnostics and backups also stay under `data/`. An alternative `--data` path inside a checkout needs its own Git and Docker exclusions.
+The instance directory is ignored by git. The repository ships no example instance. A fresh clone with an empty instance directory runs and shows an empty feed. `data/SETUP.md` is the place for private setup/handoff notes; diagnostics and backups also stay under `data/`. An alternative `--data` path inside a checkout needs its own Git and Docker exclusions.
 
 The directory may sit on a slow host mount only when that filesystem supports SQLite WAL and the required process locks. Arbitrary network filesystems are not supported for the live database; cache pragmas do not make them safe. Browser profile staging remains useful on a supported but slow mount (chapter 6).
 

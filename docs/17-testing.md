@@ -8,6 +8,8 @@ Source map: [Measurements](../measurements.md).
 
 ## 17.1 The suite
 
+This section describes the reference layout for a future suite.
+
 - xunit, with the suites runnable through the documented `tests/Feed.Tests` commands. One project referencing the application projects is the reference layout; fixture and supporting-project organization may differ without breaking those commands.
 - Each test needing writable instance state gets an isolated temporary instance/database and cleans it up. Copying the sanitized example (`config.json`, `taxonomy.json`, `preferences.md` with fake names) is the reference setup; fixture factories may produce equivalent inputs. No test shares mutable instance state with another. No automated test depends on external services; local HTTP servers for web/browser checks are allowed.
 - The example config enables both platforms with slots, disables the model with a dead endpoint, sets jitter 0, the default view to a category, backgrounds off, and port 0. It contains a comment line, so it also tests comment handling.

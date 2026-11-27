@@ -273,7 +273,7 @@ Bring-up of a platform must produce, before its collector counts as working:
 
 1. The read-path endpoints and their request shapes, expressed as the capture gate.
 2. The post id field and the story-type flags: sponsored, suggested, event, reel, shared, memory.
-3. One sanitized raw fixture per story type, committed with the tests. The generic JSON/JSONL sanitizer in `tools/sanitize.py` provides a starting point; review its output before committing any fixture.
+3. One sanitized raw fixture per story type, committed with the repository. The generic JSON/JSONL sanitizer in `tools/sanitize.py` provides a starting point; review its output before committing any fixture.
 4. One live pass of the verification checklist (chapter 17).
 
 A shape change later is an offline fix: patch the parser, replay with `reparse`.

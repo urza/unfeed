@@ -22,7 +22,7 @@ Read chapters 1–3 for the purpose and architecture, then use the table below f
 | 14 | [Web host](14-web-host.md) | Which routes exist, and what does the page get from each? |
 | 15 | [User interface](15-ui.md) | What does the owner see and do? |
 | 16 | [Deployment and operations](16-deployment.md) | Where does it run, and how is it started, logged in and contained? |
-| 17 | [Testing and verification](17-testing.md) | What must the tests pin, and what must be verified live? |
+| 17 | [Testing and verification](17-testing.md) | What must a test suite pin, and what must be verified live? |
 
 `spec.html` holds every chapter in one page with collapsible sections, a table of contents and a text search. From this directory, install the documentation-only dependency with `python3 -m pip install -r tools/requirements.txt` (use a virtual environment where required), then rebuild after an edit with `python3 tools/build_spec_html.py`. The builder preserves the existing HTML page shell and regenerates all chapter content and navigation from the numbered Markdown files. It does not include standalone review pages.
 

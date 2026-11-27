@@ -2,7 +2,6 @@ data/
 out/
 **/bin/
 **/obj/
-TestResults/
 *.user
 
 # Local environment secrets (instance state belongs in data/)

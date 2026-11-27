@@ -65,7 +65,7 @@ The owner wants to read what friends post without the platform's junk and rankin
 
 These rules hold across every chapter and define the verification obligations in chapter 17. When a chapter and a rule disagree, the rule wins. Test coverage and deployment evidence are recorded separately; a written requirement is not a claim that every live scenario has been exercised.
 
-1. **No personal data in version control.** No name, handle, category name, close-friend list or policy sentence exists in the committed source tree. All of it lives in the instance directory, which is ignored by git. The repository ships one sanitized example instance with fake names for the tests.
+1. **No personal data in version control.** No name, handle, category name, close-friend list or policy sentence exists in the committed source tree. All of it lives in the instance directory, which is ignored by git. The repository ships no instance files.
 2. **Explicit operation scope.** Every mutating command states its full scope: which posts, in what order, how many, from which end. Defaults are conservative. Every command prints one summary line with what it selected and what it did.
 3. **One scheduler owns work dispatch.** A web action never starts a browser or a collect run. It writes a request row. The scheduler claims the row and starts a child process. Background-image refresh is an independent hosted background task and never starts browser or model work.
 4. **Single visibility authority.** Three columns on the post row decide visibility: hidden, hidden-by, hidden-reason. Feed queries never re-apply filter logic. Hide ownership changes only through the documented ingest/refilter, fresh-verdict and owner-unhide paths.
